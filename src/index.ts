@@ -1,7 +1,9 @@
+import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { unzipSync, strFromU8 } from "fflate";
+import { handleAccessRequest, type Env } from "./access-handler";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
@@ -667,7 +669,7 @@ async function getLatestRegulationText(
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.3.0",
+    version: "1.4.0",
   });
 
   server.registerTool(
@@ -1050,80 +1052,45 @@ function createServer() {
   return server;
 }
 
-export default {
-  async fetch(
+const MCP_RESOURCE =
+  "https://add-regulations-mcp.splain0102.workers.dev/mcp";
+
+const AUTHORIZATION_SERVER =
+  "https://add-regulations-mcp.splain0102.workers.dev";
+
+const mcpHandler = createMcpHandler(createServer);
+
+const protectedMcpHandler = {
+  fetch(
     request: Request,
-    env: unknown,
-    ctx: ExecutionContext
+    env: Env,
+    ctx: ExecutionContext,
   ) {
-    const url =
-      new URL(request.url);
-
-    if (
-      url.pathname === "/"
-    ) {
-      return new Response(
-        [
-          "ADD Regulations MCP is running.",
-          "",
-          "Organization: 국방과학연구소",
-          `ALIO ID: ${ADD_APBA_ID}`,
-          "Mode: Latest regulation only",
-          "HWPX text extraction: ON",
-          "MCP endpoint: /mcp",
-          "",
-          "Tools:",
-          "- hello",
-          "- list_regulations",
-          "- search_regulations",
-          "- get_regulation",
-          "- get_regulation_text",
-          "- search_regulation_text",
-        ].join("\n"),
-        {
-          headers: {
-            "content-type":
-              "text/plain; charset=utf-8",
-          },
-        }
-      );
-    }
-
-    if (
-      url.pathname ===
-      "/health"
-    ) {
-      return Response.json({
-        ok: true,
-        organization:
-          "국방과학연구소",
-        alioId:
-          ADD_APBA_ID,
-        latestOnly: true,
-        hwpxTextExtraction:
-          true,
-        mcpEndpoint:
-          "/mcp",
-      });
-    }
-
-    if (
-      url.pathname === "/mcp"
-    ) {
-      return createMcpHandler(
-        createServer
-      )(
-        request,
-        env,
-        ctx
-      );
-    }
-
-    return new Response(
-      "Not found",
-      {
-        status: 404,
-      }
-    );
+    return mcpHandler(request, env, ctx);
   },
 };
+
+export default new OAuthProvider<Env>({
+  apiRoute: "/mcp",
+  apiHandler: protectedMcpHandler,
+
+  authorizeEndpoint: "/authorize",
+  tokenEndpoint: "/token",
+
+  scopesSupported: ["mcp:read"],
+
+  resourceMetadata: {
+    resource: MCP_RESOURCE,
+    authorization_servers: [AUTHORIZATION_SERVER],
+    scopes_supported: ["mcp:read"],
+    bearer_methods_supported: ["header"],
+    resource_name: "ADD Regulations MCP",
+  },
+
+  clientIdMetadataDocumentEnabled: true,
+  clientRegistrationEndpoint: "/register",
+
+  defaultHandler: {
+    fetch: handleAccessRequest,
+  },
+});
