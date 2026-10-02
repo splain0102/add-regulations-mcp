@@ -233,6 +233,25 @@ async function listRegulations() {
     );
 
   if (items.length === 0) {
+    const diagnostics = {
+      url: REGULATION_LIST_URL,
+      htmlLength: html.length,
+      itemBoard21110:
+        (html.match(/itemBoard21110\\.do/gi) ?? []).length,
+      ruleDtl:
+        (html.match(/ruleDtl\\.do/gi) ?? []).length,
+      ruleNo:
+        (html.match(/RULE_NO/gi) ?? []).length,
+      addName:
+        (html.match(/국방과학연구소/g) ?? []).length,
+      accessDenied:
+        (html.match(/access denied|forbidden|차단/gi) ?? []).length,
+      htmlPreview:
+        cleanHtml(html).slice(0, 3000),
+    };
+
+    console.error("ALIO list parse failed", diagnostics);
+
     throw new Error(
       "ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다."
     );
