@@ -12,6 +12,10 @@ const REGULATION_LIST_URL =
   `${ALIO_BASE}/item/itemOrganList.do` +
   `?apbaId=${ADD_APBA_ID}&reportFormRootNo=21110`;
 
+const REGULATION_LIST_MOBILE_URL =
+  `${ALIO_BASE}/mobile/item/itemOrganListSusi.do` +
+  `?apbaId=${ADD_APBA_ID}&reportFormRootNo=21110`;
+
 type RegulationItem = {
   title: string;
   detailUrl: string;
@@ -223,41 +227,74 @@ function dedupeLatestRegulations(
 }
 
 async function listRegulations() {
-  const html = await fetchAlio(
+  const desktopHtml = await fetchAlio(
     REGULATION_LIST_URL
   );
 
-  const items =
+  let items =
     dedupeLatestRegulations(
-      parseRegulations(html)
+      parseRegulations(desktopHtml)
     );
 
-  if (items.length === 0) {
-    const diagnostics = {
-      url: REGULATION_LIST_URL,
-      htmlLength: html.length,
-      itemBoard21110:
-        (html.match(/itemBoard21110\\.do/gi) ?? []).length,
-      ruleDtl:
-        (html.match(/ruleDtl\\.do/gi) ?? []).length,
-      ruleNo:
-        (html.match(/RULE_NO/gi) ?? []).length,
-      addName:
-        (html.match(/국방과학연구소/g) ?? []).length,
-      accessDenied:
-        (html.match(/access denied|forbidden|차단/gi) ?? []).length,
-      htmlPreview:
-        cleanHtml(html).slice(0, 3000),
-    };
-
-    console.error("ALIO list parse failed", diagnostics);
-
-    throw new Error(
-      "ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다."
-    );
+  if (items.length > 0) {
+    return items;
   }
 
-  return items;
+  const mobileHtml = await fetchAlio(
+    REGULATION_LIST_MOBILE_URL
+  );
+
+  items =
+    dedupeLatestRegulations(
+      parseRegulations(mobileHtml)
+    );
+
+  if (items.length > 0) {
+    console.log("ALIO list fallback succeeded", {
+      source: "mobile",
+      count: items.length,
+    });
+    return items;
+  }
+
+  const makeDiagnostics = (
+    url: string,
+    html: string
+  ) => ({
+    url,
+    htmlLength: html.length,
+    itemBoard21110:
+      (html.match(/itemBoard21110\\.do/gi) ?? []).length,
+    itemOrganListSusi:
+      (html.match(/itemOrganListSusi\\.do/gi) ?? []).length,
+    ruleDtl:
+      (html.match(/ruleDtl\\.do/gi) ?? []).length,
+    ruleNo:
+      (html.match(/RULE_NO/gi) ?? []).length,
+    addName:
+      (html.match(/국방과학연구소/g) ?? []).length,
+    vueMarkers:
+      (html.match(/\\{\\{\\s*item\\./g) ?? []).length,
+    accessDenied:
+      (html.match(/access denied|forbidden|차단/gi) ?? []).length,
+    htmlPreview:
+      cleanHtml(html).slice(0, 2500),
+  });
+
+  console.error("ALIO list parse failed", {
+    desktop: makeDiagnostics(
+      REGULATION_LIST_URL,
+      desktopHtml
+    ),
+    mobile: makeDiagnostics(
+      REGULATION_LIST_MOBILE_URL,
+      mobileHtml
+    ),
+  });
+
+  throw new Error(
+    "ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다."
+  );
 }
 
 function extractAttachments(
