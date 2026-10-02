@@ -693,6 +693,89 @@ function createServer() {
   );
 
   server.registerTool(
+    "diagnose_alio_list",
+    {
+      description:
+        "ALIO 내부규정 목록 페이지의 현재 HTML 구조를 진단합니다. 문제 해결용 임시 도구입니다.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const html = await fetchAlio(
+          REGULATION_LIST_URL
+        );
+
+        const markers = {
+          htmlLength: html.length,
+          itemBoard21110:
+            (html.match(/itemBoard21110\.do/gi) ?? []).length,
+          ruleDtl:
+            (html.match(/ruleDtl\.do/gi) ?? []).length,
+          ruleNo:
+            (html.match(/RULE_NO/gi) ?? []).length,
+          addName:
+            (html.match(/국방과학연구소/g) ?? []).length,
+          accessDenied:
+            (html.match(/access denied|forbidden|차단/gi) ?? []).length,
+        };
+
+        const interesting: string[] = [];
+        const pattern =
+          /[^\n]{0,220}(?:itemBoard21110\.do|ruleDtl\.do|RULE_NO|국방과학연구소)[^\n]{0,500}/gi;
+
+        for (const match of html.matchAll(pattern)) {
+          interesting.push(
+            match[0]
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 700)
+          );
+          if (interesting.length >= 20) break;
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: [
+                "ALIO 목록 진단",
+                `URL: ${REGULATION_LIST_URL}`,
+                `HTML 길이: ${markers.htmlLength}`,
+                `itemBoard21110.do: ${markers.itemBoard21110}`,
+                `ruleDtl.do: ${markers.ruleDtl}`,
+                `RULE_NO: ${markers.ruleNo}`,
+                `국방과학연구소: ${markers.addName}`,
+                `차단 문구: ${markers.accessDenied}`,
+                "",
+                "----- 관련 HTML 조각 -----",
+                ...(interesting.length
+                  ? interesting
+                  : [
+                      cleanHtml(html)
+                        .slice(0, 4000),
+                    ]),
+              ].join("\n"),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                error instanceof Error
+                  ? error.message
+                  : String(error),
+            },
+          ],
+        };
+      }
+    }
+  );
+
+  server.registerTool(
     "list_regulations",
     {
       description:
