@@ -5,6 +5,13 @@
   "compatibility_flags": [
     "global_fetch_strictly_public"
   ],
+  "keep_vars": true,
+  "secrets": {
+    "required": [
+      "ACCESS_CLIENT_SECRET",
+      "COOKIE_ENCRYPTION_KEY"
+    ]
+  },
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",
