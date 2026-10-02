@@ -82,8 +82,81 @@ function absoluteUrl(url: string): string {
   return `${ALIO_BASE}/${decoded}`;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) =>
+    setTimeout(resolve, ms)
+  );
+}
+
+async function fetchWithRetry(
+  url: string,
+  init?: RequestInit,
+  maxAttempts = 3
+): Promise<Response> {
+  let lastError: unknown;
+
+  for (
+    let attempt = 1;
+    attempt <= maxAttempts;
+    attempt++
+  ) {
+    try {
+      const response =
+        await fetch(url, init);
+
+      const retryable =
+        response.status === 429 ||
+        response.status >= 500;
+
+      if (
+        !retryable ||
+        attempt === maxAttempts
+      ) {
+        return response;
+      }
+
+      console.warn(
+        "ALIO transient HTTP error; retrying",
+        {
+          url,
+          status: response.status,
+          attempt,
+          maxAttempts,
+        }
+      );
+    } catch (error) {
+      lastError = error;
+
+      if (attempt === maxAttempts) {
+        throw error;
+      }
+
+      console.warn(
+        "ALIO fetch exception; retrying",
+        {
+          url,
+          attempt,
+          maxAttempts,
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        }
+      );
+    }
+
+    await sleep(400 * attempt);
+  }
+
+  throw (
+    lastError instanceof Error
+      ? lastError
+      : new Error("ALIO 요청 재시도 실패")
+  );
+}
+
 async function fetchAlio(url: string): Promise<string> {
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP/1.0",
       Accept:
@@ -280,7 +353,7 @@ async function fetchRegulationListPage(
   const endpoint =
     `${ALIO_BASE}/item/itemReportListSusi.json`;
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithRetry(endpoint, {
     method: "POST",
     headers: {
       "Content-Type":
@@ -598,7 +671,7 @@ async function getRegulationDetail(
 async function downloadLatestFile(
   attachment: Attachment
 ) {
-  const response = await fetch(
+  const response = await fetchWithRetry(
     attachment.url,
     {
       headers: {
@@ -861,7 +934,7 @@ async function getLatestRegulationText(
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.4.0",
+    version: "1.5.0",
   });
 
   server.registerTool(
@@ -878,7 +951,7 @@ function createServer() {
           text:
             "국방과학연구소 규정 MCP 정상 작동\n" +
             "최신 규정 우선: ON\n" +
-            "HWPX 본문 읽기: ON",
+            "HWP/HWPX 본문 읽기: ON",
         },
       ],
     })
