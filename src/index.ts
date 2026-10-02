@@ -3,6 +3,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { unzipSync, strFromU8 } from "fflate";
+import { hwpToText } from "@ssabrojs/hwpxjs/browser";
 import { handleAccessRequest, type Env } from "./access-handler";
 
 const ALIO_BASE = "https://www.alio.go.kr";
@@ -786,57 +787,75 @@ async function getLatestRegulationText(
       attachment
     );
 
-  if (
-    file.extension.toLowerCase() ===
-    "hwpx"
-  ) {
-    const text =
+  const extension =
+    file.extension.toLowerCase();
+
+  let text: string;
+
+  if (extension === "hwpx") {
+    text =
       extractHwpxText(
         file.bytes
       );
-
-    return {
-      regulationName:
-        detail.title !==
-        "제목 확인 필요"
-          ? detail.title
-          : match.title,
-
-      revisionDate:
-        detail.revisionDate ??
-        match.revisionDate,
-
-      updatedDate:
-        detail.updatedDate ??
-        match.updatedDate,
-
-      sourceUrl:
-        detail.sourceUrl,
-
-      filename:
-        file.filename,
-
-      extension:
-        file.extension,
-
-      text,
-    };
+  } else if (extension === "hwp") {
+    try {
+      text =
+        await hwpToText(
+          file.bytes
+        );
+    } catch (error) {
+      throw new Error(
+        [
+          "HWP 본문 추출에 실패했습니다.",
+          `파일명: ${file.filename}`,
+          `오류: ${
+            error instanceof Error
+              ? error.message
+              : String(error)
+          }`,
+          `원문: ${detail.sourceUrl}`,
+        ].join("\n")
+      );
+    }
+  } else {
+    throw new Error(
+      [
+        `최신 규정 파일은 ${file.extension || "알 수 없는 형식"}입니다.`,
+        `파일명: ${file.filename}`,
+        "",
+        "현재 MCP는 HWP와 HWPX 본문을 직접 읽을 수 있습니다.",
+        "PDF/DOCX 등은 아직 직접 본문 추출 대상이 아닙니다.",
+        `원문: ${detail.sourceUrl}`,
+      ].join("\n")
+    );
   }
 
-  /*
-   * 구형 HWP/PDF는 Worker 무료 환경에서
-   * 무거운 변환기를 실행하지 않습니다.
-   */
-  throw new Error(
-    [
-      `최신 규정 파일은 ${file.extension || "알 수 없는 형식"}입니다.`,
-      `파일명: ${file.filename}`,
-      "",
-      "현재 MCP는 HWPX 본문을 직접 읽을 수 있습니다.",
-      "구형 HWP/PDF 본문 변환 기능은 별도 처리기가 필요합니다.",
-      `원문: ${detail.sourceUrl}`,
-    ].join("\n")
-  );
+  return {
+    regulationName:
+      detail.title !==
+      "제목 확인 필요"
+        ? detail.title
+        : match.title,
+
+    revisionDate:
+      detail.revisionDate ??
+      match.revisionDate,
+
+    updatedDate:
+      detail.updatedDate ??
+      match.updatedDate,
+
+    sourceUrl:
+      detail.sourceUrl,
+
+    filename:
+      file.filename,
+
+    extension:
+      file.extension,
+
+    text,
+  };
 }
 
 function createServer() {
