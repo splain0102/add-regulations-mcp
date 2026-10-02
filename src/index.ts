@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { unzipSync, strFromU8 } from "fflate";
 import { hwpToText } from "@ssabrojs/hwpxjs/browser";
+import { extractText } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
 const ALIO_BASE = "https://www.alio.go.kr";
@@ -890,14 +891,46 @@ async function getLatestRegulationText(
         ].join("\n")
       );
     }
+  } else if (extension === "pdf") {
+    try {
+      const extracted =
+        await extractText(
+          file.bytes,
+          { mergePages: true }
+        );
+
+      text =
+        Array.isArray(extracted.text)
+          ? extracted.text.join("\n\n")
+          : extracted.text;
+
+      if (!text.trim()) {
+        throw new Error(
+          "PDF에 추출 가능한 텍스트가 없습니다. 스캔 이미지 PDF일 수 있습니다."
+        );
+      }
+    } catch (error) {
+      throw new Error(
+        [
+          "PDF 본문 추출에 실패했습니다.",
+          `파일명: ${file.filename}`,
+          `오류: ${
+            error instanceof Error
+              ? error.message
+              : String(error)
+          }`,
+          `원문: ${detail.sourceUrl}`,
+        ].join("\n")
+      );
+    }
   } else {
     throw new Error(
       [
         `최신 규정 파일은 ${file.extension || "알 수 없는 형식"}입니다.`,
         `파일명: ${file.filename}`,
         "",
-        "현재 MCP는 HWP와 HWPX 본문을 직접 읽을 수 있습니다.",
-        "PDF/DOCX 등은 아직 직접 본문 추출 대상이 아닙니다.",
+        "현재 MCP는 HWP, HWPX, 텍스트형 PDF 본문을 직접 읽을 수 있습니다.",
+        "스캔 PDF나 DOCX 등은 아직 직접 본문 추출 대상이 아닙니다.",
         `원문: ${detail.sourceUrl}`,
       ].join("\n")
     );
@@ -1028,7 +1061,7 @@ function extractArticleSnippet(
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.5.0",
+    version: "1.6.0",
   });
 
   server.registerTool(
@@ -1045,7 +1078,7 @@ function createServer() {
           text:
             "국방과학연구소 규정 MCP 정상 작동\n" +
             "최신 규정 우선: ON\n" +
-            "HWP/HWPX 본문 읽기: ON",
+            "HWP/HWPX/PDF 본문 읽기: ON",
         },
       ],
     })
@@ -1301,7 +1334,7 @@ function createServer() {
     "get_regulation_text",
     {
       description:
-        "최신 HWP/HWPX 규정의 실제 본문을 읽습니다.",
+        "최신 HWP/HWPX/PDF 규정의 실제 본문을 읽습니다.",
       inputSchema: {
         name:
           z.string().min(1),
@@ -1366,7 +1399,7 @@ function createServer() {
     "search_regulation_text",
     {
       description:
-        "최신 HWP/HWPX 규정 본문에서 키워드 또는 조문을 검색합니다.",
+        "최신 HWP/HWPX/PDF 규정 본문에서 키워드 또는 조문을 검색합니다.",
       inputSchema: {
         name:
           z.string().min(1),
