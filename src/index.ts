@@ -363,12 +363,12 @@ async function listRegulations() {
           detailUrl:
             buildRegulationDetailUrl(row),
           revisionDate:
-            typeof row.idate === "string"
-              ? row.idate
-              : undefined,
-          updatedDate:
             typeof row.stDate === "string"
               ? row.stDate
+              : undefined,
+          updatedDate:
+            typeof row.idate === "string"
+              ? row.idate
               : undefined,
         } satisfies RegulationItem;
       })
