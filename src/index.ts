@@ -931,6 +931,100 @@ async function getLatestRegulationText(
   };
 }
 
+function extractArticleSnippet(
+  text: string,
+  matchIndex: number,
+  queryLength: number
+): {
+  label: string;
+  snippet: string;
+} {
+  const articleRegex =
+    /(?:^|\n)\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
+
+  const headings: {
+    index: number;
+    label: string;
+  }[] = [];
+
+  for (const match of text.matchAll(articleRegex)) {
+    if (
+      typeof match.index === "number" &&
+      match[1]
+    ) {
+      headings.push({
+        index: match.index,
+        label:
+          match[1]
+            .replace(/\s+/g, " ")
+            .trim(),
+      });
+    }
+  }
+
+  let current:
+    | { index: number; label: string }
+    | undefined;
+
+  let nextIndex = text.length;
+
+  for (const heading of headings) {
+    if (heading.index <= matchIndex) {
+      current = heading;
+      continue;
+    }
+
+    nextIndex = heading.index;
+    break;
+  }
+
+  let from =
+    current?.index ??
+    text.lastIndexOf("\n", matchIndex);
+
+  if (from < 0) {
+    from = Math.max(0, matchIndex - 250);
+  }
+
+  let to =
+    current
+      ? nextIndex
+      : text.indexOf("\n\n", matchIndex + queryLength);
+
+  if (to < 0) {
+    to = Math.min(
+      text.length,
+      matchIndex + queryLength + 600
+    );
+  }
+
+  const maxSnippetLength = 2200;
+
+  if (to - from > maxSnippetLength) {
+    const aroundFrom = Math.max(
+      from,
+      matchIndex - 500
+    );
+    const aroundTo = Math.min(
+      to,
+      matchIndex + queryLength + 1200
+    );
+
+    from = aroundFrom;
+    to = aroundTo;
+  }
+
+  return {
+    label:
+      current?.label ??
+      "관련 본문",
+    snippet:
+      text
+        .slice(from, to)
+        .trim(),
+  };
+}
+
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
@@ -1207,7 +1301,7 @@ function createServer() {
     "get_regulation_text",
     {
       description:
-        "최신 HWPX 규정의 실제 본문을 읽습니다.",
+        "최신 HWP/HWPX 규정의 실제 본문을 읽습니다.",
       inputSchema: {
         name:
           z.string().min(1),
@@ -1272,7 +1366,7 @@ function createServer() {
     "search_regulation_text",
     {
       description:
-        "최신 HWPX 규정 본문에서 키워드 또는 조문을 검색합니다.",
+        "최신 HWP/HWPX 규정 본문에서 키워드 또는 조문을 검색합니다.",
       inputSchema: {
         name:
           z.string().min(1),
@@ -1300,8 +1394,13 @@ function createServer() {
         const q =
           query.toLowerCase();
 
-        const matches:
-          string[] = [];
+        const matches: {
+          label: string;
+          snippet: string;
+        }[] = [];
+
+        const seenSnippets =
+          new Set<string>();
 
         let start = 0;
 
@@ -1316,29 +1415,33 @@ function createServer() {
 
           if (index < 0) break;
 
-          const from =
-            Math.max(
-              0,
-              index - 300
+          const resultSnippet =
+            extractArticleSnippet(
+              text,
+              index,
+              query.length
             );
 
-          const to =
-            Math.min(
-              text.length,
-              index +
-                query.length +
-                500
-            );
+          const dedupeKey =
+            `${resultSnippet.label}::${resultSnippet.snippet}`;
 
-          matches.push(
-            text
-              .slice(from, to)
-              .trim()
-          );
+          if (
+            !seenSnippets.has(dedupeKey)
+          ) {
+            seenSnippets.add(
+              dedupeKey
+            );
+            matches.push(
+              resultSnippet
+            );
+          }
 
           start =
             index +
-            query.length;
+            Math.max(
+              query.length,
+              1
+            );
         }
 
         if (
@@ -1374,7 +1477,10 @@ function createServer() {
                 "",
                 ...matches.map(
                   (match, index) =>
-                    `----- 결과 ${index + 1} -----\n${match}`
+                    [
+                      `----- 결과 ${index + 1}: ${match.label} -----`,
+                      match.snippet,
+                    ].join("\n")
                 ),
               ].join("\n\n"),
             },
