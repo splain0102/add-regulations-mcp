@@ -226,75 +226,192 @@ function dedupeLatestRegulations(
   return [...map.values()];
 }
 
+type AlioRegulationRow = {
+  title?: string;
+  apbaId?: string;
+  reportFormNo?: string;
+  tableName?: string;
+  idxName?: string;
+  idx?: string | number;
+  reportGbn?: string;
+  bidType?: string;
+  stDate?: string;
+  idate?: string;
+  [key: string]: unknown;
+};
+
+function buildRegulationDetailUrl(
+  row: AlioRegulationRow
+): string {
+  const params = new URLSearchParams({
+    disclosureNo: "",
+    apbaId:
+      String(row.apbaId ?? ADD_APBA_ID),
+    nowcode:
+      String(row.reportFormNo ?? "21110"),
+    reportFormNo:
+      String(row.reportFormNo ?? "21110"),
+    table_name:
+      String(row.tableName ?? ""),
+    idx_name:
+      String(row.idxName ?? ""),
+    idx:
+      String(row.idx ?? ""),
+    reportGbn:
+      String(row.reportGbn ?? "N"),
+    bid_type:
+      String(row.bidType ?? ""),
+  });
+
+  return (
+    `${ALIO_BASE}/item/itemBoard21110.do?` +
+    params.toString()
+  );
+}
+
+async function fetchRegulationListPage(
+  pageNo: number
+): Promise<{
+  rows: AlioRegulationRow[];
+  totalPages: number;
+  totalCount: number;
+}> {
+  const endpoint =
+    `${ALIO_BASE}/item/itemReportListSusi.json`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type":
+        "application/json;charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+      Accept:
+        "application/json, text/plain, */*",
+      "Accept-Language": "ko-KR,ko;q=0.9",
+      "User-Agent":
+        "Mozilla/5.0 ADD-Regulations-MCP/1.0",
+      Referer: REGULATION_LIST_URL,
+      Origin: ALIO_BASE,
+    },
+    body: JSON.stringify({
+      pageNo: String(pageNo),
+      apbaId: ADD_APBA_ID,
+      apbaType: "A2005",
+      reportFormRootNo: "21110",
+      search_word: "",
+      search_flag: "title",
+      bid_type: "",
+      enfc_istt: "",
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `ALIO 목록 API 요청 실패: HTTP ${response.status}`
+    );
+  }
+
+  const json = await response.json() as any;
+  const root = json?.data ?? json ?? {};
+  const rows =
+    Array.isArray(root.result)
+      ? root.result
+      : Array.isArray(root.rows)
+        ? root.rows
+        : Array.isArray(root.list)
+          ? root.list
+          : [];
+
+  return {
+    rows,
+    totalPages:
+      Number(root?.page?.totalPage ?? 1) || 1,
+    totalCount:
+      Number(root?.page?.totalCount ?? rows.length) ||
+      rows.length,
+  };
+}
+
 async function listRegulations() {
-  const desktopHtml = await fetchAlio(
-    REGULATION_LIST_URL
-  );
+  const first =
+    await fetchRegulationListPage(1);
 
-  let items =
-    dedupeLatestRegulations(
-      parseRegulations(desktopHtml)
-    );
+  const rows = [...first.rows];
 
-  if (items.length > 0) {
-    return items;
+  for (
+    let pageNo = 2;
+    pageNo <= first.totalPages;
+    pageNo++
+  ) {
+    const page =
+      await fetchRegulationListPage(pageNo);
+    rows.push(...page.rows);
   }
 
-  const mobileHtml = await fetchAlio(
-    REGULATION_LIST_MOBILE_URL
-  );
+  const mapped: RegulationItem[] =
+    rows
+      .map((row) => {
+        const title =
+          typeof row.title === "string"
+            ? row.title.trim()
+            : "";
 
-  items =
-    dedupeLatestRegulations(
-      parseRegulations(mobileHtml)
+        if (!title) return null;
+
+        return {
+          title,
+          detailUrl:
+            buildRegulationDetailUrl(row),
+          revisionDate:
+            typeof row.idate === "string"
+              ? row.idate
+              : undefined,
+          updatedDate:
+            typeof row.stDate === "string"
+              ? row.stDate
+              : undefined,
+        } satisfies RegulationItem;
+      })
+      .filter(
+        (item): item is RegulationItem =>
+          item !== null
+      );
+
+  const items =
+    dedupeLatestRegulations(mapped);
+
+  if (items.length === 0) {
+    console.error(
+      "ALIO list JSON API returned no regulations",
+      {
+        endpoint:
+          `${ALIO_BASE}/item/itemReportListSusi.json`,
+        apbaId: ADD_APBA_ID,
+        apbaType: "A2005",
+        totalPages: first.totalPages,
+        totalCount: first.totalCount,
+        firstRowKeys:
+          first.rows[0]
+            ? Object.keys(first.rows[0])
+            : [],
+      }
     );
 
-  if (items.length > 0) {
-    console.log("ALIO list fallback succeeded", {
-      source: "mobile",
+    throw new Error(
+      "ALIO 목록 API에서 국방과학연구소 규정을 찾지 못했습니다."
+    );
+  }
+
+  console.log(
+    "ALIO regulation list loaded",
+    {
+      source: "itemReportListSusi.json",
       count: items.length,
-    });
-    return items;
-  }
-
-  const makeDiagnostics = (
-    url: string,
-    html: string
-  ) => ({
-    url,
-    htmlLength: html.length,
-    itemBoard21110:
-      (html.match(/itemBoard21110\\.do/gi) ?? []).length,
-    itemOrganListSusi:
-      (html.match(/itemOrganListSusi\\.do/gi) ?? []).length,
-    ruleDtl:
-      (html.match(/ruleDtl\\.do/gi) ?? []).length,
-    ruleNo:
-      (html.match(/RULE_NO/gi) ?? []).length,
-    addName:
-      (html.match(/국방과학연구소/g) ?? []).length,
-    vueMarkers:
-      (html.match(/\\{\\{\\s*item\\./g) ?? []).length,
-    accessDenied:
-      (html.match(/access denied|forbidden|차단/gi) ?? []).length,
-    htmlPreview:
-      cleanHtml(html).slice(0, 2500),
-  });
-
-  console.error("ALIO list parse failed", {
-    desktop: makeDiagnostics(
-      REGULATION_LIST_URL,
-      desktopHtml
-    ),
-    mobile: makeDiagnostics(
-      REGULATION_LIST_MOBILE_URL,
-      mobileHtml
-    ),
-  });
-
-  throw new Error(
-    "ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다."
+      totalCount: first.totalCount,
+    }
   );
+
+  return items;
 }
 
 function extractAttachments(
