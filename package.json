@@ -1,6 +1,6 @@
 {
   "name": "add-regulations-mcp",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "scripts": {
     "deploy": "wrangler deploy",
@@ -12,7 +12,8 @@
     "agents": "0.25.0",
     "fflate": "^0.8.2",
     "zod": "^4.5.4",
-    "@ssabrojs/hwpxjs": "0.4.0"
+    "@ssabrojs/hwpxjs": "0.4.0",
+    "unpdf": "1.8.1"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
