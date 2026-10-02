@@ -66,6 +66,94 @@ type RegulationItem = {
   updatedDate?: string;
 };
 
+type Attachment = {
+  name: string;
+  url: string;
+  fileNo?: string;
+  date?: string;
+};
+
+function normalizeDate(value?: string): string {
+  if (!value) return "";
+
+  const match = value.match(
+    /(20\d{2})\D{0,4}(\d{1,2})\D{0,4}(\d{1,2})/
+  );
+
+  if (!match) return "";
+
+  const [, y, m, d] = match;
+
+  return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+}
+
+function extractDateFromFilename(name: string): string {
+  const patterns = [
+    /(20\d{2})년도?\s*(\d{1,2})월\s*(\d{1,2})일/,
+    /(20\d{2})[.\-_ ](\d{1,2})[.\-_ ](\d{1,2})/,
+    /(20\d{2})(\d{2})(\d{2})/,
+  ];
+
+  for (const pattern of patterns) {
+    const m = name.match(pattern);
+
+    if (m) {
+      return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    }
+  }
+
+  return "";
+}
+
+function selectLatestAttachment(
+  attachments: Attachment[],
+  regulationRevisionDate?: string
+): Attachment | null {
+  if (attachments.length === 0) {
+    return null;
+  }
+
+  const revisionDate = normalizeDate(
+    regulationRevisionDate
+  );
+
+  // 1순위:
+  // 파일명 날짜가 ALIO의 현재 제·개정일과 일치하는 파일
+  if (revisionDate) {
+    const exact = attachments.find(
+      (file) =>
+        extractDateFromFilename(file.name) ===
+        revisionDate
+    );
+
+    if (exact) {
+      return exact;
+    }
+  }
+
+  // 2순위:
+  // 파일명에서 날짜를 읽어서 가장 최신 날짜 선택
+  const dated = attachments
+    .map((file) => ({
+      ...file,
+      date: extractDateFromFilename(file.name),
+    }))
+    .filter((file) => file.date);
+
+  if (dated.length > 0) {
+    dated.sort((a, b) =>
+      b.date!.localeCompare(a.date!)
+    );
+
+    return dated[0];
+  }
+
+  // 3순위:
+  // 날짜 판단이 불가능하면 ALIO에서 가장 마지막으로
+  // 등록된 첨부파일을 최신으로 간주
+  return attachments[attachments.length - 1];
+}
+
 function parseRegulations(html: string): RegulationItem[] {
   const results: RegulationItem[] = [];
   const seen = new Set<string>();
@@ -143,8 +231,9 @@ async function getRegulationDetail(url: string) {
   const plain = cleanHtml(html);
 
   const title =
-    plain.match(/제목\s+(.+?)\s+(?:파일|제[·ㆍ]?개정일)/)?.[1] ??
-    "제목 확인 필요";
+    plain.match(
+      /제목\s+(.+?)\s+(?:파일|제[·ㆍ]?개정일)/
+    )?.[1] ?? "제목 확인 필요";
 
   const category =
     plain.match(/구분\s+(.+?)\s+제목/)?.[1];
@@ -159,46 +248,91 @@ async function getRegulationDetail(url: string) {
       /최종\s*수정일\s+([0-9]{4}[.\-][0-9]{2}[.\-][0-9]{2})/
     )?.[1];
 
-  // 첨부파일 다운로드 주소 추출
-  const files: Array<{
-    name: string;
-    url: string;
-  }> = [];
+  const attachments: Attachment[] = [];
 
-  const fileRegex =
-    /(?:href|onclick)=["'][^"']*(?:rulefiledown|filedown)[^"']*fileNo[=:'",()\s]+(\d+)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
+  /*
+   * ALIO 페이지 안의 fileNo를 수집합니다.
+   * 같은 fileNo가 여러 번 잡힐 수 있으므로 Set으로 중복 제거합니다.
+   */
+  const fileNumbers = [
+    ...html.matchAll(
+      /(?:rulefiledown\.json\?fileNo=|fileNo[=:('"\s]+)(\d+)/gi
+    ),
+  ].map((m) => m[1]);
 
-  let fileMatch: RegExpExecArray | null;
+  const uniqueFileNumbers = [
+    ...new Set(fileNumbers),
+  ];
 
-  while ((fileMatch = fileRegex.exec(html)) !== null) {
-    const fileNo = fileMatch[1];
-    const name = cleanHtml(fileMatch[2]);
+  /*
+   * 첨부파일명을 최대한 같이 추출합니다.
+   */
+  const filenameRegex =
+    />([^<>]+\.(?:hwp|hwpx|pdf|zip|doc|docx))\s*</gi;
 
-    files.push({
-      name: name || `첨부파일 ${fileNo}`,
-      url: `${ALIO_BASE}/download/rulefiledown.json?fileNo=${fileNo}`,
+  const filenames: string[] = [];
+
+  for (
+    let match:
+      | RegExpExecArray
+      | null;
+    (match = filenameRegex.exec(html)) !== null;
+
+  ) {
+    const filename = cleanHtml(match[1]);
+
+    if (
+      filename &&
+      !filenames.includes(filename)
+    ) {
+      filenames.push(filename);
+    }
+  }
+
+  for (
+    let i = 0;
+    i < uniqueFileNumbers.length;
+    i++
+  ) {
+    const fileNo = uniqueFileNumbers[i];
+
+    attachments.push({
+      fileNo,
+      name:
+        filenames[i] ??
+        `첨부파일 ${fileNo}`,
+      url:
+        `${ALIO_BASE}/download/` +
+        `rulefiledown.json?fileNo=${fileNo}`,
     });
   }
 
-  // 위 패턴에서 못 잡는 경우 HTML 전체에서 fileNo 탐색
-  if (files.length === 0) {
-    const ids = [
-      ...html.matchAll(
-        /rulefiledown\.json\?fileNo=(\d+)/gi
-      ),
-    ];
+  /*
+   * 핵심:
+   * 과거 파일은 버리고 최신 파일 하나만 선택합니다.
+   */
+  const latestAttachment =
+    selectLatestAttachment(
+      attachments,
+      revisionDate
+    );
 
-    const uniqueIds = [
-      ...new Set(ids.map((m) => m[1])),
-    ];
+  return {
+    title,
+    category,
+    revisionDate,
+    updatedDate,
+    sourceUrl: url,
 
-    for (const fileNo of uniqueIds) {
-      files.push({
-        name: `첨부파일 ${fileNo}`,
-        url: `${ALIO_BASE}/download/rulefiledown.json?fileNo=${fileNo}`,
-      });
-    }
-  }
+    // 전체 파일목록을 MCP에 공개하지 않음
+    latestAttachment,
+
+    attachmentCount:
+      attachments.length,
+
+    pageText: plain.slice(0, 12000),
+  };
+}
 
   return {
     title,
@@ -407,7 +541,7 @@ function createServer() {
           match.detailUrl
         );
 
-        const attachments =
+ /*       const attachments =
           detail.attachments.length > 0
             ? detail.attachments
                 .map(
@@ -416,7 +550,19 @@ function createServer() {
                 )
                 .join("\n")
             : "첨부파일 주소를 자동으로 추출하지 못했습니다.";
+*/
+        const latest = detail.latestAttachment;
 
+        const latestFileText = latest
+          ? [
+              `최신 규정파일: ${latest.name}`,
+              `다운로드: ${latest.url}`,
+              `ALIO에 등록된 전체 개정파일 수: ${detail.attachmentCount}`,
+              `※ 과거 개정파일은 MCP 조회 대상에서 제외`,
+            ].join("\n")
+          : "최신 첨부파일을 확인하지 못했습니다.";
+/*
+        
         return {
           content: [
             {
@@ -431,6 +577,30 @@ function createServer() {
             },
           ],
         };
+*/
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `규정명: ${detail.title}\n` +
+                `분야: ${detail.category ?? "확인 필요"}\n` +
+                `현재 제·개정일: ${
+                  detail.revisionDate ??
+                  match.revisionDate ??
+                  "확인 필요"
+                }\n` +
+                `ALIO 최종 수정일: ${
+                  detail.updatedDate ??
+                  match.updatedDate ??
+                  "확인 필요"
+                }\n` +
+                `ALIO 원문: ${detail.sourceUrl}\n\n` +
+                `${latestFileText}`,
+            },
+          ],
+        };
+       
       } catch (error) {
         return {
           content: [
