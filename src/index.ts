@@ -1061,12 +1061,76 @@ const AUTHORIZATION_SERVER =
 const mcpHandler = createMcpHandler(createServer);
 
 const protectedMcpHandler = {
-  fetch(
+  async fetch(
     request: Request,
     env: Env,
     ctx: ExecutionContext,
   ) {
-    return mcpHandler(request, env, ctx);
+    let rpcMethod = "unknown";
+    let rpcId: string | number | null = null;
+    let protocolVersion: string | undefined;
+
+    try {
+      const body = await request.clone().json() as any;
+      rpcMethod =
+        typeof body?.method === "string"
+          ? body.method
+          : "unknown";
+      rpcId =
+        typeof body?.id === "string" ||
+        typeof body?.id === "number"
+          ? body.id
+          : null;
+      protocolVersion =
+        typeof body?.params?.protocolVersion === "string"
+          ? body.params.protocolVersion
+          : undefined;
+    } catch {
+      // Some MCP requests may not contain a JSON body.
+    }
+
+    console.log("MCP request", {
+      method: request.method,
+      rpcMethod,
+      rpcId,
+      protocolVersion,
+      contentType: request.headers.get("content-type"),
+      accept: request.headers.get("accept"),
+      hasAuthorization:
+        request.headers.has("authorization"),
+    });
+
+    try {
+      const response =
+        await mcpHandler(request, env, ctx);
+
+      const responseText =
+        await response.clone().text();
+
+      console.log("MCP response", {
+        rpcMethod,
+        rpcId,
+        status: response.status,
+        contentType:
+          response.headers.get("content-type"),
+        sessionId:
+          response.headers.get("mcp-session-id"),
+        bodyPreview:
+          responseText.slice(0, 4000),
+      });
+
+      return response;
+    } catch (error) {
+      console.error("MCP handler exception", {
+        rpcMethod,
+        rpcId,
+        error:
+          error instanceof Error
+            ? error.stack ?? error.message
+            : String(error),
+      });
+      throw error;
+    }
   },
 };
 
