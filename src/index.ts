@@ -1,11 +1,9 @@
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { unzipSync, strFromU8 } from "fflate";
 
 const ALIO_BASE = "https://www.alio.go.kr";
-
-// 현재 사용 중인 국방과학연구소 ALIO 기관 ID.
-// 기존 Worker에서 정상 응답 중인 값 그대로 유지합니다.
 const ADD_APBA_ID = "C0345";
 
 const REGULATION_LIST_URL =
@@ -23,6 +21,7 @@ type Attachment = {
   name: string;
   url: string;
   fileNo: string;
+  extension?: string;
   detectedDate?: string;
 };
 
@@ -41,12 +40,30 @@ function cleanHtml(value: string): string {
     .trim();
 }
 
+function decodeXml(value: string): string {
+  return value
+    .replace(/<hp:tab[^>]*\/>/gi, "\t")
+    .replace(/<hp:lineBreak[^>]*\/>/gi, "\n")
+    .replace(/<\/hp:p>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function absoluteUrl(url: string): string {
   const decoded = url.replace(/&amp;/g, "&");
 
   if (
-    decoded.startsWith("http://") ||
-    decoded.startsWith("https://")
+    decoded.startsWith("https://") ||
+    decoded.startsWith("http://")
   ) {
     return decoded;
   }
@@ -70,7 +87,7 @@ async function fetchAlio(url: string): Promise<string> {
 
   if (!response.ok) {
     throw new Error(
-      `ALIO 요청 실패: HTTP ${response.status} ${response.statusText}`
+      `ALIO 요청 실패: HTTP ${response.status}`
     );
   }
 
@@ -80,62 +97,56 @@ async function fetchAlio(url: string): Promise<string> {
 function normalizeDate(value?: string): string {
   if (!value) return "";
 
-  const m = value.match(
+  const match = value.match(
     /(20\d{2})\D{0,4}(\d{1,2})\D{0,4}(\d{1,2})/
   );
 
-  if (!m) return "";
+  if (!match) return "";
 
-  return [
-    m[1],
-    m[2].padStart(2, "0"),
-    m[3].padStart(2, "0"),
-  ].join("-");
+  return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
 function extractDateFromFilename(name: string): string {
   const patterns = [
-    /(20\d{2})년도?\s*(\d{1,2})월\s*(\d{1,2})일/,
-    /(20\d{2})년도?\s*(\d{1,2})월/,
-    /(20\d{2})[.\-_ ](\d{1,2})[.\-_ ](\d{1,2})/,
+    /(20\d{2})\s*[.\-_년]\s*(\d{1,2})\s*[.\-_월]\s*(\d{1,2})/,
     /(20\d{2})(\d{2})(\d{2})/,
   ];
 
   for (const pattern of patterns) {
-    const m = name.match(pattern);
+    const match = name.match(pattern);
 
-    if (!m) continue;
-
-    // 연월일이 모두 있는 경우
-    if (m[3]) {
-      return [
-        m[1],
-        m[2].padStart(2, "0"),
-        m[3].padStart(2, "0"),
-      ].join("-");
+    if (match) {
+      return (
+        `${match[1]}-` +
+        `${match[2].padStart(2, "0")}-` +
+        `${match[3].padStart(2, "0")}`
+      );
     }
-
-    // 연월만 있는 경우
-    return [
-      m[1],
-      m[2].padStart(2, "0"),
-      "01",
-    ].join("-");
   }
 
   return "";
 }
 
-function parseRegulations(html: string): RegulationItem[] {
+function getExtension(name: string): string {
+  const match = name
+    .toLowerCase()
+    .match(/\.([a-z0-9]+)$/);
+
+  return match?.[1] ?? "";
+}
+
+function parseRegulations(
+  html: string
+): RegulationItem[] {
   const results: RegulationItem[] = [];
   const seen = new Set<string>();
 
-  const linkRegex =
+  const regex =
     /href=["']([^"']*itemBoard21110\.do[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
 
   let match: RegExpExecArray | null;
 
-  while ((match = linkRegex.exec(html)) !== null) {
+  while ((match = regex.exec(html)) !== null) {
     const title = cleanHtml(match[2]);
     const detailUrl = absoluteUrl(match[1]);
 
@@ -145,23 +156,23 @@ function parseRegulations(html: string): RegulationItem[] {
 
     seen.add(detailUrl);
 
-    const start = Math.max(0, match.index - 800);
+    const start = Math.max(0, match.index - 900);
     const end = Math.min(
       html.length,
-      match.index + match[0].length + 1200
+      match.index + match[0].length + 1300
     );
 
-    const surrounding = cleanHtml(
+    const around = cleanHtml(
       html.slice(start, end)
     );
 
     const revisionDate =
-      surrounding.match(
+      around.match(
         /제[·ㆍ]?\s*개정일\s*([0-9]{4}[.\-][0-9]{1,2}[.\-][0-9]{1,2})/
       )?.[1];
 
     const updatedDate =
-      surrounding.match(
+      around.match(
         /최종\s*수정일\s*([0-9]{4}[.\-][0-9]{1,2}[.\-][0-9]{1,2})/
       )?.[1];
 
@@ -179,60 +190,53 @@ function parseRegulations(html: string): RegulationItem[] {
 function dedupeLatestRegulations(
   items: RegulationItem[]
 ): RegulationItem[] {
-  const byTitle = new Map<string, RegulationItem>();
+  const map = new Map<string, RegulationItem>();
 
   for (const item of items) {
     const key = item.title
       .replace(/\s+/g, "")
       .toLowerCase();
 
-    const current = byTitle.get(key);
+    const old = map.get(key);
 
-    if (!current) {
-      byTitle.set(key, item);
+    if (!old) {
+      map.set(key, item);
       continue;
     }
 
-    const itemRevision = normalizeDate(
-      item.revisionDate
-    );
+    const newDate =
+      normalizeDate(item.revisionDate) ||
+      normalizeDate(item.updatedDate);
 
-    const currentRevision = normalizeDate(
-      current.revisionDate
-    );
+    const oldDate =
+      normalizeDate(old.revisionDate) ||
+      normalizeDate(old.updatedDate);
 
-    if (itemRevision > currentRevision) {
-      byTitle.set(key, item);
-      continue;
-    }
-
-    if (
-      itemRevision === currentRevision &&
-      normalizeDate(item.updatedDate) >
-        normalizeDate(current.updatedDate)
-    ) {
-      byTitle.set(key, item);
+    if (newDate > oldDate) {
+      map.set(key, item);
     }
   }
 
-  return [...byTitle.values()];
+  return [...map.values()];
 }
 
-async function listRegulations(): Promise<
-  RegulationItem[]
-> {
-  const html = await fetchAlio(REGULATION_LIST_URL);
+async function listRegulations() {
+  const html = await fetchAlio(
+    REGULATION_LIST_URL
+  );
 
-  const parsed = parseRegulations(html);
+  const items =
+    dedupeLatestRegulations(
+      parseRegulations(html)
+    );
 
-  if (parsed.length === 0) {
+  if (items.length === 0) {
     throw new Error(
-      "ALIO 페이지는 열렸지만 규정 목록을 찾지 못했습니다. " +
-        "ALIO 페이지 구조가 변경되었을 수 있습니다."
+      "ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다."
     );
   }
 
-  return dedupeLatestRegulations(parsed);
+  return items;
 }
 
 function extractAttachments(
@@ -242,60 +246,77 @@ function extractAttachments(
   const seen = new Set<string>();
 
   /*
-   * 첨부파일명과 fileNo가 가까이 있는 HTML 블록을 우선 검색.
+   * 첨부파일명이 들어 있는 링크/블록을 탐색합니다.
    */
-  const blocks = html.match(
-    /[\s\S]{0,1000}?(?:hwp|hwpx|pdf|zip|docx?)[\s\S]{0,1000}?/gi
-  ) ?? [];
+  const fileRegex =
+    /([\w가-힣().,\-_+\s]+?\.(?:hwpx|hwp|pdf|docx|doc|zip))[\s\S]{0,800}?(?:rulefiledown\.json\?fileNo=|fileNo\s*[:=,(\'"\s]+)(\d+)/gi;
 
-  for (const block of blocks) {
-    const filename =
-      cleanHtml(
-        block.match(
-          /([^<>="'()]+\.(?:hwp|hwpx|pdf|zip|doc|docx))/i
-        )?.[1] ?? ""
-      );
+  let match: RegExpExecArray | null;
 
-    const fileNo =
-      block.match(
-        /(?:rulefiledown\.json\?fileNo=|fileNo\s*[:=,(\'"\s]+)(\d+)/i
-      )?.[1];
+  while ((match = fileRegex.exec(html)) !== null) {
+    const name = cleanHtml(match[1]);
+    const fileNo = match[2];
 
-    if (!fileNo || seen.has(fileNo)) {
-      continue;
-    }
-
-    seen.add(fileNo);
-
-    attachments.push({
-      fileNo,
-      name:
-        filename || `첨부파일 ${fileNo}`,
-      url:
-        `${ALIO_BASE}/download/` +
-        `rulefiledown.json?fileNo=${fileNo}`,
-      detectedDate:
-        extractDateFromFilename(filename),
-    });
-  }
-
-  /*
-   * 위 방식에서 빠진 fileNo도 추가.
-   */
-  const allFileNos = [
-    ...html.matchAll(
-      /rulefiledown\.json\?fileNo=(\d+)/gi
-    ),
-  ].map((m) => m[1]);
-
-  for (const fileNo of allFileNos) {
     if (seen.has(fileNo)) continue;
 
     seen.add(fileNo);
 
     attachments.push({
+      name,
       fileNo,
-      name: `첨부파일 ${fileNo}`,
+      extension: getExtension(name),
+      detectedDate:
+        extractDateFromFilename(name),
+      url:
+        `${ALIO_BASE}/download/` +
+        `rulefiledown.json?fileNo=${fileNo}`,
+    });
+  }
+
+  /*
+   * 순서가 반대인 HTML도 탐색합니다.
+   */
+  const reverseRegex =
+    /(?:rulefiledown\.json\?fileNo=|fileNo\s*[:=,(\'"\s]+)(\d+)[\s\S]{0,800}?([\w가-힣().,\-_+\s]+?\.(?:hwpx|hwp|pdf|docx|doc|zip))/gi;
+
+  while ((match = reverseRegex.exec(html)) !== null) {
+    const fileNo = match[1];
+    const name = cleanHtml(match[2]);
+
+    if (seen.has(fileNo)) continue;
+
+    seen.add(fileNo);
+
+    attachments.push({
+      name,
+      fileNo,
+      extension: getExtension(name),
+      detectedDate:
+        extractDateFromFilename(name),
+      url:
+        `${ALIO_BASE}/download/` +
+        `rulefiledown.json?fileNo=${fileNo}`,
+    });
+  }
+
+  /*
+   * 파일명 연결에 실패해도 fileNo 자체는 확보합니다.
+   */
+  for (
+    const match of html.matchAll(
+      /rulefiledown\.json\?fileNo=(\d+)/gi
+    )
+  ) {
+    const fileNo = match[1];
+
+    if (seen.has(fileNo)) continue;
+
+    seen.add(fileNo);
+
+    attachments.push({
+      name: `첨부파일-${fileNo}`,
+      fileNo,
+      extension: "",
       url:
         `${ALIO_BASE}/download/` +
         `rulefiledown.json?fileNo=${fileNo}`,
@@ -313,28 +334,23 @@ function selectLatestAttachment(
     return null;
   }
 
-  const officialRevision =
+  const officialDate =
     normalizeDate(revisionDate);
 
   /*
-   * 1순위:
-   * ALIO의 공식 제·개정일과 파일명 날짜가 정확히 일치.
+   * 1순위: 공식 제·개정일과 파일명 날짜 일치
    */
-  if (officialRevision) {
+  if (officialDate) {
     const exact = attachments.find(
       (file) =>
-        file.detectedDate ===
-        officialRevision
+        file.detectedDate === officialDate
     );
 
-    if (exact) {
-      return exact;
-    }
+    if (exact) return exact;
   }
 
   /*
-   * 2순위:
-   * 파일명에서 날짜가 확인되는 첨부파일 중 최신.
+   * 2순위: 파일명 날짜가 가장 최근
    */
   const dated = attachments
     .filter((file) => file.detectedDate)
@@ -344,13 +360,12 @@ function selectLatestAttachment(
       )
     );
 
-  if (dated.length > 0) {
+  if (dated.length) {
     return dated[0];
   }
 
   /*
-   * 3순위:
-   * 날짜 확인 불가 시 ALIO HTML상 마지막 첨부파일.
+   * 3순위: ALIO HTML에 가장 나중에 등장한 파일
    */
   return attachments[
     attachments.length - 1
@@ -398,41 +413,278 @@ async function getRegulationDetail(
     revisionDate,
     updatedDate,
     sourceUrl: url,
-
-    /*
-     * 중요:
-     * 실제 MCP 응답에서 사용할 것은 최신 파일 하나뿐입니다.
-     */
     latestAttachment,
-
     totalAttachmentCount:
       attachments.length,
   };
 }
 
+async function downloadLatestFile(
+  attachment: Attachment
+) {
+  const response = await fetch(
+    attachment.url,
+    {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 ADD-Regulations-MCP/1.0",
+      },
+      redirect: "follow",
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `첨부파일 다운로드 실패: HTTP ${response.status}`
+    );
+  }
+
+  const disposition =
+    response.headers.get(
+      "content-disposition"
+    ) ?? "";
+
+  const contentType =
+    response.headers.get(
+      "content-type"
+    ) ?? "";
+
+  let filename = attachment.name;
+
+  const encoded =
+    disposition.match(
+      /filename\*=UTF-8''([^;]+)/i
+    )?.[1];
+
+  if (encoded) {
+    try {
+      filename =
+        decodeURIComponent(encoded);
+    } catch {
+      filename = encoded;
+    }
+  } else {
+    const normal =
+      disposition.match(
+        /filename="?([^";]+)"?/i
+      )?.[1];
+
+    if (normal) {
+      filename = normal;
+    }
+  }
+
+  const bytes =
+    new Uint8Array(
+      await response.arrayBuffer()
+    );
+
+  return {
+    bytes,
+    filename,
+    extension:
+      getExtension(filename) ||
+      attachment.extension ||
+      "",
+    contentType,
+  };
+}
+
+function extractHwpxText(
+  bytes: Uint8Array
+): string {
+  const zip = unzipSync(bytes);
+
+  const sectionNames =
+    Object.keys(zip)
+      .filter((name) =>
+        /^Contents\/section\d+\.xml$/i.test(
+          name
+        )
+      )
+      .sort((a, b) => {
+        const an =
+          Number(
+            a.match(
+              /section(\d+)\.xml/i
+            )?.[1] ?? 0
+          );
+
+        const bn =
+          Number(
+            b.match(
+              /section(\d+)\.xml/i
+            )?.[1] ?? 0
+          );
+
+        return an - bn;
+      });
+
+  if (sectionNames.length === 0) {
+    throw new Error(
+      "HWPX 파일 안에서 본문 section XML을 찾지 못했습니다."
+    );
+  }
+
+  const texts: string[] = [];
+
+  for (const name of sectionNames) {
+    const xml =
+      strFromU8(zip[name]);
+
+    const text =
+      decodeXml(xml);
+
+    if (text) {
+      texts.push(text);
+    }
+  }
+
+  return texts.join("\n\n");
+}
+
+async function getLatestRegulationByName(
+  name: string
+) {
+  const items =
+    await listRegulations();
+
+  const query = name
+    .replace(/\s+/g, "")
+    .toLowerCase();
+
+  const exact =
+    items.find(
+      (item) =>
+        item.title
+          .replace(/\s+/g, "")
+          .toLowerCase() === query
+    );
+
+  const partial =
+    items.find(
+      (item) =>
+        item.title
+          .replace(/\s+/g, "")
+          .toLowerCase()
+          .includes(query)
+    );
+
+  const match = exact ?? partial;
+
+  if (!match) {
+    throw new Error(
+      `"${name}"에 해당하는 규정을 찾지 못했습니다.`
+    );
+  }
+
+  const detail =
+    await getRegulationDetail(
+      match.detailUrl
+    );
+
+  return {
+    match,
+    detail,
+  };
+}
+
+async function getLatestRegulationText(
+  name: string
+) {
+  const { match, detail } =
+    await getLatestRegulationByName(
+      name
+    );
+
+  const attachment =
+    detail.latestAttachment;
+
+  if (!attachment) {
+    throw new Error(
+      "최신 첨부파일을 찾지 못했습니다."
+    );
+  }
+
+  const file =
+    await downloadLatestFile(
+      attachment
+    );
+
+  if (
+    file.extension.toLowerCase() ===
+    "hwpx"
+  ) {
+    const text =
+      extractHwpxText(
+        file.bytes
+      );
+
+    return {
+      regulationName:
+        detail.title !==
+        "제목 확인 필요"
+          ? detail.title
+          : match.title,
+
+      revisionDate:
+        detail.revisionDate ??
+        match.revisionDate,
+
+      updatedDate:
+        detail.updatedDate ??
+        match.updatedDate,
+
+      sourceUrl:
+        detail.sourceUrl,
+
+      filename:
+        file.filename,
+
+      extension:
+        file.extension,
+
+      text,
+    };
+  }
+
+  /*
+   * 구형 HWP/PDF는 Worker 무료 환경에서
+   * 무거운 변환기를 실행하지 않습니다.
+   */
+  throw new Error(
+    [
+      `최신 규정 파일은 ${file.extension || "알 수 없는 형식"}입니다.`,
+      `파일명: ${file.filename}`,
+      "",
+      "현재 MCP는 HWPX 본문을 직접 읽을 수 있습니다.",
+      "구형 HWP/PDF 본문 변환 기능은 별도 처리기가 필요합니다.",
+      `원문: ${detail.sourceUrl}`,
+    ].join("\n")
+  );
+}
+
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.2.0",
+    version: "1.3.0",
   });
 
   server.registerTool(
     "hello",
     {
       description:
-        "국방과학연구소 ALIO 규정 MCP 연결 상태를 확인합니다.",
-      inputSchema: {
-        name: z.string().optional(),
-      },
+        "국방과학연구소 규정 MCP 연결상태를 확인합니다.",
+      inputSchema: {},
     },
-    async ({ name }) => ({
+    async () => ({
       content: [
         {
           type: "text",
           text:
-            `국방과학연구소 규정 MCP 정상 작동\n` +
-            `요청: ${name ?? "연결 테스트"}\n` +
-            `최신 규정 우선 모드: ON`,
+            "국방과학연구소 규정 MCP 정상 작동\n" +
+            "최신 규정 우선: ON\n" +
+            "HWPX 본문 읽기: ON",
         },
       ],
     })
@@ -442,7 +694,7 @@ function createServer() {
     "list_regulations",
     {
       description:
-        "ALIO에서 국방과학연구소 내부규정의 최신 목록만 조회합니다.",
+        "국방과학연구소의 최신 내부규정 목록을 조회합니다.",
       inputSchema: {},
     },
     async () => {
@@ -450,29 +702,20 @@ function createServer() {
         const items =
           await listRegulations();
 
-        const text = items
-          .map(
+        const text =
+          items.map(
             (item, index) =>
-              `${index + 1}. ${item.title}\n` +
-              `   제·개정일: ${
-                item.revisionDate ??
-                "확인 필요"
-              }\n` +
-              `   최종 수정일: ${
-                item.updatedDate ??
-                "확인 필요"
-              }`
-          )
-          .join("\n\n");
+              `${index + 1}. ${item.title}` +
+              `\n   제·개정일: ${item.revisionDate ?? "확인 필요"}` +
+              `\n   최종수정일: ${item.updatedDate ?? "확인 필요"}`
+          ).join("\n\n");
 
         return {
           content: [
             {
               type: "text",
               text:
-                `국방과학연구소 최신 내부규정 목록\n` +
-                `총 ${items.length}건\n\n` +
-                text,
+                `국방과학연구소 최신 내부규정 ${items.length}건\n\n${text}`,
             },
           ],
         };
@@ -483,12 +726,9 @@ function createServer() {
             {
               type: "text",
               text:
-                `규정 목록 조회 실패\n` +
-                `${
-                  error instanceof Error
-                    ? error.message
-                    : String(error)
-                }`,
+                error instanceof Error
+                  ? error.message
+                  : String(error),
             },
           ],
         };
@@ -502,12 +742,8 @@ function createServer() {
       description:
         "국방과학연구소 최신 내부규정을 규정명으로 검색합니다.",
       inputSchema: {
-        query: z
-          .string()
-          .min(1)
-          .describe(
-            "검색어. 예: 휴가, 취업, 육아휴직, 보수"
-          ),
+        query:
+          z.string().min(1),
       },
     },
     async ({ query }) => {
@@ -519,47 +755,30 @@ function createServer() {
           .replace(/\s+/g, "")
           .toLowerCase();
 
-        const matches = items.filter(
-          (item) =>
+        const matches =
+          items.filter((item) =>
             item.title
               .replace(/\s+/g, "")
               .toLowerCase()
               .includes(q)
-        );
+          );
 
-        if (matches.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `"${query}"에 해당하는 최신 규정을 찾지 못했습니다.`,
-              },
-            ],
-          };
-        }
-
-        const text = matches
-          .map(
-            (item, index) =>
-              `${index + 1}. ${item.title}\n` +
-              `   제·개정일: ${
-                item.revisionDate ??
-                "확인 필요"
-              }\n` +
-              `   최종 수정일: ${
-                item.updatedDate ??
-                "확인 필요"
-              }`
-          )
-          .join("\n\n");
+        const text =
+          matches.length
+            ? matches
+                .map(
+                  (item, index) =>
+                    `${index + 1}. ${item.title}` +
+                    `\n   제·개정일: ${item.revisionDate ?? "확인 필요"}`
+                )
+                .join("\n\n")
+            : "검색 결과 없음";
 
         return {
           content: [
             {
               type: "text",
-              text:
-                `"${query}" 최신 규정 검색 결과\n\n${text}`,
+              text,
             },
           ],
         };
@@ -570,12 +789,9 @@ function createServer() {
             {
               type: "text",
               text:
-                `규정 검색 실패\n` +
-                `${
-                  error instanceof Error
-                    ? error.message
-                    : String(error)
-                }`,
+                error instanceof Error
+                  ? error.message
+                  : String(error),
             },
           ],
         };
@@ -587,85 +803,36 @@ function createServer() {
     "get_regulation",
     {
       description:
-        "국방과학연구소 규정의 최신 개정본 첨부파일 하나만 조회합니다. 과거 개정본은 반환하지 않습니다.",
+        "규정의 최신 첨부파일 정보만 조회합니다. 과거 개정본은 제외합니다.",
       inputSchema: {
-        name: z
-          .string()
-          .min(1)
-          .describe(
-            "규정명 또는 규정명의 일부"
-          ),
+        name:
+          z.string().min(1),
       },
     },
     async ({ name }) => {
       try {
-        const items =
-          await listRegulations();
-
-        const q = name
-          .replace(/\s+/g, "")
-          .toLowerCase();
-
-        const match = items.find(
-          (item) =>
-            item.title
-              .replace(/\s+/g, "")
-              .toLowerCase()
-              .includes(q)
-        );
-
-        if (!match) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `"${name}"에 해당하는 규정을 찾지 못했습니다.`,
-              },
-            ],
-          };
-        }
-
-        const detail =
-          await getRegulationDetail(
-            match.detailUrl
+        const { match, detail } =
+          await getLatestRegulationByName(
+            name
           );
 
         const latest =
           detail.latestAttachment;
 
-        const fileText = latest
-          ? [
-              `최신 첨부파일: ${latest.name}`,
-              `다운로드 주소: ${latest.url}`,
-              `선택 기준: 최신 제·개정일 우선`,
-            ].join("\n")
-          : "최신 첨부파일을 자동으로 확인하지 못했습니다.";
-
         return {
           content: [
             {
               type: "text",
-              text:
-                `규정명: ${detail.title}\n` +
-                `분야: ${
-                  detail.category ??
-                  "확인 필요"
-                }\n` +
-                `현재 제·개정일: ${
-                  detail.revisionDate ??
-                  match.revisionDate ??
-                  "확인 필요"
-                }\n` +
-                `ALIO 최종 수정일: ${
-                  detail.updatedDate ??
-                  match.updatedDate ??
-                  "확인 필요"
-                }\n` +
-                `ALIO 원문: ${detail.sourceUrl}\n\n` +
-                `${fileText}\n\n` +
-                `ALIO에 등록된 첨부파일 수: ${detail.totalAttachmentCount}\n` +
-                `과거 개정본은 MCP 응답에서 제외됩니다.`,
+              text: [
+                `규정명: ${match.title}`,
+                `제·개정일: ${detail.revisionDate ?? match.revisionDate ?? "확인 필요"}`,
+                `최종수정일: ${detail.updatedDate ?? match.updatedDate ?? "확인 필요"}`,
+                `최신파일: ${latest?.name ?? "확인 실패"}`,
+                `파일형식: ${latest?.extension || "확인 필요"}`,
+                `ALIO: ${detail.sourceUrl}`,
+                "",
+                "과거 개정본은 조회 대상에서 제외했습니다.",
+              ].join("\n"),
             },
           ],
         };
@@ -676,12 +843,203 @@ function createServer() {
             {
               type: "text",
               text:
-                `규정 상세 조회 실패\n` +
-                `${
-                  error instanceof Error
-                    ? error.message
-                    : String(error)
-                }`,
+                error instanceof Error
+                  ? error.message
+                  : String(error),
+            },
+          ],
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "get_regulation_text",
+    {
+      description:
+        "최신 HWPX 규정의 실제 본문을 읽습니다.",
+      inputSchema: {
+        name:
+          z.string().min(1),
+      },
+    },
+    async ({ name }) => {
+      try {
+        const result =
+          await getLatestRegulationText(
+            name
+          );
+
+        /*
+         * 너무 긴 MCP 응답 방지.
+         */
+        const maxLength = 40000;
+
+        const text =
+          result.text.length >
+          maxLength
+            ? result.text.slice(
+                0,
+                maxLength
+              ) +
+              "\n\n[본문이 길어 일부 생략됨]"
+            : result.text;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: [
+                `규정명: ${result.regulationName}`,
+                `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
+                `최신파일: ${result.filename}`,
+                `ALIO: ${result.sourceUrl}`,
+                "",
+                "----- 최신 규정 본문 -----",
+                text,
+              ].join("\n"),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                error instanceof Error
+                  ? error.message
+                  : String(error),
+            },
+          ],
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "search_regulation_text",
+    {
+      description:
+        "최신 HWPX 규정 본문에서 키워드 또는 조문을 검색합니다.",
+      inputSchema: {
+        name:
+          z.string().min(1),
+
+        query:
+          z.string().min(1),
+      },
+    },
+    async ({
+      name,
+      query,
+    }) => {
+      try {
+        const result =
+          await getLatestRegulationText(
+            name
+          );
+
+        const text =
+          result.text;
+
+        const lowered =
+          text.toLowerCase();
+
+        const q =
+          query.toLowerCase();
+
+        const matches:
+          string[] = [];
+
+        let start = 0;
+
+        while (
+          matches.length < 10
+        ) {
+          const index =
+            lowered.indexOf(
+              q,
+              start
+            );
+
+          if (index < 0) break;
+
+          const from =
+            Math.max(
+              0,
+              index - 300
+            );
+
+          const to =
+            Math.min(
+              text.length,
+              index +
+                query.length +
+                500
+            );
+
+          matches.push(
+            text
+              .slice(from, to)
+              .trim()
+          );
+
+          start =
+            index +
+            query.length;
+        }
+
+        if (
+          matches.length === 0
+        ) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: [
+                  `규정명: ${result.regulationName}`,
+                  `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
+                  `검색어: ${query}`,
+                  "",
+                  "최신 규정 본문에서 해당 내용을 찾지 못했습니다.",
+                ].join("\n"),
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: [
+                `규정명: ${result.regulationName}`,
+                `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
+                `최신파일: ${result.filename}`,
+                `검색어: ${query}`,
+                `검색결과: ${matches.length}건`,
+                `ALIO: ${result.sourceUrl}`,
+                "",
+                ...matches.map(
+                  (match, index) =>
+                    `----- 결과 ${index + 1} -----\n${match}`
+                ),
+              ].join("\n\n"),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                error instanceof Error
+                  ? error.message
+                  : String(error),
             },
           ],
         };
@@ -698,9 +1056,12 @@ export default {
     env: unknown,
     ctx: ExecutionContext
   ) {
-    const url = new URL(request.url);
+    const url =
+      new URL(request.url);
 
-    if (url.pathname === "/") {
+    if (
+      url.pathname === "/"
+    ) {
       return new Response(
         [
           "ADD Regulations MCP is running.",
@@ -708,6 +1069,7 @@ export default {
           "Organization: 국방과학연구소",
           `ALIO ID: ${ADD_APBA_ID}`,
           "Mode: Latest regulation only",
+          "HWPX text extraction: ON",
           "MCP endpoint: /mcp",
           "",
           "Tools:",
@@ -715,6 +1077,8 @@ export default {
           "- list_regulations",
           "- search_regulations",
           "- get_regulation",
+          "- get_regulation_text",
+          "- search_regulation_text",
         ].join("\n"),
         {
           headers: {
@@ -725,21 +1089,34 @@ export default {
       );
     }
 
-    if (url.pathname === "/health") {
+    if (
+      url.pathname ===
+      "/health"
+    ) {
       return Response.json({
         ok: true,
         organization:
           "국방과학연구소",
-        alioId: ADD_APBA_ID,
+        alioId:
+          ADD_APBA_ID,
         latestOnly: true,
-        mcpEndpoint: "/mcp",
+        hwpxTextExtraction:
+          true,
+        mcpEndpoint:
+          "/mcp",
       });
     }
 
-    if (url.pathname === "/mcp") {
+    if (
+      url.pathname === "/mcp"
+    ) {
       return createMcpHandler(
         createServer
-      )(request, env, ctx);
+      )(
+        request,
+        env,
+        ctx
+      );
     }
 
     return new Response(
