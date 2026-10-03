@@ -1,0 +1,24 @@
+name: Temporary HWP toolkit export
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/tmp-export-hwpkit.yml"
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone HWP toolkit
+        run: git clone --depth 1 https://github.com/yuyu04/hwpkit.git hwpkit
+      - name: Remove git metadata
+        run: rm -rf hwpkit/.git
+      - name: Upload toolkit
+        uses: actions/upload-artifact@v4
+        with:
+          name: hwpkit-runtime
+          path: hwpkit
+          include-hidden-files: true
+          retention-days: 1
