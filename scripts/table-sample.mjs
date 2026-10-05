@@ -21,6 +21,44 @@ function cellText(cell) {
     .trim();
 }
 
+
+function findKeywordContexts(tables, keyword) {
+  const results = [];
+  for (const [tableIndex, item] of tables.entries()) {
+    const matches = item.table.cells.filter((cell) =>
+      cellText(cell).includes(keyword)
+    );
+    for (const cell of matches.slice(0, 8)) {
+      const nearby = item.table.cells
+        .filter((candidate) =>
+          candidate.row >= Math.max(0, cell.row - 1) &&
+          candidate.row <= Math.min(item.table.rowCount - 1, cell.row + 1)
+        )
+        .map((candidate) => ({
+          row: candidate.row,
+          col: candidate.col,
+          rowSpan: candidate.rowSpan,
+          colSpan: candidate.colSpan,
+          text: cellText(candidate).slice(0, 220),
+        }));
+      results.push({
+        tableIndex,
+        rowCount: item.table.rowCount,
+        colCount: item.table.colCount,
+        matchedCell: {
+          row: cell.row,
+          col: cell.col,
+          rowSpan: cell.rowSpan,
+          colSpan: cell.colSpan,
+          text: cellText(cell),
+        },
+        nearby,
+      });
+    }
+  }
+  return results;
+}
+
 const response = await fetch(URL, {
   headers: {
     "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-Table-Test/1.0",
@@ -88,4 +126,11 @@ if (tableLineIndexes.length > 0) {
   console.log("MARKDOWN_TABLE_SAMPLE_START");
   console.log(lines.slice(start, end).join("\n"));
   console.log("MARKDOWN_TABLE_SAMPLE_END");
+}
+
+for (const keyword of ["기술용역", "계약", "1억원", "5천만원"]) {
+  const contexts = findKeywordContexts(tables, keyword);
+  console.log(`KEYWORD_CONTEXT_${keyword}_START`);
+  console.log(JSON.stringify(contexts.slice(0, 5), null, 2));
+  console.log(`KEYWORD_CONTEXT_${keyword}_END`);
 }
