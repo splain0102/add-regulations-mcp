@@ -2951,7 +2951,10 @@ function searchPdfLayoutRows(
 }
 
 function renderPdfLayoutRow(
-  row: PdfLayoutRow
+  row: PdfLayoutRow,
+  header:
+    PdfHeaderCandidate |
+    null = null
 ): string {
   const segmentText =
     row.segments
@@ -2982,10 +2985,58 @@ function renderPdfLayoutRow(
       )
       .join(" | ");
 
-  return (
-    `행 ${row.row} (y=${row.y.toFixed(1)}): ` +
-    segmentText
-  );
+  const boundaries =
+    header
+      ? makePdfHeaderBoundaries(
+          header.columns
+        )
+      : [];
+
+  const symbolText =
+    extractPdfSymbols(
+      row
+    )
+      .map(
+        (symbol) => {
+          const approver =
+            boundaries.length
+              ? mapPdfSymbolToHeader(
+                  symbol,
+                  boundaries
+                )
+              : null;
+
+          return [
+            symbol.symbol,
+            `x0=${symbol.x0.toFixed(2)}`,
+            `x1=${symbol.x1.toFixed(2)}`,
+            `x_center=${symbol.xCenter.toFixed(2)}`,
+            `y=${symbol.y.toFixed(2)}`,
+            "coordinate_type=pdf_point",
+            `precision=${symbol.precision}`,
+            ...(symbol.suffix
+              ? [
+                  `suffix=${symbol.suffix}`,
+                ]
+              : []),
+            ...(approver
+              ? [
+                  `approver=${approver}`,
+                ]
+              : []),
+          ].join(", ");
+        }
+      );
+
+  return [
+    `행 ${row.row} (y=${row.y.toFixed(1)}): ${segmentText}`,
+    ...(symbolText.length
+      ? symbolText.map(
+          (text) =>
+            `  기호 좌표: ${text}`
+        )
+      : []),
+  ].join("\n");
 }
 
 function renderPdfLayoutMatch(
@@ -2995,6 +3046,24 @@ function renderPdfLayoutMatch(
     | "row"
     | "tokens"
 ): string {
+  const detectedHeader =
+    detectKnownPdfHeader(
+      page.rows
+    );
+
+  const header =
+    detectedHeader &&
+    detectedHeader.matched >= 2
+      ? detectedHeader
+      : null;
+
+  const inheritedTask =
+    findPdfInheritedTask(
+      page,
+      row.row,
+      header
+    );
+
   const from =
     Math.max(
       0,
@@ -3017,10 +3086,24 @@ function renderPdfLayoutMatch(
   ) {
     context.push(
       renderPdfLayoutRow(
-        page.rows[index]
+        page.rows[index],
+        header
       )
     );
   }
+
+  const multilineHeaders =
+    header?.columns
+      .filter(
+        (column) =>
+          column.rowOffsets
+            .length > 1
+      )
+      .map(
+        (column) =>
+          column.name
+      ) ??
+    [];
 
   return [
     `PDF ${page.page}쪽`,
@@ -3029,12 +3112,39 @@ function renderPdfLayoutMatch(
       : "일치 방식: PDF 행 일치",
     `기준 행: ${row.row}, y=${row.y.toFixed(1)}`,
     `기준 내용: ${row.text}`,
+    ...(header
+      ? [
+          `전결 헤더 추정: ${header.order.join(" | ")}`,
+          ...(multilineHeaders.length
+            ? [
+                `다줄 헤더 병합: ${multilineHeaders.join(" | ")}`,
+              ]
+            : []),
+        ]
+      : [
+          "전결 헤더 추정: 충분한 헤더 증거 없음",
+        ]),
+    ...(inheritedTask &&
+    !normalizeTableSearch(
+      row.text
+    ).includes(
+      normalizeTableSearch(
+        inheritedTask
+      )
+    )
+      ? [
+          `fill-down 업무 문맥: ${inheritedTask}`,
+        ]
+      : []),
     "좌표 기반 주변 행 문맥:",
     ...context,
     "",
-    "※ PDF는 HWP/HWPX처럼 표 셀·병합정보가 명시되지 않는 경우가 많아 x/y 좌표로 행과 열 간격을 추정한 결과입니다.",
+    "※ PDF 기호 좌표는 pdf_point 단위입니다. 원시 positioned text item이 단일 기호이면 실제 item x범위를 사용하고, 한 item에 여러 기호가 있으면 glyph-width 추정으로 개별 x좌표를 분리합니다.",
+    "※ 헤더 열 판정은 다줄 헤더를 병합한 뒤 열 중심점의 중간값(header_midpoints)을 경계로 사용합니다. 괘선 정보가 없는 PDF에서는 이 결과가 추정치일 수 있습니다.",
   ].join("\n");
 }
+
+
 
 async function getLatestRegulationByName(
   name: string
