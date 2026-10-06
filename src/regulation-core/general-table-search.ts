@@ -5,7 +5,7 @@ export type SearchTableRow={page:number|null;row:number;table_id:string;coordina
 
 export const normalizeTableSearch=(value:string)=>value.normalize('NFKC').toLowerCase().replace(/[\s,]+/g,'');
 export const tableCellsForRow=(table:Table,row:number)=>table.cells.filter(c=>c.row<=row&&row<c.row+c.rowSpan).sort((a,b)=>a.col-b.col);
-const normalizedText=(s:string)=>s.replace(/\s+/g,' ').replace(/\s*\n\s*/g,' ').trim();
+const normalizedText=(s:string)=>s.replace(/\s*\n\s*/g,' ').replace(/\s+/g,' ').replace(/(?<=[가-힣])\s+(?=[가-힣])/g,'').trim();
 const cellJson=(c:Cell)=>({row:c.row,col:c.col,rowSpan:c.rowSpan,colSpan:c.colSpan,row_span:c.rowSpan,col_span:c.colSpan,text:normalizedText(c.text),raw_text:c.text});
 const headerLabels=new Set(['구분','관리등급','공개대상','사업구분','사업관리부서','예산관리부서','순번','장비명','제작사','모델명','취득연도','취득금액','보유기관명','지역중복여부','공동활용여부','장비등록번호','자체검토의견','기존장비명','용도','구축가격','활용상태','처분계획','상호']);
 function headerRowNumbers(table:Table){
@@ -28,6 +28,10 @@ export function searchGeneralTables(tables:Table[],query:string,delegationRows:S
   const isTextBox=rowCount===1&&colCount===1;
   const headerRows=isTextBox?[]:headerRowNumbers(table);
   for(const cell of table.cells){if(normalizeTableSearch(cell.text).includes(q)){
+   if(tokens.length===1&&headerRows.includes(cell.row)){
+     const dataRows=[...new Set(table.cells.map(c=>c.row))].filter(r=>!headerRows.includes(r)).slice(0,20);
+     if(dataRows.length){for(const dataRow of dataRows){const key=`${table.id}:${dataRow}`;if(!seen.has(key)){seen.add(key);matches.push({table,cell,row:dataRow,mode:'cell'});}}continue;}
+   }
    const key=`${table.id}:${cell.row}`;if(!seen.has(key)){seen.add(key);matches.push({table,cell,row:cell.row,mode:'cell'});}
   }}
   if(tokens.length>=2){
