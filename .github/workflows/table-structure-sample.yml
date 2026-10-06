@@ -5,8 +5,6 @@ on:
     branches: [main]
     paths:
       - "scripts/table-sample.mjs"
-      - "scripts/delegation-response-regression.ts"
-      - "scripts/test-loader.mjs"
       - ".github/workflows/table-structure-sample.yml"
       - "package.json"
       - "package-lock.json"
@@ -22,5 +20,5 @@ jobs:
           node-version: "24"
       - run: npm ci --ignore-scripts
       - run: node scripts/table-sample.mjs
-      - run: npm run test:delegation-response
+      - run: node --use-env-proxy --import ./scripts/test-loader.mjs scripts/comprehensive-regression.ts
       - run: npx wrangler deploy --dry-run --outdir /tmp/add-regulations-mcp-dry-run
