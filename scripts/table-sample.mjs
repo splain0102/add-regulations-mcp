@@ -165,6 +165,51 @@ if (normalizedMatches.length === 0) {
   throw new Error("normalized search failed: 1억원 should match 1억 원");
 }
 
+
+function rowCells(table, row) {
+  return table.cells
+    .filter((cell) =>
+      cell.row <= row &&
+      row < cell.row + cell.rowSpan
+    )
+    .sort((a, b) => a.col - b.col);
+}
+
+const compoundTokens = ["구매", "1억원"].map(normalizeTableSearch);
+const compoundMatches = [];
+
+for (const [tableIndex, item] of tables.entries()) {
+  for (let row = 0; row < item.table.rowCount; row++) {
+    const rowText = normalizeTableSearch(
+      rowCells(item.table, row)
+        .map((cell) => cellText(cell))
+        .join(" ")
+    );
+    if (compoundTokens.every((token) => rowText.includes(token))) {
+      compoundMatches.push({
+        tableIndex,
+        row,
+        cells: rowCells(item.table, row)
+          .filter((cell) => cellText(cell))
+          .map((cell) => ({
+            col: cell.col,
+            rowSpan: cell.rowSpan,
+            colSpan: cell.colSpan,
+            text: cellText(cell),
+          })),
+      });
+    }
+  }
+}
+
+console.log("COMPOUND_ROW_MATCHES_START");
+console.log(JSON.stringify(compoundMatches.slice(0, 10), null, 2));
+console.log("COMPOUND_ROW_MATCHES_END");
+
+if (compoundMatches.length === 0) {
+  throw new Error("compound row search failed: 구매 + 1억원");
+}
+
 const hwpxBytes = await hwpToHwpx(bytes, {
   title: "위임전결규정 표 구조 테스트",
   creator: "ADD Regulations MCP CI",
