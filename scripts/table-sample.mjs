@@ -467,3 +467,61 @@ async function runCrossRegulationTableRegression() {
 }
 
 await runCrossRegulationTableRegression();
+
+
+function genericSearchTable(tables, query, limit = 8) {
+  const q = normalizeTableSearch(query);
+  const tokens = query.normalize("NFKC").split(/[\s,;/]+/).map(normalizeTableSearch).filter(Boolean);
+  const results = [];
+  const seen = new Set();
+  for (const table of tables) {
+    for (const cell of table.cells) {
+      if (!normalizeTableSearch(cellText(cell)).includes(q)) continue;
+      const key = `${table.index}:cell:${cell.row}:${cell.col}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({ table, cell, row: cell.row, mode: "cell" });
+      if (results.length >= limit) return results;
+    }
+  }
+  if (tokens.length >= 2) {
+    for (const table of tables) {
+      for (let row = 0; row < table.rowCount; row++) {
+        const cells = table.cells.filter(cell => cell.row <= row && row < cell.row + (cell.rowSpan ?? 1));
+        const text = normalizeTableSearch(cells.map(cellText).join(" "));
+        if (!tokens.every(token => text.includes(token))) continue;
+        const anchor = cells.find(cell => cellText(cell));
+        if (!anchor) continue;
+        const key = `${table.index}:row:${row}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push({ table, cell: anchor, row, mode: "row" });
+        if (results.length >= limit) return results;
+      }
+    }
+  }
+  return results;
+}
+
+async function runGenericTableSearchRegression() {
+  const cases = [
+    { name: "보고서 작성 및 관리요령", fileNo: "239155", query: "소내망", expected: ["소내망", "⊙"] },
+    { name: "연구시설·장비의 관리 등에 관한 요령", fileNo: "228382", query: "장비명 제작사 모델명", expected: ["장비명", "제작사", "모델명"] },
+    { name: "계약요령", fileNo: "238456", query: "제 3 차", expected: ["제 3 차"] },
+  ];
+  const summary = [];
+  for (const testCase of cases) {
+    const tables = await parseTablesFromFileNo(testCase.fileNo);
+    tables.forEach((table, index) => { table.index = index; });
+    const matches = genericSearchTable(tables, testCase.query, 8);
+    if (!matches.length) throw new Error(`generic table search failed: ${testCase.name} / ${testCase.query}`);
+    const rowText = matches.flatMap(({table,row}) => table.cells.filter(cell => cell.row <= row && row < cell.row + (cell.rowSpan ?? 1)).map(cellText)).join(" ");
+    for (const expected of testCase.expected) {
+      if (!rowText.includes(expected)) throw new Error(`generic table search missing expected text: ${testCase.name} / ${expected}`);
+    }
+    summary.push({ name:testCase.name, query:testCase.query, matches:matches.length, first:{table:matches[0].table.index+1,row:matches[0].row,mode:matches[0].mode} });
+  }
+  console.log("GENERIC_TABLE_SEARCH_REGRESSION_PASS", JSON.stringify(summary));
+}
+
+await runGenericTableSearchRegression();
