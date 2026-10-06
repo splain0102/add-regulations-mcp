@@ -35,6 +35,8 @@ await test(14,'historical PDF centered merged task ownership',async()=>{
  const hits=searchPdfLayoutRows(pdf.pages,'사업기구별 분기계획 승인',20);
  const hit=hits.find(h=>compact(h.row.text).includes(compact('사업기구별 분기계획 승인')));
  assert(hit,JSON.stringify(hits.map(h=>h.row.text)));
+ const nearby=hit.page.rows.filter(r=>Math.abs(r.row-hit.row.row)<=8).map(r=>({row:r.row,text:r.text,items:(r.segments??[]).flatMap((s:any)=>s.sourceItems??[]).map((x:any)=>({x:x.x,y:x.y,str:x.str}))}));
+ console.log('PDF_OWNERSHIP_DIAGNOSTIC',JSON.stringify({page:hit.page.page,targetRow:hit.row.row,nearby}));
  const matches=buildPdfStructuredMatches(hit.page,hit.row);
  const owned=matches.find((m:any)=>compact(m.task).includes(compact('8) 공무국외출장')));
  assert(owned,JSON.stringify(matches));
