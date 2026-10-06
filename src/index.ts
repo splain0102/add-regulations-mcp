@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { unzipSync, strFromU8 } from "fflate";
 import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs/browser";
-import { extractText } from "unpdf";
+import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
 const ALIO_BASE = "https://www.alio.go.kr";
@@ -1266,6 +1266,594 @@ function renderStructuredTableMatch(
     ),
   ].join("\n");
 }
+
+type PdfLayoutSegment = {
+  x: number;
+  xEnd: number;
+  text: string;
+};
+
+type PdfLayoutRow = {
+  page: number;
+  row: number;
+  y: number;
+  segments: PdfLayoutSegment[];
+  text: string;
+};
+
+type PdfLayoutPage = {
+  page: number;
+  rows: PdfLayoutRow[];
+};
+
+const MAX_PDF_LAYOUT_PAGES = 80;
+
+function medianNumber(
+  values: number[]
+): number {
+  const sorted =
+    values
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+
+  if (sorted.length === 0) {
+    return 0;
+  }
+
+  const middle =
+    Math.floor(
+      sorted.length / 2
+    );
+
+  return sorted.length % 2
+    ? sorted[middle]
+    : (
+        sorted[middle - 1] +
+        sorted[middle]
+      ) / 2;
+}
+
+function groupPdfLayoutRows(
+  items: any[],
+  page: number
+): PdfLayoutRow[] {
+  const usable =
+    items
+      .filter(
+        (item) =>
+          typeof item?.str === "string" &&
+          item.str.trim()
+      )
+      .map((item) => ({
+        ...item,
+        str:
+          item.str
+            .replace(/\s+/g, " ")
+            .trim(),
+      }))
+      .sort(
+        (a, b) =>
+          b.y - a.y ||
+          a.x - b.x
+      );
+
+  if (usable.length === 0) {
+    return [];
+  }
+
+  const fontMedian =
+    medianNumber(
+      usable.map(
+        (item) =>
+          Number(item.fontSize) || 0
+      )
+    ) || 10;
+
+  const yTolerance =
+    Math.max(
+      1.5,
+      Math.min(
+        4,
+        fontMedian * 0.28
+      )
+    );
+
+  const grouped: {
+    y: number;
+    items: any[];
+  }[] = [];
+
+  for (const item of usable) {
+    let best:
+      | {
+          y: number;
+          items: any[];
+        }
+      | undefined;
+
+    let bestDistance =
+      Number.POSITIVE_INFINITY;
+
+    for (
+      let index =
+        Math.max(
+          0,
+          grouped.length - 4
+        );
+      index < grouped.length;
+      index++
+    ) {
+      const candidate =
+        grouped[index];
+
+      const distance =
+        Math.abs(
+          candidate.y - item.y
+        );
+
+      if (
+        distance <= yTolerance &&
+        distance < bestDistance
+      ) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+
+    if (!best) {
+      best = {
+        y: item.y,
+        items: [],
+      };
+
+      grouped.push(best);
+    }
+
+    best.items.push(item);
+    best.y =
+      best.items.reduce(
+        (sum, value) =>
+          sum + value.y,
+        0
+      ) /
+      best.items.length;
+  }
+
+  return grouped
+    .sort(
+      (a, b) =>
+        b.y - a.y
+    )
+    .map(
+      (group, rowIndex) => {
+        const rowItems =
+          [...group.items]
+            .sort(
+              (a, b) =>
+                a.x - b.x
+            );
+
+        const positiveGaps:
+          number[] = [];
+
+        for (
+          let index = 1;
+          index < rowItems.length;
+          index++
+        ) {
+          const previous =
+            rowItems[index - 1];
+
+          const current =
+            rowItems[index];
+
+          const gap =
+            current.x -
+            (
+              previous.x +
+              previous.width
+            );
+
+          if (gap > 0) {
+            positiveGaps.push(
+              gap
+            );
+          }
+        }
+
+        const gapMedian =
+          medianNumber(
+            positiveGaps
+          ) ||
+          fontMedian * 0.3;
+
+        const splitThreshold =
+          Math.max(
+            fontMedian * 1.1,
+            gapMedian * 3,
+            10
+          );
+
+        const segments:
+          PdfLayoutSegment[] = [];
+
+        let current:
+          | PdfLayoutSegment
+          | undefined;
+
+        for (
+          const item of rowItems
+        ) {
+          const x =
+            Number(item.x) || 0;
+
+          const xEnd =
+            x +
+            (
+              Number(
+                item.width
+              ) || 0
+            );
+
+          if (!current) {
+            current = {
+              x,
+              xEnd,
+              text: item.str,
+            };
+            continue;
+          }
+
+          const gap =
+            x -
+            current.xEnd;
+
+          if (
+            gap >
+            splitThreshold
+          ) {
+            segments.push(
+              current
+            );
+
+            current = {
+              x,
+              xEnd,
+              text: item.str,
+            };
+
+            continue;
+          }
+
+          current.text +=
+            gap >
+            fontMedian * 0.15
+              ? ` ${item.str}`
+              : item.str;
+
+          current.xEnd =
+            Math.max(
+              current.xEnd,
+              xEnd
+            );
+        }
+
+        if (current) {
+          segments.push(
+            current
+          );
+        }
+
+        return {
+          page,
+          row: rowIndex,
+          y: group.y,
+          segments,
+          text:
+            segments
+              .map(
+                (segment) =>
+                  segment.text
+              )
+              .join(" | "),
+        };
+      }
+    );
+}
+
+async function extractPdfRichContent(
+  bytes: Uint8Array
+): Promise<{
+  text: string;
+  totalPages: number;
+  pages: PdfLayoutPage[];
+  layoutSkippedReason?: string;
+}> {
+  const pdf =
+    await getDocumentProxy(
+      bytes.slice()
+    );
+
+  try {
+    let pages:
+      PdfLayoutPage[] = [];
+
+    let layoutSkippedReason:
+      string | undefined;
+
+    if (
+      pdf.numPages <=
+      MAX_PDF_LAYOUT_PAGES
+    ) {
+      const positioned =
+        await extractTextItems(
+          pdf
+        );
+
+      pages =
+        positioned.items.map(
+          (
+            pageItems,
+            index
+          ) => ({
+            page: index + 1,
+            rows:
+              groupPdfLayoutRows(
+                pageItems,
+                index + 1
+              ),
+          })
+        );
+    } else {
+      layoutSkippedReason =
+        `PDF가 ${pdf.numPages}쪽으로 길어 좌표 기반 표 분석은 생략했습니다. 현재 한도는 ${MAX_PDF_LAYOUT_PAGES}쪽입니다.`;
+    }
+
+    const extracted =
+      await extractText(
+        pdf,
+        {
+          mergePages: true,
+        }
+      );
+
+    const text =
+      Array.isArray(
+        extracted.text
+      )
+        ? extracted.text.join(
+            "\n\n"
+          )
+        : extracted.text;
+
+    return {
+      text,
+      totalPages:
+        extracted.totalPages,
+      pages,
+      layoutSkippedReason,
+    };
+  } finally {
+    try {
+      await pdf.destroy();
+    } catch {
+      // PDF.js resource cleanup is best-effort.
+    }
+  }
+}
+
+function searchPdfLayoutRows(
+  pages: PdfLayoutPage[],
+  query: string,
+  limit = 8
+): {
+  page: PdfLayoutPage;
+  row: PdfLayoutRow;
+  mode:
+    | "row"
+    | "tokens";
+}[] {
+  const normalizedQuery =
+    normalizeTableSearch(
+      query
+    );
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const results: {
+    page: PdfLayoutPage;
+    row: PdfLayoutRow;
+    mode:
+      | "row"
+      | "tokens";
+  }[] = [];
+
+  const seen =
+    new Set<string>();
+
+  for (const page of pages) {
+    for (const row of page.rows) {
+      if (
+        normalizeTableSearch(
+          row.text
+        ).includes(
+          normalizedQuery
+        )
+      ) {
+        const key =
+          `${page.page}:${row.row}`;
+
+        if (!seen.has(key)) {
+          seen.add(key);
+
+          results.push({
+            page,
+            row,
+            mode: "row",
+          });
+        }
+
+        if (
+          results.length >=
+          limit
+        ) {
+          return results;
+        }
+      }
+    }
+  }
+
+  const tokens =
+    query
+      .normalize("NFKC")
+      .split(
+        /[\s,;/]+/
+      )
+      .map(
+        (token) =>
+          normalizeTableSearch(
+            token
+          )
+      )
+      .filter(Boolean);
+
+  if (
+    tokens.length >= 2
+  ) {
+    for (
+      const page of pages
+    ) {
+      for (
+        const row of page.rows
+      ) {
+        const rowText =
+          normalizeTableSearch(
+            row.text
+          );
+
+        if (
+          tokens.every(
+            (token) =>
+              rowText.includes(
+                token
+              )
+          )
+        ) {
+          const key =
+            `${page.page}:${row.row}`;
+
+          if (!seen.has(key)) {
+            seen.add(key);
+
+            results.push({
+              page,
+              row,
+              mode: "tokens",
+            });
+          }
+
+          if (
+            results.length >=
+            limit
+          ) {
+            return results;
+          }
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+function renderPdfLayoutRow(
+  row: PdfLayoutRow
+): string {
+  const segmentText =
+    row.segments
+      .map(
+        (segment) => {
+          const x =
+            segment.x
+              .toFixed(1);
+
+          const xEnd =
+            segment.xEnd
+              .toFixed(1);
+
+          const text =
+            segment.text.length >
+            260
+              ? segment.text.slice(
+                  0,
+                  260
+                ) + "…"
+              : segment.text;
+
+          return (
+            `[x=${x}-${xEnd}] ` +
+            text
+          );
+        }
+      )
+      .join(" | ");
+
+  return (
+    `행 ${row.row} (y=${row.y.toFixed(1)}): ` +
+    segmentText
+  );
+}
+
+function renderPdfLayoutMatch(
+  page: PdfLayoutPage,
+  row: PdfLayoutRow,
+  mode:
+    | "row"
+    | "tokens"
+): string {
+  const from =
+    Math.max(
+      0,
+      row.row - 2
+    );
+
+  const to =
+    Math.min(
+      page.rows.length - 1,
+      row.row + 2
+    );
+
+  const context:
+    string[] = [];
+
+  for (
+    let index = from;
+    index <= to;
+    index++
+  ) {
+    context.push(
+      renderPdfLayoutRow(
+        page.rows[index]
+      )
+    );
+  }
+
+  return [
+    `PDF ${page.page}쪽`,
+    mode === "tokens"
+      ? "일치 방식: 같은 PDF 행의 복합 검색어 일치"
+      : "일치 방식: PDF 행 일치",
+    `기준 행: ${row.row}, y=${row.y.toFixed(1)}`,
+    `기준 내용: ${row.text}`,
+    "좌표 기반 주변 행 문맥:",
+    ...context,
+    "",
+    "※ PDF는 HWP/HWPX처럼 표 셀·병합정보가 명시되지 않는 경우가 많아 x/y 좌표로 행과 열 간격을 추정한 결과입니다.",
+  ].join("\n");
+}
+
 async function getLatestRegulationByName(
   name: string
 ) {
@@ -1340,6 +1928,9 @@ async function getLatestRegulationText(
   let text: string;
   let markdown: string | undefined;
   let tables: StructuredTable[] = [];
+  let pdfLayout: PdfLayoutPage[] = [];
+  let pdfTotalPages: number | undefined;
+  let pdfLayoutSkippedReason: string | undefined;
 
   if (extension === "hwpx") {
     text =
@@ -1414,16 +2005,17 @@ async function getLatestRegulationText(
     }
   } else if (extension === "pdf") {
     try {
-      const extracted =
-        await extractText(
-          file.bytes,
-          { mergePages: true }
+      const rich =
+        await extractPdfRichContent(
+          file.bytes
         );
 
-      text =
-        Array.isArray(extracted.text)
-          ? extracted.text.join("\n\n")
-          : extracted.text;
+      text = rich.text;
+      pdfLayout = rich.pages;
+      pdfTotalPages =
+        rich.totalPages;
+      pdfLayoutSkippedReason =
+        rich.layoutSkippedReason;
 
       if (!text.trim()) {
         throw new Error(
@@ -1433,7 +2025,7 @@ async function getLatestRegulationText(
     } catch (error) {
       throw new Error(
         [
-          "PDF 본문 추출에 실패했습니다.",
+          "PDF 본문/레이아웃 추출에 실패했습니다.",
           `파일명: ${file.filename}`,
           `오류: ${
             error instanceof Error
@@ -1484,6 +2076,9 @@ async function getLatestRegulationText(
     text,
     markdown,
     tables,
+    pdfLayout,
+    pdfTotalPages,
+    pdfLayoutSkippedReason,
   };
 }
 
@@ -1584,7 +2179,7 @@ function extractArticleSnippet(
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.7.0",
+    version: "1.8.0",
   });
 
   server.registerTool(
@@ -1602,7 +2197,8 @@ function createServer() {
             "국방과학연구소 규정 MCP 정상 작동\n" +
             "최신 규정 우선: ON\n" +
             "HWP/HWPX/PDF 본문 읽기: ON\n" +
-            "HWP/HWPX 표 구조 인식: ON",
+            "HWP/HWPX 표 구조 인식: ON\n" +
+            "PDF 좌표 기반 표/행 인식: ON",
         },
       ],
     })
@@ -1858,7 +2454,7 @@ function createServer() {
     "get_regulation_text",
     {
       description:
-        "최신 HWP/HWPX/PDF 규정의 실제 본문을 읽습니다. HWP/HWPX는 표를 Markdown으로 표현하고 표 구조를 별도로 인식합니다.",
+        "최신 HWP/HWPX/PDF 규정의 실제 본문을 읽습니다. HWP/HWPX는 표 구조를 보존하고, PDF는 텍스트 x/y 좌표를 이용해 표의 행·열 문맥을 추정합니다.",
       inputSchema: {
         name:
           z.string().min(1),
@@ -1900,6 +2496,23 @@ function createServer() {
               ]
             : [];
 
+        const pdfLayoutNotice =
+          result.extension
+            .toLowerCase() === "pdf"
+            ? [
+                `PDF 페이지: ${result.pdfTotalPages ?? "확인 필요"}쪽`,
+                result.pdfLayout.length > 0
+                  ? `좌표 기반 행 분석: ${result.pdfLayout.length}쪽`
+                  : "좌표 기반 행 분석: 사용 안 함",
+                ...(result.pdfLayoutSkippedReason
+                  ? [
+                      result.pdfLayoutSkippedReason,
+                    ]
+                  : []),
+                "※ PDF는 표 셀/병합 구조가 파일에 명시되지 않는 경우가 많아 x/y 좌표를 이용해 표 문맥을 추정합니다.",
+              ]
+            : [];
+
         return {
           content: [
             {
@@ -1910,6 +2523,7 @@ function createServer() {
                 `최신파일: ${result.filename}`,
                 `ALIO: ${result.sourceUrl}`,
                 ...tableNotice,
+                ...pdfLayoutNotice,
                 "",
                 `----- 최신 규정 본문${result.markdown ? " (Markdown)" : ""} -----`,
                 text,
@@ -1938,7 +2552,7 @@ function createServer() {
     "search_regulation_text",
     {
       description:
-        "최신 HWP/HWPX/PDF 규정 본문에서 키워드 또는 조문을 검색합니다. HWP/HWPX 표에서는 공백·쉼표 차이를 무시하고 셀 및 병합셀의 행·열 문맥도 함께 검색합니다.",
+        "최신 HWP/HWPX/PDF 규정 본문에서 키워드 또는 조문을 검색합니다. HWP/HWPX는 셀·병합 구조를, PDF는 x/y 좌표 기반 행·열 문맥을 함께 검색하며 공백·쉼표 차이와 같은 행의 복합 검색어를 지원합니다.",
       inputSchema: {
         name:
           z.string().min(1),
@@ -1963,6 +2577,13 @@ function createServer() {
         const tableMatches =
           searchStructuredTables(
             result.tables,
+            query,
+            8
+          );
+
+        const pdfLayoutMatches =
+          searchPdfLayoutRows(
+            result.pdfLayout,
             query,
             8
           );
@@ -2025,7 +2646,8 @@ function createServer() {
 
         if (
           matches.length === 0 &&
-          tableMatches.length === 0
+          tableMatches.length === 0 &&
+          pdfLayoutMatches.length === 0
         ) {
           return {
             content: [
@@ -2053,7 +2675,8 @@ function createServer() {
                 `최신파일: ${result.filename}`,
                 `검색어: ${query}`,
                 `본문 검색결과: ${matches.length}건`,
-                `표 구조 검색결과: ${tableMatches.length}건`,
+                `HWP/HWPX 표 구조 검색결과: ${tableMatches.length}건`,
+                `PDF 좌표 행 검색결과: ${pdfLayoutMatches.length}건`,
                 `ALIO: ${result.sourceUrl}`,
                 "",
                 ...tableMatches.map(
@@ -2069,6 +2692,20 @@ function createServer() {
                     ].join("\n")
                 ),
                 ...(tableMatches.length
+                  ? [""]
+                  : []),
+                ...pdfLayoutMatches.map(
+                  ({ page, row, mode }, index) =>
+                    [
+                      `===== PDF 레이아웃 결과 ${index + 1} =====`,
+                      renderPdfLayoutMatch(
+                        page,
+                        row,
+                        mode
+                      ),
+                    ].join("\n")
+                ),
+                ...(pdfLayoutMatches.length
                   ? [""]
                   : []),
                 ...matches.map(
