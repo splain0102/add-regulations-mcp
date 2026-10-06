@@ -1,4 +1,5 @@
 import {unzipSync,strFromU8} from 'fflate';
+import {hwpParagraphEvidence,resolveCellFootnotes,type TextRun,type Footnote} from './hwp-runs';
 import {parseHwp} from '@ssabrojs/hwpxjs/browser';
 export {extractPdfLayout} from './pdf-table-layout';
 
@@ -7,10 +8,10 @@ export class DocumentError extends Error {
  constructor(code:DocumentError['code'],message:string){super(message);this.code=code;this.name='DocumentError';}
 }
 export type Box={x0:number;y0:number;x1:number;y1:number};
-export type Cell={row:number;col:number;rowSpan:number;colSpan:number;text:string;x0:number;x1:number};
-export type Table={id:string;page:number|null;cells:Cell[];coordinateSpace:'table-column'|'table-local-hwpunit';context:string};
+export type Cell={row:number;col:number;rowSpan:number;colSpan:number;text:string;x0:number;x1:number;runs?:TextRun[];nativeNotes?:{mark:string;text:string}[]};
+export type Table={id:string;page:number|null;cells:Cell[];coordinateSpace:'table-column'|'table-local-hwpunit';context:string;footnoteBlock?:{mark:string;text:string}[]};
 export type SymbolPosition={symbol:string;x0:number;x1:number;x_center:number;suffix:string|null;coordinatePrecision:'text-item'|'estimated-within-text-item'|'explicit-cell'|'glyph-advance'};
-export type StructuredRow={page:number|null;table_id:string;category:string|null;task:string|null;condition:string|null;approver:string|null;approver_type?:'symbol'|'text';approvers?:Array<{name:string|null;symbol:string|null;legend:string|null;suffix?:string|null}>;multi_approver?:boolean;footnotes?:Array<{mark:string;text:string}>;related_regulations?:string[];symbol:string|null;symbol_x_center:number;suffix:string|null;legend:string|null;confidence:number;version_warning:unknown;symbol_coordinates:SymbolPosition|null;bounding_box:Box;coordinate_space:string;header_evidence:unknown;raw_cells:unknown;needs_review:boolean;coordinate_type?:'logical_cell'|'pdf_point';row?:number;col?:number;x_center?:number;y?:number;column_detection?:'vertical_lines'|'header_midpoints'|null;confidence_basis?:string[];fill_down?:unknown;debug?:unknown;effective_approver?:string|null;approver_basis?:unknown};
+export type StructuredRow={page:number|null;table_id:string;category:string|null;task:string|null;condition:string|null;approver:string|null;approver_type?:'symbol'|'text';approvers?:Array<{name:string|null;symbol:string|null;legend:string|null;suffix?:string|null}>;multi_approver?:boolean;footnotes?:Footnote[];related_regulations?:string[];symbol:string|null;symbol_x_center:number;suffix:string|null;legend:string|null;confidence:number;version_warning:unknown;symbol_coordinates:SymbolPosition|null;bounding_box:Box;coordinate_space:string;header_evidence:unknown;raw_cells:unknown;needs_review:boolean;coordinate_type?:'logical_cell'|'pdf_point';row?:number;col?:number;x_center?:number;y?:number;column_detection?:'vertical_lines'|'header_midpoints'|null;confidence_basis?:string[];fill_down?:unknown;debug?:unknown;effective_approver?:string|null;approver_basis?:unknown};
 const compact=(s:string)=>s.replace(/\s+/g,'');
 const roles=['사책/과책','운영','실장','부장(센터장)','사업기구장','부소장','소장'];
 const textApproverName=(text:string)=>{const v=compact(text).replace(/[（]/g,'(').replace(/[）]/g,')');for(const r of ['직상위자','책임원','부서장','사업기구장','부소장','실장','운영','소장'])if(v===r||v===r+'전결')return r;return null;};
@@ -41,7 +42,7 @@ export function splitSymbols(text:string,x0:number,x1:number,precision:SymbolPos
  }
  return out;
 }
-function decode(s:string){return s.replace(/<[^>]+>/g,'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&#(x[\da-f]+|\d+);/gi,(_,v)=>String.fromCodePoint(v[0]==='x'?parseInt(v.slice(1),16):Number(v))).replace(/&amp;/g,'&').trim();}
+function decode(s:string){return s.replace(/<[^>]+>/g,'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&#(x[\da-f]+|\d+);/gi,(_,v)=>String.fromCodePoint(v[0]==='x'?parseInt(v.slice(1),16):Number(v))).replace(/&amp;/g,'&');}
 type Xml={tag:string;attrs:Record<string,string>;children:Xml[];text:string};
 function xmlTree(xml:string):Xml {
  const root:Xml={tag:'root',attrs:{},children:[],text:''},stack=[root];
@@ -54,22 +55,47 @@ function xmlTree(xml:string):Xml {
 }
 const descendants=(node:Xml,tag:string):Xml[]=>node.children.flatMap(c=>[...(c.tag===tag?[c]:[]),...descendants(c,tag)]);
 function nodeText(n:Xml):string {return decode(n.text)+n.children.map(c=>nodeText(c)+(c.tag==='p'?'\n':'')).join('');}
+
+function outsideBlock(tree:Xml,target:Xml):{mark:string;text:string}[]{
+ const flow:Xml[]=[];function visit(n:Xml){if(n.tag==='tbl'){flow.push(n);return;}if(n.tag==='p'&&!descendants(n,'tbl').length){flow.push(n);return;}n.children.forEach(visit);}visit(tree);
+ const index=flow.indexOf(target);if(index<0)return [];
+ const result:{mark:string;text:string}[]=[];for(const n of flow.slice(index+1)){if(n.tag==='tbl')break;const text=nodeText(n).trim();if(!text)continue;const match=text.match(/^(\d+(?:-\d+)?[)⁾）]|[①-⑳]|※)\s+(.+)/);if(!match)break;result.push({mark:match[1],text:match[2]});}return result;
+}
+function xmlCellEvidence(cell:Xml,shapes:Map<string,{size:number;superscript:boolean}>){
+ const runs:TextRun[]=[],nativeNotes:{mark:string;text:string}[]=[];
+ const visit=(node:Xml,style:{size:number|null;superscript:boolean|null}={size:null,superscript:null})=>{
+  if(node.tag==='footNote'||node.tag==='endNote'){
+   const number=node.attrs.number??node.attrs.num??descendants(node,'autoNum')[0]?.attrs.num;
+   const mark=number?number+')':null;
+   const body=descendants(node,'p').map(p=>descendants(p,'t').map(nodeText).join('')).filter(Boolean).join('\n').trim();
+   if(mark&&body){runs.push({text:mark,...style,superscript:true,nativeControl:true});nativeNotes.push({mark,text:body});}return;
+  }
+  if(node.tag==='run'){const shape=shapes.get(node.attrs.charPrIDRef);style={size:shape?.size??null,superscript:shape?.superscript??null};}
+  if(node.tag==='t'){runs.push({text:nodeText(node),...style});return;}
+  node.children.forEach(child=>visit(child,style));if(node.tag==='p')runs.push({text:'\n',...style});
+ };
+ visit(cell);return {text:runs.map(r=>r.text).join('').trim(),runs,nativeNotes};
+}
 export function extractHwpxTables(bytes:Uint8Array):Table[] {
- let size=0;const zip=unzipSync(bytes,{filter(e){if(!/^Contents\/section\d+\.xml$/i.test(e.name))return false;size+=e.originalSize;if(size>32_000_000)throw new DocumentError('parse_error','HWPX XML 처리 한도 초과');return true;}}),tables:Table[]=[];
- for(const name of Object.keys(zip).sort((a,b)=>Number(a.match(/\d+/)?.[0])-Number(b.match(/\d+/)?.[0]))){const tree=xmlTree(strFromU8(zip[name]));let index=0;
+ let size=0;const zip=unzipSync(bytes,{filter(e){if(!/^Contents\/(?:section\d+|header)\.xml$/i.test(e.name))return false;size+=e.originalSize;if(size>32_000_000)throw new DocumentError('parse_error','HWPX XML 처리 한도 초과');return true;}}),tables:Table[]=[];
+ const header=zip['Contents/header.xml']?xmlTree(strFromU8(zip['Contents/header.xml'])):null;
+ const shapes=new Map(header?descendants(header,'charPr').map(n=>[n.attrs.id,{size:Number(n.attrs.height)/100,superscript:descendants(n,'supscript').length>0||descendants(n,'superscript').length>0}] as const):[]);
+ for(const name of Object.keys(zip).filter(n=>/section\d+\.xml$/i.test(n)).sort((a,b)=>Number(a.match(/\d+/)?.[0])-Number(b.match(/\d+/)?.[0]))){const tree=xmlTree(strFromU8(zip[name]));let index=0;
  for(const t of descendants(tree,'tbl')){
- const cells:Cell[]=descendants(t,'tc').map(c=>{const a=descendants(c,'cellAddr')[0]?.attrs??{},s=descendants(c,'cellSpan')[0]?.attrs??{};return {row:Number(a.rowAddr??0),col:Number(a.colAddr??0),rowSpan:Number(s.rowSpan??1),colSpan:Number(s.colSpan??1),text:nodeText(c).trim(),x0:0,x1:0};});
+ const cells:Cell[]=descendants(t,'tc').map(c=>{const a=descendants(c,'cellAddr')[0]?.attrs??{},s=descendants(c,'cellSpan')[0]?.attrs??{};return {row:Number(a.rowAddr??0),col:Number(a.colAddr??0),rowSpan:Number(s.rowSpan??1),colSpan:Number(s.colSpan??1),...xmlCellEvidence(c,shapes),x0:0,x1:0};});
  // Logical columns are exact; page geometry is not present in this parser's IR.
  for(const c of cells){c.x0=c.col;c.x1=c.col+c.colSpan;}
- tables.push({id:`${name}:${index++}`,page:null,cells,coordinateSpace:'table-column',context:''});
+ tables.push({id:`${name}:${index++}`,page:null,cells,coordinateSpace:'table-column',context:'',footnoteBlock:outsideBlock(tree,t)});
  }}return tables;
 }
 export function extractHwpTables(bytes:Uint8Array):Table[] {
  const doc=parseHwp(bytes),tables:Table[]=[];let context='';
+ const evidence=hwpParagraphEvidence(bytes,doc.docInfo.charShapes);
+ const paragraphRuns=(p:any,section:number)=>evidence(section,p.text)??{runs:(p.runs??[]).map((r:any)=>({text:r.text,size:doc.docInfo.charShapes[r.charShapeId]?.baseSize/100||null,superscript:doc.docInfo.charShapes[r.charShapeId]?!!(doc.docInfo.charShapes[r.charShapeId].property&0x8000):null})),notes:[]};
  type Paragraph=typeof doc.sections[number]['paragraphs'][number];
  function walk(paragraphs:Paragraph[],section:number){for(const p of paragraphs){if(p.text.trim())context=p.text.trim();for(const control of p.controls){if(control.kind==='table'){
- const cells=control.cells.map(c=>({row:c.row,col:c.col,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.paragraphs.map((p:any)=>Array.isArray(p.runs)&&p.runs.length?p.runs.map((r:any)=>r.text??'').join(''):p.text).join('\n').trim(),x0:c.col,x1:c.col+c.colSpan}));
- tables.push({id:`section${section}:table${tables.length}`,page:null,cells,coordinateSpace:'table-column',context});for(const c of control.cells)walk(c.paragraphs,section);
+ const cells=control.cells.map(c=>{const parts=c.paragraphs.map((p:any)=>paragraphRuns(p,section));const runs:TextRun[]=parts.flatMap((part,i)=>[...(i?[{text:'\n',size:null,superscript:null}]:[]),...part.runs]);return {row:c.row,col:c.col,rowSpan:c.rowSpan,colSpan:c.colSpan,text:runs.map(r=>r.text).join('').trim(),runs,nativeNotes:parts.flatMap(p=>p.notes),x0:c.col,x1:c.col+c.colSpan};});
+ tables.push({id:`section${section}:table${tables.length}`,page:null,cells,coordinateSpace:'table-column',context,footnoteBlock:(()=>{const block:{mark:string;text:string}[]=[];for(const next of paragraphs.slice(paragraphs.indexOf(p)+1)){if(next.controls.some(c=>c.kind==='table'))break;const value=next.text.trim();if(!value)continue;const match=value.match(/^(\d+(?:-\d+)?[)⁾）]|[①-⑳]|※)\s+(.+)/);if(!match)break;block.push({mark:match[1],text:match[2]});}return block;})()});for(const c of control.cells)walk(c.paragraphs,section);
  }else if('paragraphs' in control)walk(control.paragraphs,section);}}}
  doc.sections.forEach((s,i)=>walk(s.paragraphs,i));return tables;
 }
@@ -78,16 +104,11 @@ function fieldName(text:string):'category'|'task'|'condition'|null {
 }
 export function structureTables(tables:Table[],text:string):StructuredRow[] {
  const out:StructuredRow[]=[],legends=parseLegends(text);
- const footnoteMap=new Map<string,string>();
- for(const line of text.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)){
-   const m=line.match(/^((?:\d+\)|※+))\s*(.{3,})$/);if(m&&!footnoteMap.has(m[1]))footnoteMap.set(m[1],m[2].trim());
- }
- const linkedFootnotes=(...values:(string|null)[])=>{const joined=values.filter(Boolean).join(' '),marks=new Set<string>();
-   for(const m of joined.matchAll(/(?:^|\s)(\d+\)|※+)/g))marks.add(m[1]);
-   return [...marks].flatMap(mark=>footnoteMap.has(mark)?[{mark,text:footnoteMap.get(mark)!}]:[]);
- };
  let priorSignature='',priorValues:{category:string|null;task:string|null;condition:string|null}={category:null,task:null,condition:null};
  for(const table of tables){
+ const cellTexts=new Set(table.cells.map(c=>compact(c.text).normalize('NFKC')));
+ const resolved=new Map(table.cells.map(c=>[c,resolveCellFootnotes(c,table.footnoteBlock??[])]));
+ const cellText=(c:Cell|undefined)=>c?resolved.get(c)!.text.trim():'';
  const rowNums=[...new Set(table.cells.map(c=>c.row))].sort((a,b)=>a-b);let headers:{name:string;col:number;span:number;source:string}[]=[],fields:{name:'category'|'task'|'condition';col:number;span:number}[]=[],last={category:null,task:null,condition:null} as typeof priorValues;
  for(const row of rowNums){const direct=table.cells.filter(c=>c.row===row),active=table.cells.filter(c=>c.row<=row&&c.row+c.rowSpan>row);
  const detected=direct.flatMap(c=>{let role=roleName(c.text),source=c.text;for(const adjacent of table.cells.filter(a=>c.text.trim()&&a.text.trim()&&a.col===c.col&&a.colSpan===c.colSpan&&Math.abs(a.row-c.row)===1)){const merged=roleName(adjacent.row<c.row?adjacent.text+c.text:c.text+adjacent.text);if(merged&&(!role||merged.length>role.length)){role=merged;source=adjacent.row<c.row?adjacent.text+' / '+c.text:c.text+' / '+adjacent.text;}}return role?[{name:role,col:c.col,span:c.colSpan,source}]:[];});
@@ -99,7 +120,7 @@ export function structureTables(tables:Table[],text:string):StructuredRow[] {
  const minRole=Math.min(...headers.map(h=>h.col));
  if(!fields.length){const contentCols=[...new Set(table.cells.filter(c=>c.col<minRole).map(c=>c.col))].sort((a,b)=>a-b);fields=contentCols.slice(0,3).map((col,i)=>({name:(['category','task','condition'] as const)[i],col,span:1}));}
 
- for(const f of fields){const cell=active.find(c=>c.col<=f.col&&c.col+c.colSpan>f.col);const value=cell?.text.trim();if(value&&!roleName(value)&&!fieldName(value)&&!/[◎★☆]/.test(value)){
+ for(const f of fields){const cell=active.find(c=>c.col<=f.col&&c.col+c.colSpan>f.col);const value=cellText(cell);if(value&&!roleName(value)&&!fieldName(value)&&!/[◎★☆]/.test(value)){
  if(f.name==='category'&&value!==last.category){last.task=null;last.condition=null;}
  if(f.name==='task'&&value!==last.task){last.condition=null;}last[f.name]=value;}}
  // A broad 업무내용 header spans the task and all its subcondition cells.
@@ -107,7 +128,7 @@ export function structureTables(tables:Table[],text:string):StructuredRow[] {
  if(taskField&&!fields.some(f=>f.name==='condition')){
  const taskCell=active.find(c=>c.col<=taskField.col&&c.col+c.colSpan>taskField.col);
  const conditions=active.filter(c=>c.col>=(taskCell?taskCell.col+taskCell.colSpan:taskField.col+1)&&c.col<minRole&&!/[◎★☆]/.test(c.text)).sort((a,b)=>a.col-b.col);
- last.condition=conditions.map(c=>c.text.trim()).filter(Boolean).join(' / ')||null;
+ last.condition=conditions.map(cellText).filter(Boolean).join(' / ')||null;
  }
  // Only explicit rowSpan or continuation carry prior values; blank cells may be meaningful.
  const approvals:Array<{name:string|null;symbol:string|null;legend:string|null;suffix:string|null;cell:Cell;position:SymbolPosition|null;type:'symbol'|'text';header:typeof headers[number]|null}>=[];
@@ -118,13 +139,13 @@ export function structureTables(tables:Table[],text:string):StructuredRow[] {
        approvals.push({name:header?.name??null,symbol:symbol.symbol,legend:legends[symbol.symbol],suffix:symbol.suffix,cell:c,position:symbol,type:'symbol',header});
      }
    } else {
-     const textName=textApproverName(c.text);
+     const textName=textApproverName(cellText(c));
      if(textName) approvals.push({name:textName,symbol:null,legend:null,suffix:null,cell:c,position:null,type:'text',header:null});
    }
  }
  if(approvals.length){
    const first=approvals[0],multi=approvals.length>1;
-   out.push({page:table.page,table_id:table.id,...last,approver:first.name,approver_type:first.type,approvers:approvals.map(a=>({name:a.name,symbol:a.symbol,legend:a.legend,suffix:a.suffix})),multi_approver:multi,footnotes:linkedFootnotes(last.task,last.condition),related_regulations:approvals.some(a=>a.symbol==='★')?['부설 국방신속획득기술연구원 위임전결규정']:[],symbol:first.symbol,symbol_x_center:first.position?.x_center??first.cell.col,suffix:first.suffix,legend:first.legend,confidence:approvals.every(a=>a.name)?0.98:0.5,version_warning:null,symbol_coordinates:first.position,bounding_box:{x0:Math.min(...approvals.map(a=>a.cell.col)),y0:row,x1:Math.max(...approvals.map(a=>a.cell.col+a.cell.colSpan)),y1:row+1},coordinate_space:table.coordinateSpace,header_evidence:first.header,raw_cells:active.map(c=>({col:c.col,row:c.row,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.text})),needs_review:approvals.some(a=>!a.name)});
+   out.push({page:table.page,table_id:table.id,...last,approver:first.name,approver_type:first.type,approvers:approvals.map(a=>({name:a.name,symbol:a.symbol,legend:a.legend,suffix:a.suffix})),multi_approver:multi,footnotes:[...new Map(active.flatMap(c=>resolved.get(c)!.footnotes).map(n=>[n.mark+'\0'+n.text,n])).values()].filter(n=>!cellTexts.has(compact(n.text).normalize('NFKC'))),related_regulations:approvals.some(a=>a.symbol==='★')?['부설 국방신속획득기술연구원 위임전결규정']:[],symbol:first.symbol,symbol_x_center:first.position?.x_center??first.cell.col,suffix:first.suffix,legend:first.legend,confidence:approvals.every(a=>a.name)?0.98:0.5,version_warning:null,symbol_coordinates:first.position,bounding_box:{x0:Math.min(...approvals.map(a=>a.cell.col)),y0:row,x1:Math.max(...approvals.map(a=>a.cell.col+a.cell.colSpan)),y1:row+1},coordinate_space:table.coordinateSpace,header_evidence:first.header,raw_cells:active.map(c=>({col:c.col,row:c.row,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.text,runs:c.runs})),needs_review:approvals.some(a=>!a.name)});
  }
  priorValues={...last};
  }

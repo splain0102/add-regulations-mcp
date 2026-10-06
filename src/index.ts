@@ -1,3 +1,4 @@
+import {searchRegulationText} from "./regulation-core/text-search";
 import {tableToolResponse} from "./regulation-core/table-response";
 import { getRegulationMetadata, searchLatestRegulationTable, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -9,7 +10,7 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
-const MCP_VERSION = "1.10.1";
+const MCP_VERSION = "1.10.2";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
@@ -4053,191 +4054,12 @@ function createServer() {
         query:
           z.string().min(1),
         compact: z.boolean().default(true),
+        include_history: z.boolean().default(false),
         offset: z.number().int().min(0).default(0),
       },
     },
-    async ({
-      name,
-      query,
-      compact,
-      offset,
-    }) => {
-      try {
-        const result =
-          await loadTextWithToolRetry(
-            name
-          );
-
-        const text =
-          result.text;
-
-        const tableResult = await searchLatestRegulationTable(name, query);
-        const tableResponse=tableToolResponse(tableResult,query,{compact,offset});
-        const tableRows = tableResponse.structuredContent.rows as any[];
-        const tableMatches:any[] = [];
-        const pdfLayoutMatches:any[] = [];
-
-        const lowered =
-          text.toLowerCase();
-
-        const q =
-          query.toLowerCase();
-
-        const matches: {
-          label: string;
-          snippet: string;
-        }[] = [];
-
-        const seenSnippets =
-          new Set<string>();
-
-        let start = 0;
-
-        while (
-          matches.length < 10
-        ) {
-          const index =
-            lowered.indexOf(
-              q,
-              start
-            );
-
-          if (index < 0) break;
-
-          const resultSnippet =
-            extractArticleSnippet(
-              text,
-              index,
-              query.length
-            );
-
-          const dedupeKey =
-            `${resultSnippet.label}::${resultSnippet.snippet}`;
-
-          if (
-            !seenSnippets.has(dedupeKey)
-          ) {
-            seenSnippets.add(
-              dedupeKey
-            );
-            matches.push(
-              resultSnippet
-            );
-          }
-
-          start =
-            index +
-            Math.max(
-              query.length,
-              1
-            );
-        }
-
-        if (
-          matches.length === 0 &&
-          tableRows.length === 0 &&
-          tableMatches.length === 0 &&
-          pdfLayoutMatches.length === 0
-        ) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: [
-                  `규정명: ${result.regulationName}`,
-                  `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
-                  `검색어: ${query}`,
-                  "",
-                  "최신 규정 본문에서 해당 내용을 찾지 못했습니다.",
-                ].join("\n"),
-              },
-            ],
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: [
-                `규정명: ${result.regulationName}`,
-                `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
-                `최신파일: ${result.filename}`,
-                `파일형식: ${result.extension}`,
-                `fileNo: ${result.fileNo}`,
-                `version_check: ${JSON.stringify(result.version_check)}`,
-                `selection_reason: ${JSON.stringify(result.selection_reason)}`,
-                `other_attachments: ${JSON.stringify(result.other_attachments)}`,
-                `검색어: ${query}`,
-                `본문 검색결과: ${matches.length}건`,
-                `표 구조 검색결과: ${tableRows.length}건`,
-                "PDF 과거첨부 좌표 결과: 0건",
-                `ALIO: ${result.sourceUrl}`,
-                "",
-                ...(tableRows.length?["===== 최신 파일 표 구조 결과 =====",JSON.stringify(tableResponse.structuredContent),""]:[]),
-                ...tableMatches.map(
-                  ({ table, cell, row, mode }, index) =>
-                    [
-                      `===== 표 구조 결과 ${index + 1} =====`,
-                      renderStructuredTableMatch(
-                        table,
-                        cell,
-                        row,
-                        mode
-                      ),
-                    ].join("\n")
-                ),
-                ...(tableMatches.length
-                  ? [""]
-                  : []),
-                ...pdfLayoutMatches.map(
-                  ({ page, row, mode }, index) => {
-                    const structured =
-                      buildPdfStructuredMatches(
-                        page,
-                        row
-                      );
-
-                    return [
-                      `===== PDF 구조화 결과 ${index + 1} =====`,
-                      ...structured.map(
-                        (match, structuredIndex) =>
-                          [
-                            `--- 구조화 행 ${structuredIndex + 1} ---`,
-                            renderPdfStructuredMatch(
-                              match
-                            ),
-                          ].join("\n")
-                      ),
-                      "",
-                      "원시 좌표 문맥:",
-                      renderPdfLayoutMatch(
-                        page,
-                        row,
-                        mode
-                      ),
-                    ].join("\n");
-                  }
-                ),
-                ...(pdfLayoutMatches.length
-                  ? [""]
-                  : []),
-                ...matches.map(
-                  (match, index) =>
-                    [
-                      `----- 본문 결과 ${index + 1}: ${match.label} -----`,
-                      match.snippet,
-                    ].join("\n")
-                ),
-              ].join("\n\n"),
-            },
-          ],
-        };
-      } catch (error) {
-        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
-        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
-      }
-    }
+    async ({ name, query, compact, offset, include_history }) =>
+      searchRegulationText(name,query,{compact,offset,include_history}),
   );
 
   server.registerTool(

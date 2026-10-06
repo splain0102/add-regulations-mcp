@@ -14,7 +14,7 @@ const queries=new Map<string,any>();
 async function contract(){if(!queries.has('contract'))queries.set('contract',await table('위임전결규정','계약 승인'));return queries.get('contract');}
 
 await test(1,'all seven public tools, delegation latest HWP 239154',async()=>{
- const hello=await call('hello');assert.equal(hello.structuredContent.version,'1.10.1');
+ const hello=await call('hello');assert.equal(hello.structuredContent.version,'1.10.2');
  const list=await call('list_regulations');assert(JSON.stringify(list).includes('위임전결규정'));
  const search=await call('search_regulations',{query:'위임전결규정'});assert(JSON.stringify(search).includes('위임전결규정'));
  const meta=await call('get_regulation',{name:'위임전결규정'});assert.equal(meta.structuredContent.fileNo,'239154');

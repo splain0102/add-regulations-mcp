@@ -916,3 +916,17 @@ export function extractArticleSnippet(
         .trim(),
   };
 }
+
+/** Explicit opt-in only; these results never replace latest-document evidence. */
+export async function searchHistoricalPdfTables(name:string,query:string){
+ const {detail}=await getLatestRegulationByName(name);
+ const rows:any[]=[];
+ for(const attachment of detail.other_attachments.filter(a=>a.extension==='pdf')){
+  const file=await downloadLatestFile(attachment),parsed=await extractPdfRichContent(file.bytes);
+  for(const {page,row} of searchPdfLayoutRows(parsed.pages,query,10)){
+   const matches=buildPdfStructuredMatches(page,row);
+   rows.push(...matches.map(m=>({historical:true,fileNo:attachment.fileNo,filename:attachment.name,page:page.page,task:m.task,condition:m.condition,approver:m.approver,symbol:m.symbol,coordinate_type:'pdf_point',coordinate:m.coordinate,needs_review:m.needsReview})));
+  }
+ }
+ return rows.slice(0,10);
+}

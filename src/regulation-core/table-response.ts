@@ -27,7 +27,7 @@ export function tableToolResponse(result:Result,query:string,options:Options={})
  if(compact&&fullMeta.version_warning)meta.version_warning=fullMeta.version_warning;
 
  const tables:Record<string,unknown>={};
- const selected:unknown[]=[];
+ const selected:unknown[]=[];let sizeTruncated=false;
  const data:Record<string,unknown>={...meta,query,compact,offset,totalMatches:rows.length,totalStructuredRows:rows.length,tables,rows:selected,has_more:false,truncated:false,next_offset:null};
  if(!compact&&layout_debug)data.layout_debug=clean(layout_debug);
  const envelope=()=>({structuredContent:data,content:[{type:'text' as const,text:JSON.stringify(data)}]});
@@ -44,14 +44,14 @@ export function tableToolResponse(result:Result,query:string,options:Options={})
   const value=compact?compactRow(row):clean(row);
   selected.push(value);data.next_offset=index+1;
   if(!fits()){
-   selected.pop();if(!hadTable)delete tables[key];data.next_offset=index;
+   sizeTruncated=true;selected.pop();if(!hadTable)delete tables[key];data.next_offset=index;
    // Do not return an empty page with a non-advancing offset forever.
    if(!selected.length)throw new Error('layout_error: one table row exceeds the 50,000 character response budget; use compact=true');
    break;
   }
  }
  const next=offset+selected.length;
- data.has_more=next<rows.length;data.truncated=next<rows.length;data.next_offset=data.truncated?next:null;
+ data.has_more=next<rows.length;data.truncated=sizeTruncated;data.next_offset=data.has_more?next:null;
  if(options.includeRegion&&!compact){
   data.regions=rows.slice(offset,next).map(row=>({page:row.page,bounding_box:row.bounding_box,coordinate_space:row.coordinate_space,table_id:row.table_id,image:null}));
   if(!fits()){delete data.regions;data.regions_omitted=true;}

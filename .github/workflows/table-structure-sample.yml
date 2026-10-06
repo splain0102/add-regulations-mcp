@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "scripts/table-sample.mjs"
+      - "scripts/**"
       - ".github/workflows/table-structure-sample.yml"
       - "package.json"
       - "package-lock.json"
@@ -26,6 +26,8 @@ jobs:
         run: npm run test:second-acceptance
       - name: second-fixes regression
         run: npm run test:second-fixes
+      - name: third-fixes regression
+        run: npm run test:third-fixes
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -34,5 +36,6 @@ jobs:
             reports/comprehensive-regression.json
             reports/second-fixes-regression.json
             reports/second-validation-acceptance.json
+            reports/third-fixes-regression.json
           if-no-files-found: ignore
       - run: npx wrangler deploy --dry-run --outdir /tmp/add-regulations-mcp-dry-run
