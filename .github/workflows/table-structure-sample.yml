@@ -29,6 +29,6 @@ jobs:
           name: comprehensive-regression
           path: reports/comprehensive-regression.json
           if-no-files-found: ignore
-      - if: steps.comprehensive.outcome == 'failure'
+      - if: steps.comprehensive.outcome != 'success'
         run: exit 1
       - run: npx wrangler deploy --dry-run --outdir /tmp/add-regulations-mcp-dry-run
