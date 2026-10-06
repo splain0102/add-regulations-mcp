@@ -139,7 +139,7 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  const effective=[...section.matchAll(/(20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2})[^\n]{0,25}시행/g)].map(m=>normalize(m[1])).filter(Boolean) as string[];
  const r=revisions.sort().at(-1),e=effective.sort().at(-1);if(r)dates.push({source:'body_last_revision_date',date:r});if(e)dates.push({source:'body_last_effective_date',date:e});
  const dayDiff=(a:string,b:string)=>Math.abs(Date.parse(a+'T00:00:00Z')-Date.parse(b+'T00:00:00Z'))/86400000;
- const mismatches=dates.flatMap((d,i)=>dates.slice(i+1).filter(o=>o.date!==d.date).map(o=>({left:d,right:o,kind:d.source.includes('effective')||o.source.includes('effective')?'effective_date_difference':'revision_date_mismatch'})));
+ const mismatches=dates.flatMap((d,i)=>dates.slice(i+1).filter(o=>(o.date.length===7||d.date.length===7)?o.date.slice(0,7)!==d.date.slice(0,7):o.date!==d.date).map(o=>({left:d,right:o,kind:d.source.includes('effective')||o.source.includes('effective')?'effective_date_difference':'revision_date_mismatch'})));
  const onlyEffectiveNear=mismatches.length>0&&mismatches.every(m=>m.kind==='effective_date_difference'&&dayDiff(m.left.date,m.right.date)<=7);
  return {dates,checked:dates.length>=2,info:onlyEffectiveNear?{code:'effective_date_near_revision',mismatches}:null,warning:mismatches.length&&!onlyEffectiveNear?{code:'version_date_mismatch',mismatches,note:'시행일과 개정일 차이는 정상일 수 있으므로 원문 확인이 필요합니다.'}:null,missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s))};
 }

@@ -1,23 +1,12 @@
 ## 1.10.1 — second validation fixes (draft)
 
-- Metadata lookup uses a bounded, cached supplementary-provision scan instead of the full document/table parser. Cache identity includes fileNo and idate.
-- A latest attachment confirmed by both filename and supplementary provisions prevents obsolete attachments from being opened. Individual probe failures are recorded as `parse_failed` and do not reject the remaining candidates.
-- All table paths default to compact output. Headers appear once in `tables`; values, text/multiple approvers, footnotes and PDF point evidence remain available. Detailed cells require `compact:false`; pagination uses `offset`/`next_offset`.
-- Delegation tables retain their table classification even without an approval symbol. Carried condition cells cannot create a new ghost row under the following task.
-- Add `npm run test:second-fixes` for ten consecutive metadata/table iterations, general-table compact/detailed output, isolated attachment failure and probe cache invalidation.
+- Metadata lookup uses a bounded, cached supplementary-provision scan instead of the full document/table parser. Cache identity includes fileNo and idate. Probe failures are isolated as `parse_failed`.
+- All table paths, including text-search table evidence, default to compact output. General rows keep values; delegation rows keep semantic/approval evidence. Columns appear once per table. Detailed cells, header paths, raw cells and bounding boxes require `compact:false`. No snake_case span keys are emitted.
+- Display text preserves word spaces and collapses only isolated single-Hangul-character spacing. Search continues to ignore whitespace.
+- Attachment selection reports each actual filename/revision/effective-date match in `selection_reason`. Historical filename dates support two-digit years and month precision; unknown dates are null.
+- The 15 second-validation acceptance cases execute the actual registered callbacks and Zod defaults in Node with real ALIO documents. A separate ten-iteration metadata/table test checks stability, attachment failure isolation and probe cache invalidation. Existing comprehensive/PDF regressions and Wrangler dry-run remain enabled.
 
-This draft addresses P0 and the visible part of P1. The submitted request ended mid-sentence; the other three issues have not been specified. No production deployment or Site Publish is part of this draft.
-
-# ADD Regulations MCP
-
-국방과학연구소(ADD)의 ALIO 내부규정을 조회하고, 최신 첨부파일의 본문까지 검색할 수 있도록 만든 Remote MCP 서버입니다.
-
-- 기관: 국방과학연구소
-- ALIO 기관 ID: `C0345`
-- MCP endpoint: `https://add-regulations-mcp.splain0102.workers.dev/mcp`
-- 실행 환경: Cloudflare Workers
-- 인증: OAuth 2.1 + Cloudflare Access
-- 기본 원칙: 같은 규정명이 여러 번 존재할 경우 최신 제·개정본을 우선
+Production exception logs and authenticated production MCP calls require separate operational verification. No production deploy or Site Publish is performed by this draft.
 
 ## 1.10.0: 종합 개선 및 버전 표시 통일
 

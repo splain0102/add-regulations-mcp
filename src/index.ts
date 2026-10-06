@@ -3847,18 +3847,9 @@ function createServer() {
           ],
         };
       } catch (error) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text:
-                error instanceof Error
-                  ? error.message
-                  : String(error),
-            },
-          ],
-        };
+        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
+        console.error("regulation_tool_failed",{code:data.error.code,stack:error instanceof Error?error.stack:String(error)});
+        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
     }
   );
@@ -3893,18 +3884,9 @@ function createServer() {
           ],
         };
       } catch (error) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text:
-                error instanceof Error
-                  ? error.message
-                  : String(error),
-            },
-          ],
-        };
+        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
+        console.error("regulation_tool_failed",{code:data.error.code,stack:error instanceof Error?error.stack:String(error)});
+        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
     }
   );
@@ -3956,18 +3938,9 @@ function createServer() {
           ],
         };
       } catch (error) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text:
-                error instanceof Error
-                  ? error.message
-                  : String(error),
-            },
-          ],
-        };
+        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
+        console.error("regulation_tool_failed",{code:data.error.code,stack:error instanceof Error?error.stack:String(error)});
+        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
     }
   );
@@ -4048,7 +4021,7 @@ function createServer() {
                 `파일형식: ${result.extension}`,
                 `fileNo: ${result.fileNo}`,
                 `version_check: ${JSON.stringify(result.version_check)}`,
-                `selection_reason: ${result.selection_reason}`,
+                `selection_reason: ${JSON.stringify(result.selection_reason)}`,
                 `other_attachments: ${JSON.stringify(result.other_attachments)}`,
                 `ALIO: ${result.sourceUrl}`,
                 ...tableNotice,
@@ -4061,18 +4034,9 @@ function createServer() {
           ],
         };
       } catch (error) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text:
-                error instanceof Error
-                  ? error.message
-                  : String(error),
-            },
-          ],
-        };
+        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
+        console.error("regulation_tool_failed",{code:data.error.code,stack:error instanceof Error?error.stack:String(error)});
+        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
     }
   );
@@ -4088,11 +4052,15 @@ function createServer() {
 
         query:
           z.string().min(1),
+        compact: z.boolean().default(true),
+        offset: z.number().int().min(0).default(0),
       },
     },
     async ({
       name,
       query,
+      compact,
+      offset,
     }) => {
       try {
         const result =
@@ -4104,7 +4072,8 @@ function createServer() {
           result.text;
 
         const tableResult = await searchLatestRegulationTable(name, query);
-        const tableRows = tableResult.rows;
+        const tableResponse=tableToolResponse(tableResult,query,{compact,offset});
+        const tableRows = tableResponse.structuredContent.rows as any[];
         const tableMatches:any[] = [];
         const pdfLayoutMatches:any[] = [];
 
@@ -4166,6 +4135,7 @@ function createServer() {
 
         if (
           matches.length === 0 &&
+          tableRows.length === 0 &&
           tableMatches.length === 0 &&
           pdfLayoutMatches.length === 0
         ) {
@@ -4196,7 +4166,7 @@ function createServer() {
                 `파일형식: ${result.extension}`,
                 `fileNo: ${result.fileNo}`,
                 `version_check: ${JSON.stringify(result.version_check)}`,
-                `selection_reason: ${result.selection_reason}`,
+                `selection_reason: ${JSON.stringify(result.selection_reason)}`,
                 `other_attachments: ${JSON.stringify(result.other_attachments)}`,
                 `검색어: ${query}`,
                 `본문 검색결과: ${matches.length}건`,
@@ -4204,7 +4174,7 @@ function createServer() {
                 "PDF 과거첨부 좌표 결과: 0건",
                 `ALIO: ${result.sourceUrl}`,
                 "",
-                ...(tableRows.length?["===== 최신 파일 표 구조 결과 =====",JSON.stringify(tableRows,null,2),""]:[]),
+                ...(tableRows.length?["===== 최신 파일 표 구조 결과 =====",JSON.stringify(tableResponse.structuredContent),""]:[]),
                 ...tableMatches.map(
                   ({ table, cell, row, mode }, index) =>
                     [

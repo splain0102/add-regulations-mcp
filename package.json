@@ -8,7 +8,8 @@
     "build:check": "wrangler deploy --dry-run --outdir .build-check",
     "test:tables": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/structured-table-regression.ts",
     "test:delegation-response": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/delegation-response-regression.ts",
-    "test:second-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/second-fixes-regression.ts"
+    "test:second-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/second-fixes-regression.ts",
+    "test:second-acceptance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/second-validation-acceptance.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.0.0",
@@ -21,6 +22,7 @@
     "cfb": "1.2.2"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.0.0",
+    "esbuild": "0.28.2"
   }
 }
