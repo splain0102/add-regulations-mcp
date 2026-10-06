@@ -1,6 +1,6 @@
 {
   "name": "add-regulations-mcp",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "private": true,
   "scripts": {
     "deploy": "wrangler deploy",
