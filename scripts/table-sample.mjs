@@ -373,3 +373,104 @@ async function runGeneralTableRegression() {
 }
 
 await runGeneralTableRegression();
+
+
+const CROSS_REGULATION_CASES = [
+  {
+    name: "보고서 작성 및 관리요령",
+    fileNo: "239155",
+    requiredGroups: [
+      ["구분", "관 리 등 급", "공개대상"],
+      ["소내망", "국방망"],
+    ],
+  },
+  {
+    name: "연구시설·장비의 관리 등에 관한 요령",
+    fileNo: "228382",
+    requiredGroups: [
+      ["순번", "장비명", "제작사", "모델명", "취득연도"],
+      ["기존 장비명", "용도", "구축가격", "활용상태", "처분계획"],
+    ],
+  },
+  {
+    name: "계약요령",
+    fileNo: "238456",
+    requiredGroups: [
+      ["상호", "구분"],
+      ["제 1 차", "제 2 차", "제 3 차"],
+    ],
+  },
+  {
+    name: "제수당 및 보조금 등의 지급에 관한 방침",
+    fileNo: "223860",
+    requiredGroups: [
+      ["직책수당"],
+    ],
+  },
+];
+
+async function parseTablesFromFileNo(fileNo) {
+  const response = await fetchWithRetry(
+    `https://www.alio.go.kr/download/rulefiledown.json?fileNo=${fileNo}`,
+    { headers: { "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-Cross-Regulation-Test/1.0" } }
+  );
+  if (!response.ok) throw new Error(`download failed for ${fileNo}: HTTP ${response.status}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const doc = parseHwp(bytes);
+  const tables = [];
+  for (const section of doc.sections ?? []) {
+    for (const paragraph of section.paragraphs ?? []) {
+      for (const control of paragraph.controls ?? []) {
+        if (control.kind === "table") tables.push(control);
+      }
+    }
+  }
+  return tables;
+}
+
+async function runCrossRegulationTableRegression() {
+  const summaries = [];
+  for (const testCase of CROSS_REGULATION_CASES) {
+    const tables = await parseTablesFromFileNo(testCase.fileNo);
+    const groups = testCase.requiredGroups.map((group) => {
+      const tableIndex = tables.findIndex((table) => {
+        const flat = table.cells.map(cellText).join(" ");
+        return group.every((term) => flat.includes(term));
+      });
+      if (tableIndex < 0) {
+        throw new Error(
+          `cross regulation table regression failed: ${testCase.name} missing table group ${group.join(" / ")}`
+        );
+      }
+      const table = tables[tableIndex];
+      return {
+        terms: group,
+        tableIndex,
+        rowCount: table.rowCount,
+        colCount: table.colCount,
+        merged: table.cells.some(
+          (cell) => Number(cell.rowSpan ?? 1) > 1 || Number(cell.colSpan ?? 1) > 1
+        ),
+        sample: table.cells
+          .filter((cell) => cellText(cell))
+          .slice(0, 18)
+          .map((cell) => ({
+            row: cell.row,
+            col: cell.col,
+            rowSpan: cell.rowSpan,
+            colSpan: cell.colSpan,
+            text: cellText(cell).slice(0, 100),
+          })),
+      };
+    });
+    summaries.push({
+      name: testCase.name,
+      fileNo: testCase.fileNo,
+      tableCount: tables.length,
+      groups,
+    });
+  }
+  console.log("CROSS_REGULATION_TABLE_REGRESSION_PASS", JSON.stringify(summaries));
+}
+
+await runCrossRegulationTableRegression();
