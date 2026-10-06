@@ -8,3 +8,9 @@ for (const p of [8,9,16,17,18]) {
   console.log("PAGE",p,"HEADER",JSON.stringify(items.filter(x=>x.y>=485&&x.y<=506)));
   console.log("PAGE",p,"CONTRACT",JSON.stringify(items.filter(x=>/계약|국정감사|중요사항/.test(x.str))));
 }
+
+
+const p17=out.items[16]??[];
+console.log("PAGE17_HEADER_FULL",JSON.stringify(
+  p17.filter(x=>x.str.trim() && x.y>=470 && x.y<=506 && x.x>=430)
+));
