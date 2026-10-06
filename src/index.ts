@@ -1,3 +1,4 @@
+import { tableToolResponse } from "./regulation-core/table-response";
 import { searchLatestRegulationTable } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
@@ -3745,7 +3746,7 @@ function extractArticleSnippet(
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.9.0",
+    version: "1.9.1",
   });
 
   server.registerTool(
@@ -3756,7 +3757,7 @@ function createServer() {
       inputSchema: {},
     },
     async () => {
-      const data={status:"ready",runtime:"Cloudflare Workers",version:"1.9.0",tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
+      const data={status:"ready",runtime:"Cloudflare Workers",version:"1.9.1",tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
       return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
     }
   );
@@ -4320,21 +4321,16 @@ function createServer() {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(100).optional(),
         includeRegion: z.boolean().optional(),
+        compact: z.boolean().default(true),
+        offset: z.number().int().min(0).optional(),
       },
     },
-    async ({ name, query, limit, includeRegion }) => {
+    async ({ name, query, limit, includeRegion, compact, offset }) => {
       try {
         const result = await searchLatestRegulationTable(name, query);
-        const { rows, ...meta } = result;
-        const visible = rows.slice(0, limit ?? 30);
-        const data = {
-          ...meta, query, totalMatches: rows.length,
-          totalStructuredRows: rows.length, rows: visible,
-          ...(includeRegion ? {regions:visible.map(row=>({page:row.page,bounding_box:row.bounding_box,coordinate_space:row.coordinate_space,table_id:row.table_id,image:null}))}:{}),
-        };
-        return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
+        return tableToolResponse(result, query, {limit, includeRegion, compact, offset});
       } catch (error) {
-        const code=error&&typeof error==="object"&&"code" in error?String(error.code):"parse_error";
+        const code=error&&typeof error==="object"&&"code" in error?String(error.code):error instanceof Error&&error.message.startsWith("layout_error:")?"layout_error":"parse_error";
         const data={error:{code,message:error instanceof Error?error.message:String(error)}};
         return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
