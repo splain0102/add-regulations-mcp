@@ -161,6 +161,7 @@ const res = await fetchWithRetry(selected.url, {
 });
 if (!res.ok) throw new Error(`pdf HTTP ${res.status}`);
 const bytes = new Uint8Array(await res.arrayBuffer());
+const downloadedBytes = bytes.byteLength;
 
 const pdf = await getDocumentProxy(bytes);
 const { totalPages, items } = await extractTextItems(pdf);
@@ -169,7 +170,7 @@ const plain = await extractText(pdf, { mergePages: true });
 console.log("PDF_LAYOUT_META_START");
 console.log(JSON.stringify({
   selected,
-  bytes: bytes.byteLength,
+  bytes: downloadedBytes,
   totalPages,
   totalItems: items.reduce((s,p)=>s+p.length,0),
   plainTextLength: plain.text.length,
@@ -217,6 +218,41 @@ const multiSegment = pages.flatMap((page) =>
       segments:row.segments,
     }))
 ).slice(0,30);
+
+const tableHeader = pages
+  .flatMap((page) => page.rows)
+  .find((row) =>
+    normalize(row.text).includes(
+      normalize("단 계 단계 구분 직종 및 호봉 운영 목표")
+    )
+  );
+
+const tableDataRow = pages
+  .flatMap((page) => page.rows)
+  .find((row) =>
+    normalize(row.text).includes(
+      normalize("1 단계 적응 단계")
+    ) &&
+    normalize(row.text).includes(
+      normalize("기초 능력 배양")
+    )
+  );
+
+console.log("PDF_TABLE_ROW_ASSERT_START");
+console.log(JSON.stringify({
+  header: tableHeader ?? null,
+  dataRow: tableDataRow ?? null,
+  multiSegmentRows: multiSegment.length,
+}, null, 2));
+console.log("PDF_TABLE_ROW_ASSERT_END");
+
+if (!tableHeader || !tableDataRow) {
+  throw new Error("PDF table row reconstruction failed");
+}
+
+if (multiSegment.length === 0) {
+  throw new Error("PDF x-position segmentation produced no multi-column row");
+}
 
 console.log("PDF_MULTI_SEGMENT_ROWS_START");
 console.log(JSON.stringify(multiSegment, null, 2));
