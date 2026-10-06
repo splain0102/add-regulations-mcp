@@ -3,7 +3,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { unzipSync, strFromU8 } from "fflate";
-import { hwpToText } from "@ssabrojs/hwpxjs/browser";
+import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs/browser";
 import { extractText } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
@@ -793,6 +793,400 @@ function extractHwpxText(
   return texts.join("\n\n");
 }
 
+
+type StructuredTableCell = {
+  row: number;
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+  text: string;
+};
+
+type StructuredTable = {
+  index: number;
+  rowCount: number;
+  colCount: number;
+  cells: StructuredTableCell[];
+};
+
+function normalizeTableSearch(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\\s,]+/g, "");
+}
+
+function paragraphPlainText(paragraph: any): string {
+  const runText =
+    Array.isArray(paragraph?.runs)
+      ? paragraph.runs
+          .map((run: any) =>
+            typeof run?.text === "string"
+              ? run.text
+              : ""
+          )
+          .join("")
+      : "";
+
+  const direct =
+    typeof paragraph?.text === "string"
+      ? paragraph.text
+      : "";
+
+  const nested: string[] = [];
+
+  for (const control of paragraph?.controls ?? []) {
+    if (control?.kind === "table") {
+      for (const cell of control.cells ?? []) {
+        const text = (cell.paragraphs ?? [])
+          .map((p: any) => paragraphPlainText(p))
+          .filter(Boolean)
+          .join(" ");
+        if (text) nested.push(text);
+      }
+    }
+  }
+
+  return [runText || direct, ...nested]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\\s+/g, " ")
+    .trim();
+}
+
+function extractHwpTables(
+  bytes: Uint8Array
+): StructuredTable[] {
+  const doc = parseHwp(bytes);
+  const tables: StructuredTable[] = [];
+
+  for (const section of doc.sections ?? []) {
+    for (const paragraph of section.paragraphs ?? []) {
+      for (const control of paragraph.controls ?? []) {
+        if (control?.kind !== "table") continue;
+
+        const cells: StructuredTableCell[] =
+          (control.cells ?? []).map((cell: any) => ({
+            row: Number(cell.row ?? 0),
+            col: Number(cell.col ?? 0),
+            rowSpan: Math.max(1, Number(cell.rowSpan ?? 1)),
+            colSpan: Math.max(1, Number(cell.colSpan ?? 1)),
+            text: (cell.paragraphs ?? [])
+              .map((p: any) => paragraphPlainText(p))
+              .filter(Boolean)
+              .join(" ")
+              .replace(/\\s+/g, " ")
+              .trim(),
+          }));
+
+        tables.push({
+          index: tables.length,
+          rowCount: Number(control.rowCount ?? 0),
+          colCount: Number(control.colCount ?? 0),
+          cells,
+        });
+      }
+    }
+  }
+
+  return tables;
+}
+
+function htmlEntityDecode(value: string): string {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'");
+}
+
+function htmlCellText(value: string): string {
+  return htmlEntityDecode(
+    value
+      .replace(/<br\\s*\\/?\\s*>/gi, "\\n")
+      .replace(/<[^>]+>/g, " ")
+  )
+    .replace(/\\s+/g, " ")
+    .trim();
+}
+
+function extractTablesFromRenderedHtml(
+  html: string
+): StructuredTable[] {
+  const tables: StructuredTable[] = [];
+
+  for (const tableMatch of html.matchAll(
+    /<table\\b[^>]*>([\\s\\S]*?)<\\/table>/gi
+  )) {
+    const body = tableMatch[1] ?? "";
+    const cells: StructuredTableCell[] = [];
+    const occupied = new Set<string>();
+    let rowIndex = 0;
+    let maxCol = 0;
+
+    for (const rowMatch of body.matchAll(
+      /<tr\\b[^>]*>([\\s\\S]*?)<\\/tr>/gi
+    )) {
+      const rowHtml = rowMatch[1] ?? "";
+      let colIndex = 0;
+
+      for (const cellMatch of rowHtml.matchAll(
+        /<t[dh]\\b([^>]*)>([\\s\\S]*?)<\\/t[dh]>/gi
+      )) {
+        while (occupied.has(`${rowIndex}:${colIndex}`)) {
+          colIndex++;
+        }
+
+        const attrs = cellMatch[1] ?? "";
+        const text = htmlCellText(cellMatch[2] ?? "");
+        const rowSpan =
+          Math.max(
+            1,
+            Number(
+              attrs.match(
+                /rowspan=["']?(\\d+)/i
+              )?.[1] ?? 1
+            )
+          );
+        const colSpan =
+          Math.max(
+            1,
+            Number(
+              attrs.match(
+                /colspan=["']?(\\d+)/i
+              )?.[1] ?? 1
+            )
+          );
+
+        cells.push({
+          row: rowIndex,
+          col: colIndex,
+          rowSpan,
+          colSpan,
+          text,
+        });
+
+        for (let r = 0; r < rowSpan; r++) {
+          for (let col = 0; col < colSpan; col++) {
+            occupied.add(
+              `${rowIndex + r}:${colIndex + col}`
+            );
+          }
+        }
+
+        maxCol = Math.max(
+          maxCol,
+          colIndex + colSpan
+        );
+        colIndex += colSpan;
+      }
+
+      rowIndex++;
+    }
+
+    tables.push({
+      index: tables.length,
+      rowCount: rowIndex,
+      colCount: maxCol,
+      cells,
+    });
+  }
+
+  return tables;
+}
+
+function toArrayBuffer(
+  bytes: Uint8Array
+): ArrayBuffer {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength
+  ) as ArrayBuffer;
+}
+
+async function extractHwpxRichContent(
+  bytes: Uint8Array
+): Promise<{
+  markdown: string;
+  tables: StructuredTable[];
+}> {
+  const reader = new HwpxReader();
+  await reader.loadFromArrayBuffer(
+    toArrayBuffer(bytes)
+  );
+
+  const [markdown, html] =
+    await Promise.all([
+      reader.extractMarkdown({
+        embedImages: false,
+      }),
+      reader.extractHtml({
+        renderImages: false,
+        renderTables: true,
+        renderStyles: false,
+        tableHeaderFirstRow: false,
+      }),
+    ]);
+
+  return {
+    markdown,
+    tables:
+      extractTablesFromRenderedHtml(html),
+  };
+}
+
+function tableCellsForRow(
+  table: StructuredTable,
+  row: number
+): StructuredTableCell[] {
+  return table.cells
+    .filter(
+      (cell) =>
+        cell.row <= row &&
+        row < cell.row + cell.rowSpan
+    )
+    .sort((a, b) => a.col - b.col);
+}
+
+function compactCell(
+  cell: StructuredTableCell
+): string {
+  const endCol =
+    cell.col + cell.colSpan - 1;
+  const coord =
+    cell.colSpan > 1
+      ? `c${cell.col}-c${endCol}`
+      : `c${cell.col}`;
+
+  const span =
+    [
+      cell.rowSpan > 1
+        ? `rowSpan=${cell.rowSpan}`
+        : "",
+      cell.colSpan > 1
+        ? `colSpan=${cell.colSpan}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(",");
+
+  return (
+    `[${coord}${span ? `; ${span}` : ""}] ` +
+    (cell.text || "(빈칸)")
+  );
+}
+
+function renderTableRow(
+  table: StructuredTable,
+  row: number
+): string {
+  const cells =
+    tableCellsForRow(table, row);
+
+  return (
+    `행 ${row}: ` +
+    cells.map(compactCell).join(" | ")
+  );
+}
+
+function searchStructuredTables(
+  tables: StructuredTable[],
+  query: string,
+  limit = 8
+): {
+  table: StructuredTable;
+  cell: StructuredTableCell;
+}[] {
+  const q = normalizeTableSearch(query);
+
+  if (!q) return [];
+
+  const results: {
+    table: StructuredTable;
+    cell: StructuredTableCell;
+  }[] = [];
+
+  for (const table of tables) {
+    for (const cell of table.cells) {
+      if (
+        normalizeTableSearch(cell.text)
+          .includes(q)
+      ) {
+        results.push({
+          table,
+          cell,
+        });
+
+        if (results.length >= limit) {
+          return results;
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+function renderStructuredTableMatch(
+  table: StructuredTable,
+  cell: StructuredTableCell
+): string {
+  const headerRows =
+    Array.from(
+      new Set(
+        table.cells
+          .filter(
+            (candidate) =>
+              candidate.row <= 2 &&
+              candidate.text
+          )
+          .map((candidate) => candidate.row)
+      )
+    )
+      .sort((a, b) => a - b)
+      .slice(0, 3);
+
+  const nearbyRows =
+    Array.from(
+      new Set([
+        Math.max(0, cell.row - 1),
+        cell.row,
+        Math.min(
+          table.rowCount - 1,
+          cell.row + 1
+        ),
+      ])
+    ).sort((a, b) => a - b);
+
+  const rows =
+    Array.from(
+      new Set([
+        ...headerRows,
+        ...nearbyRows,
+      ])
+    ).sort((a, b) => a - b);
+
+  const endRow =
+    cell.row + cell.rowSpan - 1;
+  const endCol =
+    cell.col + cell.colSpan - 1;
+
+  return [
+    `표 ${table.index + 1} (${table.rowCount}행 × ${table.colCount}열)`,
+    `일치 셀: r${cell.row}${cell.rowSpan > 1 ? `-r${endRow}` : ""}, c${cell.col}${cell.colSpan > 1 ? `-c${endCol}` : ""}`,
+    `일치 내용: ${cell.text || "(빈칸)"}`,
+    "행·열 문맥:",
+    ...rows.map(
+      (row) => renderTableRow(
+        table,
+        row
+      )
+    ),
+  ].join("\\n");
+}
+
 async function getLatestRegulationByName(
   name: string
 ) {
@@ -865,18 +1259,66 @@ async function getLatestRegulationText(
     file.extension.toLowerCase();
 
   let text: string;
+  let markdown: string | undefined;
+  let tables: StructuredTable[] = [];
 
   if (extension === "hwpx") {
     text =
       extractHwpxText(
         file.bytes
       );
+
+    try {
+      const rich =
+        await extractHwpxRichContent(
+          file.bytes
+        );
+      markdown = rich.markdown;
+      tables = rich.tables;
+    } catch (error) {
+      console.warn(
+        "HWPX rich extraction failed; plain text fallback used",
+        {
+          filename: file.filename,
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        }
+      );
+    }
   } else if (extension === "hwp") {
     try {
       text =
         await hwpToText(
           file.bytes
         );
+
+      const [mdResult, tableResult] =
+        await Promise.allSettled([
+          hwpToMarkdown(
+            file.bytes
+          ),
+          Promise.resolve(
+            extractHwpTables(
+              file.bytes
+            )
+          ),
+        ]);
+
+      if (
+        mdResult.status === "fulfilled"
+      ) {
+        markdown =
+          mdResult.value;
+      }
+
+      if (
+        tableResult.status === "fulfilled"
+      ) {
+        tables =
+          tableResult.value;
+      }
     } catch (error) {
       throw new Error(
         [
@@ -888,7 +1330,7 @@ async function getLatestRegulationText(
               : String(error)
           }`,
           `원문: ${detail.sourceUrl}`,
-        ].join("\n")
+        ].join("\\n")
       );
     }
   } else if (extension === "pdf") {
@@ -901,7 +1343,7 @@ async function getLatestRegulationText(
 
       text =
         Array.isArray(extracted.text)
-          ? extracted.text.join("\n\n")
+          ? extracted.text.join("\\n\\n")
           : extracted.text;
 
       if (!text.trim()) {
@@ -920,7 +1362,7 @@ async function getLatestRegulationText(
               : String(error)
           }`,
           `원문: ${detail.sourceUrl}`,
-        ].join("\n")
+        ].join("\\n")
       );
     }
   } else {
@@ -932,7 +1374,7 @@ async function getLatestRegulationText(
         "현재 MCP는 HWP, HWPX, 텍스트형 PDF 본문을 직접 읽을 수 있습니다.",
         "스캔 PDF나 DOCX 등은 아직 직접 본문 추출 대상이 아닙니다.",
         `원문: ${detail.sourceUrl}`,
-      ].join("\n")
+      ].join("\\n")
     );
   }
 
@@ -961,6 +1403,8 @@ async function getLatestRegulationText(
       file.extension,
 
     text,
+    markdown,
+    tables,
   };
 }
 
@@ -1061,7 +1505,7 @@ function extractArticleSnippet(
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.6.0",
+    version: "1.7.0",
   });
 
   server.registerTool(
@@ -1078,7 +1522,8 @@ function createServer() {
           text:
             "국방과학연구소 규정 MCP 정상 작동\n" +
             "최신 규정 우선: ON\n" +
-            "HWP/HWPX/PDF 본문 읽기: ON",
+            "HWP/HWPX/PDF 본문 읽기: ON\n" +
+            "HWP/HWPX 표 구조 인식: ON",
         },
       ],
     })
@@ -1334,7 +1779,7 @@ function createServer() {
     "get_regulation_text",
     {
       description:
-        "최신 HWP/HWPX/PDF 규정의 실제 본문을 읽습니다.",
+        "최신 HWP/HWPX/PDF 규정의 실제 본문을 읽습니다. HWP/HWPX는 표를 Markdown으로 표현하고 표 구조를 별도로 인식합니다.",
       inputSchema: {
         name:
           z.string().min(1),
@@ -1352,15 +1797,29 @@ function createServer() {
          */
         const maxLength = 40000;
 
+        const preferredText =
+          result.markdown?.trim()
+            ? result.markdown
+            : result.text;
+
         const text =
-          result.text.length >
+          preferredText.length >
           maxLength
-            ? result.text.slice(
+            ? preferredText.slice(
                 0,
                 maxLength
               ) +
               "\n\n[본문이 길어 일부 생략됨]"
-            : result.text;
+            : preferredText;
+
+        const tableNotice =
+          result.tables.length > 0
+            ? [
+                `구조 인식 표: ${result.tables.length}개`,
+                "※ HWP/HWPX 표의 행·열·병합셀 구조를 별도로 인식했습니다.",
+                "※ 복잡한 표는 search_regulation_text에서 검색어와 같은 셀의 행·열 문맥을 함께 반환합니다.",
+              ]
+            : [];
 
         return {
           content: [
@@ -1371,8 +1830,9 @@ function createServer() {
                 `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
                 `최신파일: ${result.filename}`,
                 `ALIO: ${result.sourceUrl}`,
+                ...tableNotice,
                 "",
-                "----- 최신 규정 본문 -----",
+                `----- 최신 규정 본문${result.markdown ? " (Markdown)" : ""} -----`,
                 text,
               ].join("\n"),
             },
@@ -1399,7 +1859,7 @@ function createServer() {
     "search_regulation_text",
     {
       description:
-        "최신 HWP/HWPX/PDF 규정 본문에서 키워드 또는 조문을 검색합니다.",
+        "최신 HWP/HWPX/PDF 규정 본문에서 키워드 또는 조문을 검색합니다. HWP/HWPX 표에서는 공백·쉼표 차이를 무시하고 셀 및 병합셀의 행·열 문맥도 함께 검색합니다.",
       inputSchema: {
         name:
           z.string().min(1),
@@ -1420,6 +1880,13 @@ function createServer() {
 
         const text =
           result.text;
+
+        const tableMatches =
+          searchStructuredTables(
+            result.tables,
+            query,
+            8
+          );
 
         const lowered =
           text.toLowerCase();
@@ -1478,7 +1945,8 @@ function createServer() {
         }
 
         if (
-          matches.length === 0
+          matches.length === 0 &&
+          tableMatches.length === 0
         ) {
           return {
             content: [
@@ -1505,13 +1973,27 @@ function createServer() {
                 `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
                 `최신파일: ${result.filename}`,
                 `검색어: ${query}`,
-                `검색결과: ${matches.length}건`,
+                `본문 검색결과: ${matches.length}건`,
+                `표 구조 검색결과: ${tableMatches.length}건`,
                 `ALIO: ${result.sourceUrl}`,
                 "",
+                ...tableMatches.map(
+                  ({ table, cell }, index) =>
+                    [
+                      `===== 표 구조 결과 ${index + 1} =====`,
+                      renderStructuredTableMatch(
+                        table,
+                        cell
+                      ),
+                    ].join("\n")
+                ),
+                ...(tableMatches.length
+                  ? [""]
+                  : []),
                 ...matches.map(
                   (match, index) =>
                     [
-                      `----- 결과 ${index + 1}: ${match.label} -----`,
+                      `----- 본문 결과 ${index + 1}: ${match.label} -----`,
                       match.snippet,
                     ].join("\n")
                 ),
