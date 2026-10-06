@@ -3742,6 +3742,21 @@ function extractArticleSnippet(
   };
 }
 
+async function loadTextWithToolRetry(name:string){
+  let last:unknown;
+  for(let attempt=1;attempt<=2;attempt++){
+    try{return await coreGetLatestRegulationText(name);}catch(error){last=error;if(attempt<2)await sleep(250*attempt);}
+  }
+  throw last;
+}
+function publicErrorCode(error:unknown):'timeout'|'parse_error'|'upstream_error'{
+  const raw=error&&typeof error==='object'&&'code' in error?String((error as any).code):'';
+  const message=error instanceof Error?error.message:String(error);
+  if(raw==='timeout'||/timeout|aborted/i.test(message))return 'timeout';
+  if(raw==='parse_error'||raw==='no_text_layer'||raw==='layout_error')return 'parse_error';
+  return 'upstream_error';
+}
+
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
@@ -4000,7 +4015,7 @@ function createServer() {
     async ({ name }) => {
       try {
         const result =
-          await coreGetLatestRegulationText(
+          await loadTextWithToolRetry(
             name
           );
 
@@ -4109,7 +4124,7 @@ function createServer() {
     }) => {
       try {
         const result =
-          await coreGetLatestRegulationText(
+          await loadTextWithToolRetry(
             name
           );
 
@@ -4285,18 +4300,8 @@ function createServer() {
           ],
         };
       } catch (error) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text:
-                error instanceof Error
-                  ? error.message
-                  : String(error),
-            },
-          ],
-        };
+        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
+        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
     }
   );
