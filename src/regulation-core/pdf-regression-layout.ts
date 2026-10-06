@@ -1414,70 +1414,27 @@ function mapPdfSymbolToHeader(
 function findPdfInheritedTask(
   page: PdfLayoutPage,
   rowIndex: number,
-  header:
-    PdfHeaderCandidate |
-    null
+  header: PdfHeaderCandidate | null
 ): string | null {
-  if (!header) {
-    return null;
-  }
-
-  const firstHeaderX =
-    Math.min(
-      ...header.columns.map(
-        (column) =>
-          column.x
-      )
-    );
-
-  const lowerBound =
-    Math.max(
-      header.start +
-        header.count,
-      rowIndex - 8
-    );
-
-  for (
-    let index = rowIndex;
-    index >= lowerBound;
-    index--
-  ) {
-    const row =
-      page.rows[
-        index
-      ];
-
-    for (
-      const item of
-      rawPdfItemsInRow(
-        row
-      )
-    ) {
-      const center =
-        item.x +
-        item.width /
-          2;
-
-      if (
-        center >=
-        firstHeaderX
-      ) {
-        continue;
-      }
-
-      if (
-        /^\s*\d+(?:-\d+)?\)\s*\S+/.test(
-          item.str
-        )
-      ) {
-        return item.str;
-      }
+  if (!header) return null;
+  const firstHeaderX=Math.min(...header.columns.map(column=>column.x));
+  const titles:{row:number;text:string}[]=[];
+  for(const candidateRow of page.rows){
+    for(const item of rawPdfItemsInRow(candidateRow)){
+      const center=item.x+item.width/2;
+      if(center>=firstHeaderX)continue;
+      if(/^\s*\d+(?:-\d+)?\)\s*\S+/.test(item.str))titles.push({row:candidateRow.row,text:item.str});
     }
   }
-
-  return null;
+  if(!titles.length)return null;
+  // Merged task labels are often vertically centered, so they can appear after
+  // their first child row. Assign by the nearest title center, with boundaries
+  // halfway between adjacent title centers instead of previous-only fill-down.
+  titles.sort((a,b)=>a.row-b.row);
+  let best=titles[0],distance=Math.abs(rowIndex-best.row);
+  for(const title of titles){const d=Math.abs(rowIndex-title.row);if(d<distance){best=title;distance=d;}}
+  return distance<=8?best.text:null;
 }
-
 export async function extractPdfRichContent(
   bytes: Uint8Array
 ): Promise<{
