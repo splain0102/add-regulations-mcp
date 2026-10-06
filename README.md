@@ -9,6 +9,19 @@
 - 인증: OAuth 2.1 + Cloudflare Access
 - 기본 원칙: 같은 규정명이 여러 번 존재할 경우 최신 제·개정본을 우선
 
+## 1.9.1: 병합 조건 귀속 및 응답 크기 수정
+
+- 위임전결표의 조건 셀은 시작 행에서만 검색 결과를 생성합니다. 그 시작 행을 덮는 업무·구분 셀에 귀속하며, 병합 구간의 새 업무에 조건을 중복 귀속하지 않습니다.
+- `analysis_type`은 표별로 한 번 판정합니다. 위임전결표에서 기호가 없으면 `approver=null`, `needs_review=true`이며 일반 표로 바꾸지 않습니다.
+- `search_regulation_table`에 `compact`(기본 true), `offset`(기본 0)을 추가했습니다. compact 행에는 업무·조건·전결 결과와 식별자 및 분류만 포함합니다. 헤더는 최상위 `tables[table_id]`에 한 번 저장합니다.
+- `compact=false`는 실제 셀과 좌표를 포함합니다. 행의 반복 헤더, `raw_cells`, 셀별 `header_path`, `row_span`/`col_span` 별칭, 빈 셀은 출력하지 않습니다. 실제 셀 병합 정보는 `rowSpan`/`colSpan`으로 유지합니다.
+- JSON 텍스트와 structuredContent를 함께 포함한 MCP 응답에 50,000자 한도를 적용합니다. 잘린 결과는 `truncated=true`, `next_offset`을 반환합니다. 동일 질의를 그 offset으로 이어서 호출할 수 있습니다. 한 행 자체가 한도를 넘으면 `layout_error`로 compact 사용을 안내합니다.
+- 자동 수용시험: `npm run test:delegation-response`. 실제 ALIO HWP fileNo 239154에서 국정감사, 원화·외화 계약 승인, 계약원가계산, ★ 범례 및 suffix를 확인합니다. 별도 합성 시험은 기호 누락과 페이지 처리 경계를 검증하며 실제 원본 시험과 구분합니다.
+
+```json
+{"name":"위임전결규정","query":"계약 승인","compact":true,"offset":0,"limit":30}
+```
+
 ## 1.9.0: 범용 규정 표 검색
 
 기존 Site `add-regulations-portal` 게시 버전 5의 표 검색 코어(소스 커밋 `793d45ca186867e0e1986a0468f272a5fdb9cc95`)를 Cloudflare 서버에 반영했습니다. OAuth 2.1, Cloudflare Access, 기존 목록·본문·조문 검색 도구는 유지합니다.
@@ -25,7 +38,7 @@
 
 Site 게시 버전 5에서는 A–E 16개 실제 Site-hosted 호출을 검증했습니다. 이 사실은 별도 Cloudflare 서버 배포 성공을 의미하지 않습니다. 이 브랜치의 Cloudflare 런타임 번들은 `npm run build:check`로 확인하고, 코어는 `npm run test:tables`로 실제 ALIO 파일의 셀 구조와 A–F 회귀를 검사합니다. PDF F는 최신 답변에 대체 사용하지 않는 과거 개정본 회귀시험입니다.
 
-이번 작업 환경에는 Cloudflare 인증이 없어 이 변경의 Cloudflare production 배포와 Claude 원격 호출은 아직 수행하지 않았습니다. GitHub push만으로 기존 Worker가 변경되었다고 간주하지 마십시오. 인증된 기존 Cloudflare 프로젝트에서 다음 명령을 실행하고 `hello.version=1.9.0`과 아래 기능 상태를 확인해야 합니다.
+1.9.0은 PR #4를 main에 병합한 뒤 연결된 Cloudflare production 자동 빌드에서 성공을 확인했습니다. GitHub push만으로 기존 Worker가 변경되었다고 간주하지 마십시오. 배포 확인 후 Claude의 인증된 `hello`와 검색 호출로 현재 버전을 확인해야 합니다. 수동 배포 환경에서는 다음 명령을 사용합니다.
 
 ```sh
 npm ci
