@@ -1414,70 +1414,45 @@ function mapPdfSymbolToHeader(
 function findPdfInheritedTask(
   page: PdfLayoutPage,
   rowIndex: number,
-  header:
-    PdfHeaderCandidate |
-    null
+  header: PdfHeaderCandidate | null
 ): string | null {
-  if (!header) {
-    return null;
-  }
-
-  const firstHeaderX =
-    Math.min(
-      ...header.columns.map(
-        (column) =>
-          column.x
-      )
-    );
-
-  const lowerBound =
-    Math.max(
-      header.start +
-        header.count,
-      rowIndex - 8
-    );
-
-  for (
-    let index = rowIndex;
-    index >= lowerBound;
-    index--
-  ) {
-    const row =
-      page.rows[
-        index
-      ];
-
-    for (
-      const item of
-      rawPdfItemsInRow(
-        row
-      )
-    ) {
-      const center =
-        item.x +
-        item.width /
-          2;
-
-      if (
-        center >=
-        firstHeaderX
-      ) {
-        continue;
-      }
-
-      if (
-        /^\s*\d+(?:-\d+)?\)\s*\S+/.test(
-          item.str
-        )
-      ) {
-        return item.str;
-      }
+  if (!header) return null;
+  const firstHeaderX=Math.min(...header.columns.map(column=>column.x));
+  const titles:{row:number;y:number;text:string}[]=[];
+  for(const candidateRow of page.rows){
+    for(const item of rawPdfItemsInRow(candidateRow)){
+      const center=item.x+item.width/2;
+      if(center>=firstHeaderX)continue;
+      if(/^\s*\d+(?:-\d+)?\)\s*\S+/.test(item.str))titles.push({row:candidateRow.row,y:item.y,text:item.str});
     }
   }
-
-  return null;
+  if(!titles.length)return null;
+  const targetRow=page.rows.find(r=>r.row===rowIndex);
+  const targetItems=targetRow?rawPdfItemsInRow(targetRow):[];
+  const targetY=targetItems.length?targetItems.reduce((sum,item)=>sum+item.y,0)/targetItems.length:null;
+  if(targetY===null)return null;
+  // PDF text order is not a reliable ownership signal for vertically merged
+  // cells. Use the physical y centre of each numbered task label instead.
+  // This deliberately allows a task label printed below its first child row
+  // to own rows above it (common when the label is vertically centred).
+  titles.sort((a,b)=>b.y-a.y);
+  const targetPos=titles.findIndex(t=>t.row===rowIndex);
+  if(targetPos>=0)return titles[targetPos].text;
+  const above=titles.filter(t=>t.row<rowIndex).sort((a,b)=>b.row-a.row)[0];
+  const below=titles.filter(t=>t.row>rowIndex).sort((a,b)=>a.row-b.row)[0];
+  if(above&&below){
+    const aboveRow=page.rows.find(r=>r.row===above.row);
+    const aboveText=aboveRow?.text??'';
+    // A numbered task that already contains its own approval marker/text is a
+    // self-contained row. Rows immediately following it can belong to the next
+    // vertically-centred merged task whose label is printed later.
+    const aboveSelfContained=/[◎★☆]/.test(aboveText)||/(직상위자|책임원|부서장|사업기구장|부소장|실장|운영|소장)\s*$/.test(aboveText);
+    if(aboveSelfContained)return below.text;
+  }
+  let best=titles[0],distance=Math.abs(targetY-best.y);
+  for(const title of titles){const d=Math.abs(targetY-title.y);if(d<distance){best=title;distance=d;}}
+  return best.text;
 }
-
 export async function extractPdfRichContent(
   bytes: Uint8Array
 ): Promise<{

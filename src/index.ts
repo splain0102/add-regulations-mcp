@@ -1,5 +1,4 @@
-import { tableToolResponse } from "./regulation-core/table-response";
-import { searchLatestRegulationTable } from "./regulation-core/regulations";
+import { searchLatestRegulationTable, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -3425,7 +3424,7 @@ async function getLatestRegulationByName(
   name: string
 ) {
   const items =
-    await listRegulations();
+    await coreListRegulations();
 
   const query = name
     .replace(/\s+/g, "")
@@ -3743,10 +3742,25 @@ function extractArticleSnippet(
   };
 }
 
+async function loadTextWithToolRetry(name:string){
+  let last:unknown;
+  for(let attempt=1;attempt<=2;attempt++){
+    try{return await coreGetLatestRegulationText(name);}catch(error){last=error;if(attempt<2)await sleep(250*attempt);}
+  }
+  throw last;
+}
+function publicErrorCode(error:unknown):'timeout'|'parse_error'|'upstream_error'{
+  const raw=error&&typeof error==='object'&&'code' in error?String((error as any).code):'';
+  const message=error instanceof Error?error.message:String(error);
+  if(raw==='timeout'||/timeout|aborted/i.test(message))return 'timeout';
+  if(raw==='parse_error'||raw==='no_text_layer'||raw==='layout_error')return 'parse_error';
+  return 'upstream_error';
+}
+
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.9.1",
+    version: "1.9.0",
   });
 
   server.registerTool(
@@ -3757,7 +3771,7 @@ function createServer() {
       inputSchema: {},
     },
     async () => {
-      const data={status:"ready",runtime:"Cloudflare Workers",version:"1.9.1",tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
+      const data={status:"ready",runtime:"Cloudflare Workers",version:"1.9.0",tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
       return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
     }
   );
@@ -3855,7 +3869,7 @@ function createServer() {
     async () => {
       try {
         const items =
-          await listRegulations();
+          await coreListRegulations();
 
         const text =
           items.map(
@@ -3904,7 +3918,7 @@ function createServer() {
     async ({ query }) => {
       try {
         const items =
-          await listRegulations();
+          await coreListRegulations();
 
         const q = query
           .replace(/\s+/g, "")
@@ -3966,31 +3980,11 @@ function createServer() {
     },
     async ({ name }) => {
       try {
-        const { match, detail } =
-          await getLatestRegulationByName(
-            name
-          );
-
-        const latest =
-          detail.latestAttachment;
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: [
-                `규정명: ${match.title}`,
-                `제·개정일: ${detail.revisionDate ?? match.revisionDate ?? "확인 필요"}`,
-                `최종수정일: ${detail.updatedDate ?? match.updatedDate ?? "확인 필요"}`,
-                `최신파일: ${latest?.name ?? "확인 실패"}`,
-                `파일형식: ${latest?.extension || "확인 필요"}`,
-                `ALIO: ${detail.sourceUrl}`,
-                "",
-                "과거 개정본은 조회 대상에서 제외했습니다.",
-              ].join("\n"),
-            },
-          ],
-        };
+        const result = await coreGetLatestRegulationText(name);
+        const data={regulationName:result.regulationName,revisionDate:result.revisionDate,updatedDate:result.updatedDate,
+          filename:result.filename,extension:result.extension,fileNo:result.fileNo,version_check:result.version_check,
+          selection_reason:result.selection_reason,other_attachments:result.other_attachments,sourceUrl:result.sourceUrl};
+        return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
       } catch (error) {
         return {
           isError: true,
@@ -4021,7 +4015,7 @@ function createServer() {
     async ({ name }) => {
       try {
         const result =
-          await getLatestRegulationText(
+          await loadTextWithToolRetry(
             name
           );
 
@@ -4030,10 +4024,7 @@ function createServer() {
          */
         const maxLength = 40000;
 
-        const preferredText =
-          result.markdown?.trim()
-            ? result.markdown
-            : result.text;
+        const preferredText = result.text;
 
         const text =
           preferredText.length >
@@ -4045,31 +4036,10 @@ function createServer() {
               "\n\n[본문이 길어 일부 생략됨]"
             : preferredText;
 
-        const tableNotice =
-          result.tables.length > 0
-            ? [
-                `구조 인식 표: ${result.tables.length}개`,
-                "※ HWP/HWPX 표의 행·열·병합셀 구조를 별도로 인식했습니다.",
-                "※ 복잡한 표는 search_regulation_text에서 검색어와 같은 셀의 행·열 문맥을 함께 반환합니다.",
-              ]
-            : [];
-
-        const pdfLayoutNotice =
-          result.extension
-            .toLowerCase() === "pdf"
-            ? [
-                `PDF 페이지: ${result.pdfTotalPages ?? "확인 필요"}쪽`,
-                result.pdfLayout.length > 0
-                  ? `좌표 기반 행 분석: ${result.pdfLayout.length}쪽`
-                  : "좌표 기반 행 분석: 사용 안 함",
-                ...(result.pdfLayoutSkippedReason
-                  ? [
-                      result.pdfLayoutSkippedReason,
-                    ]
-                  : []),
-                "※ PDF는 표 셀/병합 구조가 파일에 명시되지 않는 경우가 많아 x/y 좌표를 이용해 표 문맥을 추정합니다.",
-              ]
-            : [];
+        const tableNotice = result.extension==='hwp'||result.extension==='hwpx'
+          ? ["※ HWP/HWPX 최신 원문을 공통 파일선택 코어에서 읽었습니다."] : [];
+        const pdfLayoutNotice = result.extension==='pdf'
+          ? ["※ 최신 선택 파일이 PDF입니다. 본문 검색은 텍스트 레이어 기준입니다."] : [];
 
         return {
           content: [
@@ -4079,11 +4049,16 @@ function createServer() {
                 `규정명: ${result.regulationName}`,
                 `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
                 `최신파일: ${result.filename}`,
+                `파일형식: ${result.extension}`,
+                `fileNo: ${result.fileNo}`,
+                `version_check: ${JSON.stringify(result.version_check)}`,
+                `selection_reason: ${result.selection_reason}`,
+                `other_attachments: ${JSON.stringify(result.other_attachments)}`,
                 `ALIO: ${result.sourceUrl}`,
                 ...tableNotice,
                 ...pdfLayoutNotice,
                 "",
-                `----- 최신 규정 본문${result.markdown ? " (Markdown)" : ""} -----`,
+                "----- 최신 규정 본문 -----",
                 text,
               ].join("\n"),
             },
@@ -4125,26 +4100,17 @@ function createServer() {
     }) => {
       try {
         const result =
-          await getLatestRegulationText(
+          await loadTextWithToolRetry(
             name
           );
 
         const text =
           result.text;
 
-        const tableMatches =
-          searchStructuredTables(
-            result.tables,
-            query,
-            8
-          );
-
-        const pdfLayoutMatches =
-          searchPdfLayoutRows(
-            result.pdfLayout,
-            query,
-            8
-          );
+        const tableResult = await searchLatestRegulationTable(name, query);
+        const tableRows = tableResult.rows;
+        const tableMatches:any[] = [];
+        const pdfLayoutMatches:any[] = [];
 
         const lowered =
           text.toLowerCase();
@@ -4231,12 +4197,18 @@ function createServer() {
                 `규정명: ${result.regulationName}`,
                 `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
                 `최신파일: ${result.filename}`,
+                `파일형식: ${result.extension}`,
+                `fileNo: ${result.fileNo}`,
+                `version_check: ${JSON.stringify(result.version_check)}`,
+                `selection_reason: ${result.selection_reason}`,
+                `other_attachments: ${JSON.stringify(result.other_attachments)}`,
                 `검색어: ${query}`,
                 `본문 검색결과: ${matches.length}건`,
-                `HWP/HWPX 표 구조 검색결과: ${tableMatches.length}건`,
-                `PDF 좌표 행 검색결과: ${pdfLayoutMatches.length}건`,
+                `표 구조 검색결과: ${tableRows.length}건`,
+                "PDF 과거첨부 좌표 결과: 0건",
                 `ALIO: ${result.sourceUrl}`,
                 "",
+                ...(tableRows.length?["===== 최신 파일 표 구조 결과 =====",JSON.stringify(tableRows,null,2),""]:[]),
                 ...tableMatches.map(
                   ({ table, cell, row, mode }, index) =>
                     [
@@ -4296,18 +4268,8 @@ function createServer() {
           ],
         };
       } catch (error) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text:
-                error instanceof Error
-                  ? error.message
-                  : String(error),
-            },
-          ],
-        };
+        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
+        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
     }
   );
@@ -4321,16 +4283,32 @@ function createServer() {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(100).optional(),
         includeRegion: z.boolean().optional(),
-        compact: z.boolean().default(true),
-        offset: z.number().int().min(0).optional(),
+        compact: z.boolean().optional(),
+        include_text_box: z.boolean().optional(),
       },
     },
-    async ({ name, query, limit, includeRegion, compact, offset }) => {
+    async ({ name, query, limit, includeRegion, compact, include_text_box }) => {
       try {
         const result = await searchLatestRegulationTable(name, query);
-        return tableToolResponse(result, query, {limit, includeRegion, compact, offset});
+        const { rows, ...meta } = result;
+        const requested=limit ?? 30;
+        const eligible=include_text_box?rows:rows.filter(row=>row.analysis_type!=='text_box');
+        let visible=eligible.slice(0,requested);
+        if(compact) visible=visible.map((row:any)=>({source_type:row.source_type,analysis_type:row.analysis_type,table_id:row.table_id,row:row.row,
+          task:row.task??null,condition:row.condition??null,approver:row.approver??null,approver_type:row.approver_type??null,
+          approvers:row.approvers??undefined,multi_approver:row.multi_approver??false,symbol:row.symbol??null,suffix:row.suffix??null,
+          values:row.values??{},columns:row.columns??[],footnotes:row.footnotes??[],related_regulations:row.related_regulations??[],
+          needs_review:row.needs_review,review_reasons:row.review_reasons??[]}));
+        const has_more=eligible.length>visible.length;
+        let data:any={...meta,query,totalMatches:eligible.length,totalStructuredRows:eligible.length,has_more,truncated:false,rows:visible,
+          ...(includeRegion?{regions:visible.map((row:any)=>({page:row.page,bounding_box:row.bounding_box,coordinate_space:row.coordinate_space,table_id:row.table_id,image:null}))}:{})};
+        let serialized=JSON.stringify(data,null,2);
+        if(compact&&serialized.length>14500){
+          while(data.rows.length>1&&serialized.length>14500){data.rows.pop();data.truncated=true;serialized=JSON.stringify(data,null,2);}
+        }
+        return {structuredContent:data,content:[{type:"text" as const,text:serialized}]};
       } catch (error) {
-        const code=error&&typeof error==="object"&&"code" in error?String(error.code):error instanceof Error&&error.message.startsWith("layout_error:")?"layout_error":"parse_error";
+        const code=error&&typeof error==="object"&&"code" in error?String(error.code):"parse_error";
         const data={error:{code,message:error instanceof Error?error.message:String(error)}};
         return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }

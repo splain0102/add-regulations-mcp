@@ -5,12 +5,14 @@ export type SearchTableRow={page:number|null;row:number;table_id:string;coordina
 
 export const normalizeTableSearch=(value:string)=>value.normalize('NFKC').toLowerCase().replace(/[\s,]+/g,'');
 export const tableCellsForRow=(table:Table,row:number)=>table.cells.filter(c=>c.row<=row&&row<c.row+c.rowSpan).sort((a,b)=>a.col-b.col);
-const cellJson=(c:Cell)=>({row:c.row,col:c.col,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.text});
+const normalizedText=(s:string)=>s.replace(/\s*\n\s*/g,' ').replace(/\s+/g,' ').replace(/(?<=[가-힣])\s+(?=[가-힣])/g,'').trim();
+const cellJson=(c:Cell)=>({row:c.row,col:c.col,rowSpan:c.rowSpan,colSpan:c.colSpan,row_span:c.rowSpan,col_span:c.colSpan,text:normalizedText(c.text),raw_text:c.text});
 const headerLabels=new Set(['구분','관리등급','공개대상','사업구분','사업관리부서','예산관리부서','순번','장비명','제작사','모델명','취득연도','취득금액','보유기관명','지역중복여부','공동활용여부','장비등록번호','자체검토의견','기존장비명','용도','구축가격','활용상태','처분계획','상호']);
 function headerRowNumbers(table:Table){
  const directRows=[...new Set(table.cells.map(c=>c.row))].sort((a,b)=>a-b);
+ const first=directRows[0];
  const anchor=directRows.find(row=>table.cells.filter(c=>c.row===row&&(headerLabels.has(normalizeTableSearch(c.text))||roleName(c.text))).length>=2);
- if(anchor===undefined)return directRows.slice(0,3);
+ if(anchor===undefined)return first===undefined?[]:[first];
  const recognized=table.cells.filter(c=>c.row===anchor&&(headerLabels.has(normalizeTableSearch(c.text))||roleName(c.text)));
  const end=Math.max(anchor+1,...recognized.map(c=>c.row+c.rowSpan));
  return directRows.filter(row=>row>=anchor&&row<end);
@@ -20,19 +22,19 @@ export function searchGeneralTables(tables:Table[],query:string,delegationRows:S
  const q=normalizeTableSearch(query),tokens=query.normalize('NFKC').split(/[\s,;/]+/).map(normalizeTableSearch).filter(Boolean);
  if(!q)return [];
  const matches:{table:Table;cell:Cell;row:number;mode:'cell'|'row'|'header_path'}[]=[],seen=new Set<string>();
- // Classify each physical table exactly once; every result uses this descriptor.
- const descriptors=new Map(tables.map(table=>{
-  const headerRows=headerRowNumbers(table);
-  const headers=headerRows.map(row=>({row,cells:tableCellsForRow(table,row).map(cellJson)}));
-  const columns=table.cells.filter(c=>headerRows.includes(c.row)&&roleName(c.text)).sort((a,b)=>a.col-b.col).map(c=>({name:roleName(c.text),source_text:c.text,col:c.col,colSpan:c.colSpan}));
-  return [table.id,{headerRows,headers,columns,isDelegation:columns.length>=2}] as const;
- }));
  for(const table of tables){
-  const {headerRows}=descriptors.get(table.id)!;
+  const rowCount=Math.max(0,...table.cells.map(c=>c.row+c.rowSpan));
+  const colCount=Math.max(0,...table.cells.map(c=>c.col+c.colSpan));
+  const isTextBox=rowCount===1&&colCount===1;
+  const headerRows=isTextBox?[]:headerRowNumbers(table);
   for(const cell of table.cells){if(normalizeTableSearch(cell.text).includes(q)){
+   if(tokens.length===1&&headerRows.includes(cell.row)){
+     const dataRows=[...new Set(table.cells.map(c=>c.row))].filter(r=>!headerRows.includes(r)).slice(0,20);
+     if(dataRows.length){for(const dataRow of dataRows){const key=`${table.id}:${dataRow}`;if(!seen.has(key)){seen.add(key);matches.push({table,cell,row:dataRow,mode:'cell'});}}continue;}
+   }
    const key=`${table.id}:${cell.row}`;if(!seen.has(key)){seen.add(key);matches.push({table,cell,row:cell.row,mode:'cell'});}
   }}
-  if(tokens.length>=2){const rowCount=Math.max(0,...table.cells.map(c=>c.row+c.rowSpan));
+  if(tokens.length>=2){
    for(let row=0;row<rowCount;row++){const cells=tableCellsForRow(table,row),text=normalizeTableSearch(cells.map(c=>c.text).join(' ')),key=`${table.id}:${row}`;
     if(!seen.has(key)&&tokens.every(t=>text.includes(t))){const cell=cells.find(c=>c.text.trim());if(cell){seen.add(key);matches.push({table,cell,row,mode:'row'});}}
    }
@@ -47,22 +49,23 @@ export function searchGeneralTables(tables:Table[],query:string,delegationRows:S
   }
  }
  return matches.flatMap<SearchTableRow>(({table,cell,row,mode})=>{
-  const cells=tableCellsForRow(table,row),{headerRows,headers,columns,isDelegation}=descriptors.get(table.id)!;
-  const minRole=isDelegation?Math.min(...columns.map(c=>c.col)):Infinity;
-  const taskHeader=table.cells.find(c=>headerRows.includes(c.row)&&/^(업무|업무내용|업무명|전결사항|결재사항)$/.test(normalizeTableSearch(c.text)));
-  const categoryHeader=table.cells.find(c=>headerRows.includes(c.row)&&/^(구분|부서|소관|담당부서)$/.test(normalizeTableSearch(c.text)));
-  const taskCol=taskHeader?.col??1, categoryCol=categoryHeader?.col??0;
-  const taskCell=cells.find(c=>c.col<=taskCol&&taskCol<c.col+c.colSpan);
-  const categoryCell=cells.find(c=>c.col<=categoryCol&&categoryCol<c.col+c.colSpan);
-  const conditions=isDelegation?cells.filter(c=>c.col>=(taskCell?taskCell.col+taskCell.colSpan:taskCol+1)&&c.col<minRole&&c.text.trim()&&!/[◎★☆]/.test(c.text)):[];
-  const conditionLeaf=conditions.at(-1);
-  // The deepest condition owns a result only at its physical start row. Never attach
-  // its inherited rowSpan tail to a newly starting task (e.g. rows 406 -> 407).
-  if(isDelegation&&(headerRows.includes(row)||(conditionLeaf&&conditionLeaf.row!==row)))return [];
-  const contextualCells=cells.map(c=>({...cellJson(c),header_path:table.cells.filter(h=>headerRows.includes(h.row)&&h.row<c.row&&h.text.trim()&&h.col<c.col+c.colSpan&&c.col<h.col+h.colSpan).sort((a,b)=>a.row-b.row).map(cellJson)}));
-  const base={source_type:sourceType,analysis_type:'general_table',coordinate_type:'logical_cell',coordinate_space:'logical-cell-address',page:null,table_id:table.id,row,match_mode:mode,matched_cell:cellJson(cell),cells:contextualCells,header_evidence:{rows:headers},raw_cells:cells.map(cellJson),needs_review:false,bounding_box:{x0:0,y0:row,x1:Math.max(...cells.map(c=>c.col+c.colSpan)),y1:row+1}};
+  const cells=tableCellsForRow(table,row),headerRows=headerRowNumbers(table);
+  const headers=headerRows.map(r=>({row:r,cells:tableCellsForRow(table,r).map(cellJson)}));
+  const headerCells=table.cells.filter(c=>headerRows.includes(c.row)&&c.text.trim());
+  const leafHeaders=[...Array(Math.max(0,...table.cells.map(c=>c.col+c.colSpan))).keys()].map(col=>{
+    const candidates=headerCells.filter(h=>h.col<=col&&col<h.col+h.colSpan).sort((a,b)=>b.row-a.row);
+    const h=candidates[0];return h?{name:normalizedText(h.text),source_text:h.text,col,colSpan:1}:null;
+  }).filter((x):x is {name:string;source_text:string;col:number;colSpan:number}=>!!x&&!!x.name);
+  const roleColumns=headerCells.map(c=>({role:roleName(c.text),cell:c})).filter(x=>x.role).map(x=>({name:x.role,source_text:x.cell.text,col:x.cell.col,colSpan:x.cell.colSpan}));
+  const columns=roleColumns.length>=2?roleColumns:leafHeaders;
+  const contextualCells=cells.map(c=>({...cellJson(c),header_path:headerCells.filter(h=>h.row<c.row&&h.text.trim()&&h.col<c.col+c.colSpan&&c.col<h.col+h.colSpan).sort((a,b)=>a.row-b.row).map(cellJson)}));
+  const values:Record<string,string>={};
+  if(!headerRows.includes(row)) for(const c of cells){
+    const h=leafHeaders.find(x=>x.col>=c.col&&x.col<c.col+c.colSpan);
+    if(h?.name&&normalizedText(c.text)) values[h.name]=normalizedText(c.text);
+  }
+  const base={source_type:sourceType,analysis_type:(Math.max(0,...table.cells.map(c=>c.row+c.rowSpan))===1&&Math.max(0,...table.cells.map(c=>c.col+c.colSpan))===1)?'text_box':'general_table',coordinate_type:'logical_cell',coordinate_space:'logical-cell-address',page:null,table_id:table.id,row,match_mode:mode,matched_cell:cellJson(cell),cells:contextualCells,columns,values,header_evidence:{rows:headers},raw_cells:cells.map(cellJson),needs_review:false,bounding_box:{x0:0,y0:row,x1:Math.max(...cells.map(c=>c.col+c.colSpan)),y1:row+1}};
   const specialized=delegationRows.filter(r=>r.table_id===table.id&&r.bounding_box.y0===row);
-  const unresolved={...base,analysis_type:'delegation_table',category:categoryCell?.text.trim()||null,task:taskCell?.text.trim()||null,condition:conditions.map(c=>c.text.trim()).join(' / ')||null,approver:null,symbol:null,suffix:null,legend:null,confidence:0,needs_review:true,review_reasons:['no_symbol_at_condition_start'],header_evidence:{rows:headers,columns}};
-  return specialized.length?specialized.map(r=>({...base,...r,analysis_type:'delegation_table',coordinate_type:'logical_cell',row,col:r.bounding_box.x0,coordinate:{coordinate_type:'logical_cell',row,col:r.bounding_box.x0},symbol_coordinates:{...r.symbol_coordinates,coordinate_type:'logical_cell',row,col:r.bounding_box.x0},header_evidence:{...(r.header_evidence as object??{}),rows:headers,columns},confidence_basis:['explicit_cell_span','header_detected','symbol_inside_column']})):[isDelegation?unresolved:base];
+  return specialized.length?specialized.map(r=>({...base,...r,analysis_type:'delegation_table',coordinate_type:'logical_cell',row,col:r.bounding_box.x0,coordinate:{coordinate_type:'logical_cell',row,col:r.bounding_box.x0},symbol_coordinates:{...r.symbol_coordinates,coordinate_type:'logical_cell',row,col:r.bounding_box.x0},header_evidence:{...(r.header_evidence as object??{}),rows:headers,columns},confidence_basis:['explicit_cell_span','header_detected','symbol_inside_column']})):[base];
  });
 }
