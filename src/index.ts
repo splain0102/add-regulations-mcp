@@ -1267,18 +1267,65 @@ function renderStructuredTableMatch(
   ].join("\n");
 }
 
+type PdfPositionedItem = {
+  str: string;
+  x: number;
+  y: number;
+  width: number;
+  fontSize: number;
+};
+
 type PdfLayoutSegment = {
   x: number;
   xEnd: number;
   text: string;
+  fontSize: number;
+  sourceItems: PdfPositionedItem[];
 };
 
 type PdfLayoutRow = {
   page: number;
   row: number;
   y: number;
+  fontMedian: number;
   segments: PdfLayoutSegment[];
   text: string;
+};
+
+type PdfHeaderColumn = {
+  name: string;
+  x: number;
+  xEnd: number;
+  xCenter: number;
+  text: string;
+  rowOffsets: number[];
+  parts: {
+    rowOffset: number;
+    x: number;
+    xEnd: number;
+    text: string;
+  }[];
+};
+
+type PdfHeaderCandidate = {
+  start: number;
+  count: number;
+  matched: number;
+  order: string[];
+  multilineCount: number;
+  columns: PdfHeaderColumn[];
+  score: number;
+};
+
+type PdfSymbolCoordinate = {
+  symbol: "◎" | "★" | "☆";
+  x0: number;
+  x1: number;
+  xCenter: number;
+  y: number;
+  suffix: string | null;
+  coordinateType: "pdf_point";
+  precision: "raw-item-exact" | "glyph-width-estimate";
 };
 
 type PdfLayoutPage = {
@@ -1330,6 +1377,10 @@ function groupPdfLayoutRows(
           item.str
             .replace(/\s+/g, " ")
             .trim(),
+        x: Number(item.x) || 0,
+        y: Number(item.y) || 0,
+        width: Number(item.width) || 0,
+        fontSize: Number(item.fontSize) || 0,
       }))
       .sort(
         (a, b) =>
@@ -1500,6 +1551,20 @@ function groupPdfLayoutRows(
               x,
               xEnd,
               text: item.str,
+              fontSize:
+                Number(item.fontSize) ||
+                fontMedian,
+              sourceItems: [
+                {
+                  str: item.str,
+                  x,
+                  y: Number(item.y) || group.y,
+                  width: Number(item.width) || 0,
+                  fontSize:
+                    Number(item.fontSize) ||
+                    fontMedian,
+                },
+              ],
             };
             continue;
           }
@@ -1520,6 +1585,20 @@ function groupPdfLayoutRows(
               x,
               xEnd,
               text: item.str,
+              fontSize:
+                Number(item.fontSize) ||
+                fontMedian,
+              sourceItems: [
+                {
+                  str: item.str,
+                  x,
+                  y: Number(item.y) || group.y,
+                  width: Number(item.width) || 0,
+                  fontSize:
+                    Number(item.fontSize) ||
+                    fontMedian,
+                },
+              ],
             };
 
             continue;
@@ -1536,6 +1615,16 @@ function groupPdfLayoutRows(
               current.xEnd,
               xEnd
             );
+
+          current.sourceItems.push({
+            str: item.str,
+            x,
+            y: Number(item.y) || group.y,
+            width: Number(item.width) || 0,
+            fontSize:
+              Number(item.fontSize) ||
+              fontMedian,
+          });
         }
 
         if (current) {
@@ -1548,6 +1637,7 @@ function groupPdfLayoutRows(
           page,
           row: rowIndex,
           y: group.y,
+          fontMedian,
           segments,
           text:
             segments
@@ -1559,6 +1649,1098 @@ function groupPdfLayoutRows(
         };
       }
     );
+}
+
+const PDF_DELEGATION_HEADERS = [
+  "사책/과책",
+  "운영",
+  "실장",
+  "부(센터)장",
+  "원장/기술센터장",
+  "부소장",
+  "소장",
+] as const;
+
+const PDF_LEGACY_DELEGATION_HEADERS = [
+  "사책/과책",
+  "운영",
+  "실장",
+] as const;
+
+function normalizePdfHeader(
+  value: string
+): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s,]+/g, "")
+    .replace(/[\/()·ㆍ.\-]/g, "");
+}
+
+function pdfHorizontalOverlap(
+  a: { x: number; xEnd: number },
+  b: { x: number; xEnd: number }
+): number {
+  return Math.max(
+    0,
+    Math.min(a.xEnd, b.xEnd) -
+      Math.max(a.x, b.x)
+  );
+}
+
+function pdfCenter(
+  value: { x: number; xEnd: number }
+): number {
+  return (value.x + value.xEnd) / 2;
+}
+
+function rawPdfItemsInRow(
+  row: PdfLayoutRow
+): PdfPositionedItem[] {
+  return row.segments
+    .flatMap(
+      (segment) =>
+        segment.sourceItems?.length
+          ? segment.sourceItems
+          : [
+              {
+                str: segment.text,
+                x: segment.x,
+                y: row.y,
+                width:
+                  segment.xEnd -
+                  segment.x,
+                fontSize:
+                  segment.fontSize ||
+                  row.fontMedian,
+              },
+            ]
+    )
+    .filter(
+      (item) =>
+        item.str.trim().length > 0
+    )
+    .sort(
+      (a, b) =>
+        a.x - b.x
+    );
+}
+
+function clusterPdfHeaderSegments(
+  rows: PdfLayoutRow[],
+  start: number,
+  count: number,
+  expectedHeaders: readonly string[]
+): {
+  x: number;
+  xEnd: number;
+  xCenter: number;
+  text: string;
+  normalized: string;
+  rowOffsets: number[];
+  parts: {
+    rowOffset: number;
+    x: number;
+    xEnd: number;
+    text: string;
+  }[];
+}[] {
+  const nodes: {
+    x: number;
+    xEnd: number;
+    text: string;
+    rowOffset: number;
+    fontSize: number;
+  }[] = [];
+
+  for (
+    let offset = 0;
+    offset < count;
+    offset++
+  ) {
+    const row =
+      rows[start + offset];
+
+    if (!row) continue;
+
+    for (
+      const item of
+      rawPdfItemsInRow(row)
+    ) {
+      nodes.push({
+        x: item.x,
+        xEnd:
+          item.x +
+          item.width,
+        text: item.str,
+        rowOffset: offset,
+        fontSize:
+          item.fontSize ||
+          row.fontMedian ||
+          9,
+      });
+    }
+  }
+
+  const expected =
+    expectedHeaders.map(
+      (name) => ({
+        name,
+        normalized:
+          normalizePdfHeader(
+            name
+          ),
+      })
+    );
+
+  const expectedSet =
+    new Set(
+      expected.map(
+        (item) =>
+          item.normalized
+      )
+    );
+
+  const ordered =
+    [...nodes].sort(
+      (a, b) =>
+        a.rowOffset -
+          b.rowOffset ||
+        a.x - b.x
+    );
+
+  const related = (
+    a: typeof ordered[number],
+    b: typeof ordered[number]
+  ): boolean => {
+    const widthA =
+      Math.max(
+        1,
+        a.xEnd - a.x
+      );
+
+    const widthB =
+      Math.max(
+        1,
+        b.xEnd - b.x
+      );
+
+    if (
+      a.rowOffset ===
+      b.rowOffset
+    ) {
+      const left =
+        a.x <= b.x
+          ? a
+          : b;
+
+      const right =
+        left === a
+          ? b
+          : a;
+
+      const gap =
+        Math.max(
+          0,
+          right.x -
+            left.xEnd
+        );
+
+      const font =
+        Math.max(
+          1,
+          Math.min(
+            a.fontSize,
+            b.fontSize
+          )
+        );
+
+      return (
+        gap <=
+        Math.max(
+          8,
+          font * 1.8
+        )
+      );
+    }
+
+    const overlap =
+      pdfHorizontalOverlap(
+        a,
+        b
+      );
+
+    const overlapRatio =
+      overlap /
+      Math.min(
+        widthA,
+        widthB
+      );
+
+    const centerDistance =
+      Math.abs(
+        pdfCenter(a) -
+          pdfCenter(b)
+      );
+
+    return (
+      overlapRatio >= 0.18 ||
+      centerDistance <=
+        Math.max(
+          6,
+          Math.min(
+            widthA,
+            widthB
+          ) * 0.6
+        )
+    );
+  };
+
+  const connected = (
+    combo:
+      typeof ordered
+  ): boolean => {
+    if (
+      combo.length <= 1
+    ) {
+      return true;
+    }
+
+    const visited =
+      new Set<number>([0]);
+
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+
+      for (
+        let i = 0;
+        i < combo.length;
+        i++
+      ) {
+        if (
+          !visited.has(i)
+        ) {
+          continue;
+        }
+
+        for (
+          let j = 0;
+          j < combo.length;
+          j++
+        ) {
+          if (
+            visited.has(j)
+          ) {
+            continue;
+          }
+
+          if (
+            related(
+              combo[i],
+              combo[j]
+            )
+          ) {
+            visited.add(j);
+            changed = true;
+          }
+        }
+      }
+    }
+
+    return (
+      visited.size ===
+      combo.length
+    );
+  };
+
+  const build = (
+    combo:
+      typeof ordered
+  ) => {
+    const comboOrdered =
+      [...combo].sort(
+        (a, b) =>
+          a.rowOffset -
+            b.rowOffset ||
+          a.x - b.x
+      );
+
+    const text =
+      comboOrdered
+        .map(
+          (node) =>
+            node.text
+        )
+        .join(" ");
+
+    const x =
+      Math.min(
+        ...comboOrdered.map(
+          (node) =>
+            node.x
+        )
+      );
+
+    const xEnd =
+      Math.max(
+        ...comboOrdered.map(
+          (node) =>
+            node.xEnd
+        )
+      );
+
+    return {
+      x,
+      xEnd,
+      xCenter:
+        (x + xEnd) / 2,
+      text,
+      normalized:
+        normalizePdfHeader(
+          text
+        ),
+      rowOffsets:
+        Array.from(
+          new Set(
+            comboOrdered.map(
+              (node) =>
+                node.rowOffset
+            )
+          )
+        ),
+      parts:
+        comboOrdered.map(
+          (node) => ({
+            rowOffset:
+              node.rowOffset,
+            x: node.x,
+            xEnd:
+              node.xEnd,
+            text:
+              node.text,
+          })
+        ),
+    };
+  };
+
+  const candidates:
+    ReturnType<
+      typeof build
+    >[] = [];
+
+  for (
+    let i = 0;
+    i < ordered.length;
+    i++
+  ) {
+    const one =
+      build([
+        ordered[i],
+      ]);
+
+    if (
+      expectedSet.has(
+        one.normalized
+      )
+    ) {
+      candidates.push(one);
+    }
+
+    for (
+      let j = i + 1;
+      j < ordered.length;
+      j++
+    ) {
+      const pair = [
+        ordered[i],
+        ordered[j],
+      ];
+
+      if (
+        !connected(pair)
+      ) {
+        continue;
+      }
+
+      const pairCandidate =
+        build(pair);
+
+      if (
+        expectedSet.has(
+          pairCandidate.normalized
+        )
+      ) {
+        candidates.push(
+          pairCandidate
+        );
+      }
+
+      for (
+        let k = j + 1;
+        k < ordered.length;
+        k++
+      ) {
+        const triple = [
+          ordered[i],
+          ordered[j],
+          ordered[k],
+        ];
+
+        if (
+          !connected(triple)
+        ) {
+          continue;
+        }
+
+        const tripleCandidate =
+          build(triple);
+
+        if (
+          expectedSet.has(
+            tripleCandidate.normalized
+          )
+        ) {
+          candidates.push(
+            tripleCandidate
+          );
+        }
+      }
+    }
+  }
+
+  return expected
+    .map((target) => {
+      const matches =
+        candidates
+          .filter(
+            (candidate) =>
+              candidate.normalized ===
+              target.normalized
+          )
+          .sort(
+            (a, b) => {
+              if (
+                a.rowOffsets.length !==
+                b.rowOffsets.length
+              ) {
+                return (
+                  b.rowOffsets.length -
+                  a.rowOffsets.length
+                );
+              }
+
+              const widthA =
+                a.xEnd -
+                a.x;
+
+              const widthB =
+                b.xEnd -
+                b.x;
+
+              if (
+                widthA !==
+                widthB
+              ) {
+                return (
+                  widthA -
+                  widthB
+                );
+              }
+
+              return (
+                a.x -
+                b.x
+              );
+            }
+          );
+
+      return matches[0];
+    })
+    .filter(
+      (
+        candidate
+      ): candidate is
+        NonNullable<
+          typeof candidate
+        > =>
+        Boolean(
+          candidate
+        )
+    );
+}
+
+function detectPdfHeaderCandidate(
+  rows: PdfLayoutRow[],
+  expectedHeaders:
+    readonly string[]
+): PdfHeaderCandidate | null {
+  let best:
+    PdfHeaderCandidate |
+    null = null;
+
+  for (
+    let start = 0;
+    start < rows.length;
+    start++
+  ) {
+    for (
+      const count of [
+        1,
+        2,
+        3,
+      ]
+    ) {
+      if (
+        start + count >
+        rows.length
+      ) {
+        continue;
+      }
+
+      const clusters =
+        clusterPdfHeaderSegments(
+          rows,
+          start,
+          count,
+          expectedHeaders
+        );
+
+      const columns:
+        PdfHeaderColumn[] =
+        expectedHeaders
+          .map(
+            (name) => {
+              const normalized =
+                normalizePdfHeader(
+                  name
+                );
+
+              const hit =
+                clusters.find(
+                  (cluster) =>
+                    cluster.normalized ===
+                    normalized
+                );
+
+              if (!hit) {
+                return null;
+              }
+
+              return {
+                name,
+                x:
+                  hit.x,
+                xEnd:
+                  hit.xEnd,
+                xCenter:
+                  hit.xCenter,
+                text:
+                  hit.text,
+                rowOffsets:
+                  hit.rowOffsets,
+                parts:
+                  hit.parts,
+              };
+            }
+          )
+          .filter(
+            (
+              column
+            ): column is
+              PdfHeaderColumn =>
+              Boolean(
+                column
+              )
+          )
+          .sort(
+            (a, b) =>
+              a.xCenter -
+              b.xCenter
+          );
+
+      const order =
+        columns.map(
+          (column) =>
+            column.name
+        );
+
+      const exactOrderPrefix =
+        order.every(
+          (
+            name,
+            index
+          ) =>
+            name ===
+            expectedHeaders[
+              index
+            ]
+        );
+
+      const multilineCount =
+        columns.filter(
+          (column) =>
+            column.rowOffsets
+              .length > 1
+        ).length;
+
+      const score =
+        columns.length *
+          100 +
+        (
+          exactOrderPrefix
+            ? 20
+            : 0
+        ) +
+        multilineCount *
+          2 -
+        count;
+
+      if (
+        !best ||
+        score >
+          best.score
+      ) {
+        best = {
+          start,
+          count,
+          matched:
+            columns.length,
+          order,
+          multilineCount,
+          columns,
+          score,
+        };
+      }
+    }
+  }
+
+  return best;
+}
+
+function detectKnownPdfHeader(
+  rows: PdfLayoutRow[]
+): PdfHeaderCandidate | null {
+  const candidates =
+    [
+      PDF_DELEGATION_HEADERS,
+      PDF_LEGACY_DELEGATION_HEADERS,
+    ]
+      .map(
+        (headers) => ({
+          headers,
+          candidate:
+            detectPdfHeaderCandidate(
+              rows,
+              headers
+            ),
+        })
+      )
+      .filter(
+        (
+          item
+        ): item is {
+          headers:
+            readonly string[];
+          candidate:
+            PdfHeaderCandidate;
+        } =>
+          Boolean(
+            item.candidate
+          )
+      );
+
+  const complete =
+    candidates
+      .filter(
+        ({ headers, candidate }) =>
+          candidate.matched ===
+            headers.length &&
+          candidate.order.every(
+            (
+              name,
+              index
+            ) =>
+              name ===
+              headers[
+                index
+              ]
+          )
+      )
+      .sort(
+        (a, b) =>
+          b.headers.length -
+          a.headers.length
+      );
+
+  if (
+    complete[0]
+  ) {
+    return (
+      complete[0]
+        .candidate
+    );
+  }
+
+  return (
+    candidates
+      .sort(
+        (a, b) =>
+          b.candidate
+            .score -
+          a.candidate
+            .score
+      )[0]
+      ?.candidate ??
+    null
+  );
+}
+
+function extractPdfSymbols(
+  row: PdfLayoutRow
+): PdfSymbolCoordinate[] {
+  const raw =
+    rawPdfItemsInRow(
+      row
+    );
+
+  const results:
+    PdfSymbolCoordinate[] =
+    [];
+
+  for (
+    let itemIndex = 0;
+    itemIndex < raw.length;
+    itemIndex++
+  ) {
+    const item =
+      raw[itemIndex];
+
+    const chars =
+      Array.from(
+        item.str
+      );
+
+    for (
+      let charIndex = 0;
+      charIndex <
+      chars.length;
+      charIndex++
+    ) {
+      const char =
+        chars[
+          charIndex
+        ];
+
+      if (
+        char !== "◎" &&
+        char !== "★" &&
+        char !== "☆"
+      ) {
+        continue;
+      }
+
+      const unit =
+        Math.max(
+          0.001,
+          item.width
+        ) /
+        Math.max(
+          1,
+          chars.length
+        );
+
+      const x0 =
+        item.x +
+        unit *
+          charIndex;
+
+      const x1 =
+        item.x +
+        unit *
+          (
+            charIndex +
+            1
+          );
+
+      const sameItemSuffix =
+        chars
+          .slice(
+            charIndex +
+              1
+          )
+          .join("")
+          .trim()
+          .match(
+            /^\(([^)]+)\)/
+          );
+
+      let suffix =
+        sameItemSuffix?.[
+          1
+        ] ??
+        null;
+
+      if (
+        !suffix &&
+        chars.length === 1
+      ) {
+        const next =
+          raw[
+            itemIndex +
+              1
+          ];
+
+        if (
+          next &&
+          Math.abs(
+            next.y -
+              item.y
+          ) <= 2.5 &&
+          next.x -
+            (
+              item.x +
+              item.width
+            ) <=
+            Math.max(
+              3,
+              item.fontSize *
+                0.5
+            )
+        ) {
+          suffix =
+            next.str.match(
+              /^\(([^)]+)\)/
+            )?.[1] ??
+            null;
+        }
+      }
+
+      results.push({
+        symbol: char,
+        x0,
+        x1,
+        xCenter:
+          (x0 + x1) /
+          2,
+        y: item.y,
+        suffix,
+        coordinateType:
+          "pdf_point",
+        precision:
+          chars.length ===
+          1
+            ? "raw-item-exact"
+            : "glyph-width-estimate",
+      });
+    }
+  }
+
+  return results;
+}
+
+function makePdfHeaderBoundaries(
+  columns:
+    PdfHeaderColumn[]
+): (
+  PdfHeaderColumn & {
+    left: number;
+    right: number;
+  }
+)[] {
+  const sorted =
+    [...columns].sort(
+      (a, b) =>
+        a.xCenter -
+        b.xCenter
+    );
+
+  if (
+    sorted.length === 0
+  ) {
+    return [];
+  }
+
+  const boundaries:
+    number[] = [];
+
+  for (
+    let index = 0;
+    index <
+    sorted.length - 1;
+    index++
+  ) {
+    boundaries.push(
+      (
+        sorted[index]
+          .xCenter +
+        sorted[
+          index + 1
+        ].xCenter
+      ) /
+        2
+    );
+  }
+
+  const firstGap =
+    sorted.length > 1
+      ? sorted[1]
+          .xCenter -
+        sorted[0]
+          .xCenter
+      : 20;
+
+  const lastGap =
+    sorted.length > 1
+      ? sorted[
+          sorted.length -
+            1
+        ].xCenter -
+        sorted[
+          sorted.length -
+            2
+        ].xCenter
+      : 20;
+
+  return sorted.map(
+    (
+      column,
+      index
+    ) => ({
+      ...column,
+      left:
+        index === 0
+          ? column.xCenter -
+            firstGap /
+              2
+          : boundaries[
+              index -
+                1
+            ],
+      right:
+        index ===
+        sorted.length -
+          1
+          ? column.xCenter +
+            lastGap /
+              2
+          : boundaries[
+              index
+            ],
+    })
+  );
+}
+
+function mapPdfSymbolToHeader(
+  symbol:
+    PdfSymbolCoordinate,
+  columns:
+    ReturnType<
+      typeof makePdfHeaderBoundaries
+    >
+): string | null {
+  const direct =
+    columns.find(
+      (column) =>
+        symbol.xCenter >=
+          column.left &&
+        symbol.xCenter <
+          column.right
+    );
+
+  if (direct) {
+    return direct.name;
+  }
+
+  return (
+    [...columns]
+      .map(
+        (column) => ({
+          name:
+            column.name,
+          distance:
+            Math.abs(
+              column.xCenter -
+                symbol.xCenter
+            ),
+        })
+      )
+      .sort(
+        (a, b) =>
+          a.distance -
+          b.distance
+      )[0]
+      ?.name ??
+    null
+  );
+}
+
+function findPdfInheritedTask(
+  page: PdfLayoutPage,
+  rowIndex: number,
+  header:
+    PdfHeaderCandidate |
+    null
+): string | null {
+  if (!header) {
+    return null;
+  }
+
+  const firstHeaderX =
+    Math.min(
+      ...header.columns.map(
+        (column) =>
+          column.x
+      )
+    );
+
+  const lowerBound =
+    Math.max(
+      header.start +
+        header.count,
+      rowIndex - 8
+    );
+
+  for (
+    let index = rowIndex;
+    index >= lowerBound;
+    index--
+  ) {
+    const row =
+      page.rows[
+        index
+      ];
+
+    for (
+      const item of
+      rawPdfItemsInRow(
+        row
+      )
+    ) {
+      const center =
+        item.x +
+        item.width /
+          2;
+
+      if (
+        center >=
+        firstHeaderX
+      ) {
+        continue;
+      }
+
+      if (
+        /^\s*\d+(?:-\d+)?\)\s*\S+/.test(
+          item.str
+        )
+      ) {
+        return item.str;
+      }
+    }
+  }
+
+  return null;
 }
 
 async function extractPdfRichContent(
