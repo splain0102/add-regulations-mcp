@@ -1,8 +1,17 @@
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 
-const DETAIL_URL =
-  "https://www.alio.go.kr/item/itemBoard21110.do?disclosureNo=&apbaId=C0345&nowcode=21110&reportFormNo=21110&table_name=COMM_RULE&idx_name=RULE_NO&idx=24523&reportGbn=N&bid_type=K1100";
+const PDF_URL =
+  "https://www.alio.go.kr/download/rulefiledown.json?fileNo=166852";
 
+const EXPECTED_HEADERS = [
+  "사책/과책",
+  "운영",
+  "실장",
+  "부장(센터장)",
+  "사업기구장",
+  "부소장",
+  "소장",
+];
 
 async function fetchWithRetry(url, init = {}, attempts = 4) {
   let lastError;
@@ -12,7 +21,7 @@ async function fetchWithRetry(url, init = {}, attempts = 4) {
       if (response.ok || (response.status < 500 && response.status !== 429)) {
         return response;
       }
-      lastError = new Error(`HTTP ${response.status}`);
+      lastError = new Error("HTTP " + response.status);
     } catch (error) {
       lastError = error;
     }
@@ -23,241 +32,602 @@ async function fetchWithRetry(url, init = {}, attempts = 4) {
   throw lastError ?? new Error("fetch failed");
 }
 
-function cleanHtml(value) {
-  return value
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function findPdfAttachments(html) {
-  const found = [];
-  const seen = new Set();
-
-  const forward =
-    /([\w가-힣().,\-_+\s]+?\.pdf)[\s\S]{0,800}?(?:rulefiledown\.json\?fileNo=|fileNo\s*[:=,(\'"\s]+)(\d+)/gi;
-
-  let match;
-  while ((match = forward.exec(html)) !== null) {
-    const fileNo = match[2];
-    if (seen.has(fileNo)) continue;
-    seen.add(fileNo);
-    found.push({
-      name: cleanHtml(match[1]),
-      fileNo,
-      url: `https://www.alio.go.kr/download/rulefiledown.json?fileNo=${fileNo}`,
-    });
-  }
-
-  const reverse =
-    /(?:rulefiledown\.json\?fileNo=|fileNo\s*[:=,(\'"\s]+)(\d+)[\s\S]{0,800}?([\w가-힣().,\-_+\s]+?\.pdf)/gi;
-
-  while ((match = reverse.exec(html)) !== null) {
-    const fileNo = match[1];
-    if (seen.has(fileNo)) continue;
-    seen.add(fileNo);
-    found.push({
-      name: cleanHtml(match[2]),
-      fileNo,
-      url: `https://www.alio.go.kr/download/rulefiledown.json?fileNo=${fileNo}`,
-    });
-  }
-
-  return found;
-}
-
 function median(values) {
-  const xs = values.filter(Number.isFinite).sort((a,b)=>a-b);
+  const xs = values.filter(Number.isFinite).sort((a, b) => a - b);
   if (!xs.length) return 0;
   const m = Math.floor(xs.length / 2);
-  return xs.length % 2 ? xs[m] : (xs[m-1] + xs[m]) / 2;
+  return xs.length % 2 ? xs[m] : (xs[m - 1] + xs[m]) / 2;
 }
 
-function groupRows(items) {
+function normalize(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s,]+/g, "");
+}
+
+function normalizeHeader(value) {
+  return normalize(value).replace(/[\/()·ㆍ.\-]/g, "");
+}
+
+function horizontalOverlap(a, b) {
+  const left = Math.max(a.x, b.x);
+  const right = Math.min(a.xEnd, b.xEnd);
+  return Math.max(0, right - left);
+}
+
+function centerOf(seg) {
+  return (seg.x + seg.xEnd) / 2;
+}
+
+function groupRows(items, page) {
   const usable = items
-    .filter((item) => item.str && item.str.trim())
-    .map((item) => ({...item, str:item.str.trim()}))
-    .sort((a,b) => b.y - a.y || a.x - b.x);
+    .filter((item) => item?.str && item.str.trim())
+    .map((item) => ({
+      ...item,
+      str: item.str.replace(/\s+/g, " ").trim(),
+      x: Number(item.x) || 0,
+      y: Number(item.y) || 0,
+      width: Number(item.width) || 0,
+      fontSize: Number(item.fontSize) || 0,
+    }))
+    .sort((a, b) => b.y - a.y || a.x - b.x);
 
   const fontMedian = median(usable.map((x) => x.fontSize)) || 10;
-  const tolerance = Math.max(1.5, Math.min(4, fontMedian * 0.28));
+  const yTolerance = Math.max(1.5, Math.min(4, fontMedian * 0.28));
 
-  const rows = [];
+  const grouped = [];
   for (const item of usable) {
-    let row = rows.find((candidate) => Math.abs(candidate.y - item.y) <= tolerance);
-    if (!row) {
-      row = { y:item.y, items:[] };
-      rows.push(row);
+    let best;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let i = Math.max(0, grouped.length - 5); i < grouped.length; i++) {
+      const candidate = grouped[i];
+      const distance = Math.abs(candidate.y - item.y);
+      if (distance <= yTolerance && distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
     }
-    row.items.push(item);
-    row.y = row.items.reduce((s,x)=>s+x.y,0) / row.items.length;
+    if (!best) {
+      best = { y: item.y, items: [] };
+      grouped.push(best);
+    }
+    best.items.push(item);
+    best.y = best.items.reduce((s, x) => s + x.y, 0) / best.items.length;
   }
 
-  return rows
-    .sort((a,b)=>b.y-a.y)
-    .map((row) => {
-      const xs = row.items.sort((a,b)=>a.x-b.x);
+  return grouped
+    .sort((a, b) => b.y - a.y)
+    .map((group, rowIndex) => {
+      const rowItems = [...group.items].sort((a, b) => a.x - b.x);
       const gaps = [];
-      for (let i=1;i<xs.length;i++) {
-        gaps.push(xs[i].x - (xs[i-1].x + xs[i-1].width));
+      for (let i = 1; i < rowItems.length; i++) {
+        const previous = rowItems[i - 1];
+        const current = rowItems[i];
+        const gap = current.x - (previous.x + previous.width);
+        if (gap > 0) gaps.push(gap);
       }
-      const positive = gaps.filter((g)=>g>0);
-      const gapMedian = median(positive) || fontMedian * 0.3;
+      const gapMedian = median(gaps) || fontMedian * 0.3;
       const splitThreshold = Math.max(fontMedian * 1.1, gapMedian * 3, 10);
 
       const segments = [];
-      let current = null;
-      for (const item of xs) {
+      let current;
+      for (const item of rowItems) {
+        const xEnd = item.x + item.width;
         if (!current) {
-          current = { x:item.x, xEnd:item.x+item.width, text:item.str };
+          current = {
+            x: item.x,
+            xEnd,
+            text: item.str,
+            fontSize: item.fontSize || fontMedian,
+            sourceItems: [item],
+          };
           continue;
         }
+
         const gap = item.x - current.xEnd;
         if (gap > splitThreshold) {
           segments.push(current);
-          current = { x:item.x, xEnd:item.x+item.width, text:item.str };
+          current = {
+            x: item.x,
+            xEnd,
+            text: item.str,
+            fontSize: item.fontSize || fontMedian,
+            sourceItems: [item],
+          };
         } else {
           current.text += gap > fontMedian * 0.15 ? " " + item.str : item.str;
-          current.xEnd = Math.max(current.xEnd, item.x + item.width);
+          current.xEnd = Math.max(current.xEnd, xEnd);
+          current.sourceItems.push(item);
         }
       }
       if (current) segments.push(current);
 
       return {
-        y: row.y,
+        page,
+        row: rowIndex,
+        y: group.y,
+        fontMedian,
         segments,
-        text: segments.map((s)=>s.text).join(" | "),
+        text: segments.map((s) => s.text).join(" | "),
       };
     });
 }
 
-function normalize(value) {
-  return value.normalize("NFKC").toLowerCase().replace(/[\s,]+/g, "");
+function clusterHeaderSegments(rows, start, count) {
+  const nodes = [];
+  for (let offset = 0; offset < count; offset++) {
+    const row = rows[start + offset];
+    if (!row) continue;
+    for (const seg of row.segments) {
+      nodes.push({ ...seg, rowOffset: offset, y: row.y });
+    }
+  }
+
+  const clusters = [];
+  for (const node of nodes) {
+    const nodeWidth = Math.max(1, node.xEnd - node.x);
+    const nodeCenter = centerOf(node);
+    let best;
+    let bestScore = -1;
+
+    for (const cluster of clusters) {
+      if (cluster.nodes.some((n) => n.rowOffset === node.rowOffset)) continue;
+
+      const cx0 = Math.min(...cluster.nodes.map((n) => n.x));
+      const cx1 = Math.max(...cluster.nodes.map((n) => n.xEnd));
+      const cWidth = Math.max(1, cx1 - cx0);
+      const overlap = horizontalOverlap(node, { x: cx0, xEnd: cx1 });
+      const overlapRatio = overlap / Math.min(nodeWidth, cWidth);
+      const cCenter = (cx0 + cx1) / 2;
+      const centerDistance = Math.abs(nodeCenter - cCenter);
+      const proximity = centerDistance <= Math.max(5, Math.min(nodeWidth, cWidth) * 0.45);
+
+      const score = overlapRatio * 10 - centerDistance / 100;
+      if ((overlapRatio >= 0.2 || proximity) && score > bestScore) {
+        best = cluster;
+        bestScore = score;
+      }
+    }
+
+    if (best) {
+      best.nodes.push(node);
+    } else {
+      clusters.push({ nodes: [node] });
+    }
+  }
+
+  return clusters.map((cluster) => {
+    const ordered = [...cluster.nodes].sort(
+      (a, b) => a.rowOffset - b.rowOffset || a.x - b.x
+    );
+    const x = Math.min(...ordered.map((n) => n.x));
+    const xEnd = Math.max(...ordered.map((n) => n.xEnd));
+    return {
+      x,
+      xEnd,
+      xCenter: (x + xEnd) / 2,
+      text: ordered.map((n) => n.text).join(" "),
+      normalized: normalizeHeader(ordered.map((n) => n.text).join(" ")),
+      rowOffsets: [...new Set(ordered.map((n) => n.rowOffset))],
+      parts: ordered.map((n) => ({
+        rowOffset: n.rowOffset,
+        x: n.x,
+        xEnd: n.xEnd,
+        text: n.text,
+      })),
+    };
+  });
 }
 
-const detail = await fetchWithRetry(DETAIL_URL, {
+function detectHeaderCandidate(rows) {
+  const expected = EXPECTED_HEADERS.map((name) => ({
+    name,
+    normalized: normalizeHeader(name),
+  }));
+
+  let best = null;
+
+  for (let start = 0; start < rows.length; start++) {
+    for (const count of [1, 2, 3]) {
+      if (start + count > rows.length) continue;
+      const clusters = clusterHeaderSegments(rows, start, count);
+      const matches = [];
+
+      for (const target of expected) {
+        const hit = clusters.find((cluster) => cluster.normalized === target.normalized);
+        if (hit) {
+          matches.push({
+            name: target.name,
+            x: hit.x,
+            xEnd: hit.xEnd,
+            xCenter: hit.xCenter,
+            text: hit.text,
+            rowOffsets: hit.rowOffsets,
+            parts: hit.parts,
+          });
+        }
+      }
+
+      const sorted = [...matches].sort((a, b) => a.xCenter - b.xCenter);
+      const order = sorted.map((x) => x.name);
+      const exactOrderPrefix = order.every(
+        (name, index) => name === EXPECTED_HEADERS[index]
+      );
+
+      const multilineCount = sorted.filter((x) => x.rowOffsets.length > 1).length;
+      const score =
+        matches.length * 100 +
+        (exactOrderPrefix ? 20 : 0) +
+        multilineCount * 2 -
+        count;
+
+      if (!best || score > best.score) {
+        best = {
+          score,
+          start,
+          count,
+          matched: matches.length,
+          order,
+          exactOrderPrefix,
+          multilineCount,
+          columns: sorted,
+          rows: rows.slice(start, start + count).map((row) => ({
+            row: row.row,
+            y: row.y,
+            text: row.text,
+            segments: row.segments,
+          })),
+          clusters,
+        };
+      }
+    }
+  }
+
+  return best;
+}
+
+function splitSymbolsFromSegment(segment) {
+  const chars = Array.from(segment.text);
+  if (!chars.length) return [];
+
+  const width = Math.max(0.001, segment.xEnd - segment.x);
+  const unit = width / chars.length;
+  const result = [];
+
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (!"◎★☆".includes(ch)) continue;
+
+    const x0 = segment.x + unit * i;
+    const x1 = segment.x + unit * (i + 1);
+    const suffixText = chars.slice(i + 1).join("").trim();
+    const suffixMatch = suffixText.match(/^\(([^)]+)\)/);
+
+    result.push({
+      symbol: ch,
+      x0,
+      x1,
+      xCenter: (x0 + x1) / 2,
+      suffix: suffixMatch?.[1] ?? null,
+      sourceText: segment.text,
+      coordinatePrecision: chars.length === 1 ? "segment" : "glyph-width-estimate",
+    });
+  }
+
+  return result;
+}
+
+function symbolsInRow(row) {
+  return row.segments.flatMap(splitSymbolsFromSegment);
+}
+
+function makeColumnBoundaries(columns) {
+  const sorted = [...columns].sort((a, b) => a.xCenter - b.xCenter);
+  const boundaries = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    boundaries.push((sorted[i].xCenter + sorted[i + 1].xCenter) / 2);
+  }
+
+  const firstGap =
+    sorted.length > 1 ? sorted[1].xCenter - sorted[0].xCenter : 20;
+  const lastGap =
+    sorted.length > 1
+      ? sorted[sorted.length - 1].xCenter - sorted[sorted.length - 2].xCenter
+      : 20;
+
+  return sorted.map((column, index) => ({
+    ...column,
+    left: index === 0 ? column.xCenter - firstGap / 2 : boundaries[index - 1],
+    right:
+      index === sorted.length - 1
+        ? column.xCenter + lastGap / 2
+        : boundaries[index],
+  }));
+}
+
+function mapSymbolToColumn(symbol, columns) {
+  const hit = columns.find(
+    (column) => symbol.xCenter >= column.left && symbol.xCenter < column.right
+  );
+  if (hit) return hit;
+
+  return [...columns]
+    .map((column) => ({
+      column,
+      distance: Math.abs(column.xCenter - symbol.xCenter),
+    }))
+    .sort((a, b) => a.distance - b.distance)[0]?.column;
+}
+
+function compactRow(row) {
+  return {
+    page: row.page,
+    row: row.row,
+    y: Number(row.y.toFixed(2)),
+    text: row.text,
+    segments: row.segments.map((s) => ({
+      x: Number(s.x.toFixed(2)),
+      xEnd: Number(s.xEnd.toFixed(2)),
+      text: s.text,
+    })),
+    symbols: symbolsInRow(row).map((s) => ({
+      ...s,
+      x0: Number(s.x0.toFixed(2)),
+      x1: Number(s.x1.toFixed(2)),
+      xCenter: Number(s.xCenter.toFixed(2)),
+    })),
+  };
+}
+
+const response = await fetchWithRetry(PDF_URL, {
   headers: {
-    "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-PDF-Table-Test/1.0",
+    "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-PDF-Structured-Test/2.0",
     "Accept-Language": "ko-KR,ko;q=0.9",
   },
 });
-if (!detail.ok) throw new Error(`detail HTTP ${detail.status}`);
-const html = await detail.text();
-const pdfs = findPdfAttachments(html);
-console.log("PDF_ATTACHMENTS_START");
-console.log(JSON.stringify(pdfs, null, 2));
-console.log("PDF_ATTACHMENTS_END");
-if (!pdfs.length) throw new Error("No PDF attachment found");
+if (!response.ok) throw new Error("pdf HTTP " + response.status);
 
-const selected =
-  pdfs.find((x) => /21|2021|순환보직/i.test(x.name)) ?? pdfs[0];
-
-const res = await fetchWithRetry(selected.url, {
-  headers: {"User-Agent":"Mozilla/5.0 ADD-Regulations-MCP-PDF-Table-Test/1.0"},
-});
-if (!res.ok) throw new Error(`pdf HTTP ${res.status}`);
-const bytes = new Uint8Array(await res.arrayBuffer());
-const downloadedBytes = bytes.byteLength;
-
+const bytes = new Uint8Array(await response.arrayBuffer());
 const pdf = await getDocumentProxy(bytes);
 const { totalPages, items } = await extractTextItems(pdf);
 const plain = await extractText(pdf, { mergePages: true });
 
-console.log("PDF_LAYOUT_META_START");
-console.log(JSON.stringify({
-  selected,
-  bytes: downloadedBytes,
-  totalPages,
-  totalItems: items.reduce((s,p)=>s+p.length,0),
-  plainTextLength: plain.text.length,
-}, null, 2));
-console.log("PDF_LAYOUT_META_END");
-
 const pages = items.map((pageItems, pageIndex) => ({
   page: pageIndex + 1,
-  rows: groupRows(pageItems),
+  rows: groupRows(pageItems, pageIndex + 1),
 }));
 
-const keywords = ["출산휴가", "대상 제외자", "구 분", "비고"];
-for (const keyword of keywords) {
-  const q = normalize(keyword);
-  const matches = [];
-  for (const page of pages) {
-    for (let rowIndex=0; rowIndex<page.rows.length; rowIndex++) {
-      const row = page.rows[rowIndex];
-      if (normalize(row.text).includes(q)) {
-        matches.push({
-          page:page.page,
-          rowIndex,
-          y:row.y,
-          row:row.text,
-          segments:row.segments,
-          before: page.rows[Math.max(0,rowIndex-1)]?.text,
-          after: page.rows[Math.min(page.rows.length-1,rowIndex+1)]?.text,
-        });
-      }
+console.log("PDF_LAYOUT_META_START");
+console.log(
+  JSON.stringify(
+    {
+      fileNo: "166852",
+      bytes: bytes.byteLength,
+      totalPages,
+      totalItems: items.reduce((sum, pageItems) => sum + pageItems.length, 0),
+      plainTextLength: Array.isArray(plain.text)
+        ? plain.text.join("\n").length
+        : plain.text.length,
+    },
+    null,
+    2
+  )
+);
+console.log("PDF_LAYOUT_META_END");
+
+const pageCandidates = pages
+  .map((page) => ({
+    page: page.page,
+    candidate: detectHeaderCandidate(page.rows),
+  }))
+  .sort((a, b) => (b.candidate?.score ?? -1) - (a.candidate?.score ?? -1));
+
+console.log("PDF_HEADER_CANDIDATES_START");
+console.log(
+  JSON.stringify(
+    pageCandidates.slice(0, 12).map((x) => ({
+      page: x.page,
+      score: x.candidate?.score,
+      matched: x.candidate?.matched,
+      count: x.candidate?.count,
+      multilineCount: x.candidate?.multilineCount,
+      order: x.candidate?.order,
+      rows: x.candidate?.rows,
+      columns: x.candidate?.columns,
+    })),
+    null,
+    2
+  )
+);
+console.log("PDF_HEADER_CANDIDATES_END");
+
+const exactHeaders = pageCandidates.filter(
+  (x) =>
+    x.candidate?.matched === EXPECTED_HEADERS.length &&
+    JSON.stringify(x.candidate?.order) === JSON.stringify(EXPECTED_HEADERS)
+);
+
+if (!exactHeaders.length) {
+  throw new Error("7-column approval header reconstruction failed");
+}
+
+const primary = exactHeaders.find((x) => x.page === 34) ?? exactHeaders[0];
+const header = primary.candidate;
+const columns = makeColumnBoundaries(header.columns);
+
+console.log("PDF_7COL_HEADER_START");
+console.log(
+  JSON.stringify(
+    {
+      page: primary.page,
+      headerRows: header.rows,
+      rowsUsed: header.count,
+      multilineCount: header.multilineCount,
+      columns,
+    },
+    null,
+    2
+  )
+);
+console.log("PDF_7COL_HEADER_END");
+
+if (header.count < 2 && header.multilineCount < 1) {
+  throw new Error("multi-line header merge was not exercised");
+}
+
+const allSymbols = [];
+for (const page of pages) {
+  for (const row of page.rows) {
+    for (const symbol of symbolsInRow(row)) {
+      allSymbols.push({
+        page: page.page,
+        row: row.row,
+        y: row.y,
+        ...symbol,
+      });
     }
   }
-  console.log(`PDF_KEYWORD_${keyword}_START`);
-  console.log(JSON.stringify(matches.slice(0,10), null, 2));
-  console.log(`PDF_KEYWORD_${keyword}_END`);
 }
 
-const multiSegment = pages.flatMap((page) =>
+const symbolSummary = {
+  total: allSymbols.length,
+  byType: Object.fromEntries(
+    ["◎", "★", "☆"].map((symbol) => [
+      symbol,
+      allSymbols.filter((x) => x.symbol === symbol).length,
+    ])
+  ),
+  glyphWidthEstimated: allSymbols.filter(
+    (x) => x.coordinatePrecision === "glyph-width-estimate"
+  ).length,
+};
+
+console.log("PDF_SYMBOL_SUMMARY_START");
+console.log(JSON.stringify(symbolSummary, null, 2));
+console.log("PDF_SYMBOL_SUMMARY_END");
+
+for (const symbol of ["◎", "★", "☆"]) {
+  if (!allSymbols.some((x) => x.symbol === symbol)) {
+    throw new Error("symbol coordinate extraction missed " + symbol);
+  }
+}
+
+const targetPage = pages.find((page) => page.page === primary.page);
+const headerEndRow = header.start + header.count - 1;
+const firstColumnLeft = columns[0].left;
+
+let currentTask = null;
+let currentCondition = null;
+let targetRegression = null;
+const mappedRows = [];
+
+for (let i = headerEndRow + 1; i < targetPage.rows.length; i++) {
+  const row = targetPage.rows[i];
+  const leftSegments = row.segments.filter(
+    (segment) => (segment.x + segment.xEnd) / 2 < firstColumnLeft
+  );
+  const leftText = leftSegments.map((s) => s.text).join(" / ");
+
+  if (/계약\s*및\s*협약\s*승인/.test(leftText)) {
+    currentTask = "계약 및 협약 승인";
+  }
+
+  const conditionMatch = leftText.match(
+    /(\d+(?:\.\d+)?\s*억\s*원(?:\s*이상)?(?:\s*\d+(?:\.\d+)?\s*억\s*원)?\s*(?:미만|이하|초과|이상))/
+  );
+  if (conditionMatch) {
+    currentCondition = conditionMatch[1].replace(/\s+/g, " ").trim();
+  }
+
+  const symbols = symbolsInRow(row);
+  if (!symbols.length) continue;
+
+  const mapped = symbols.map((symbol) => {
+    const column = mapSymbolToColumn(symbol, columns);
+    return {
+      symbol: symbol.symbol,
+      suffix: symbol.suffix,
+      x0: Number(symbol.x0.toFixed(2)),
+      x1: Number(symbol.x1.toFixed(2)),
+      xCenter: Number(symbol.xCenter.toFixed(2)),
+      coordinatePrecision: symbol.coordinatePrecision,
+      approver: column?.name ?? null,
+      columnCenter: column ? Number(column.xCenter.toFixed(2)) : null,
+    };
+  });
+
+  const entry = {
+    page: row.page,
+    row: row.row,
+    y: Number(row.y.toFixed(2)),
+    leftText,
+    filledTask: currentTask,
+    filledCondition: currentCondition,
+    mapped,
+    raw: compactRow(row),
+  };
+  mappedRows.push(entry);
+
+  if (
+    currentTask === "계약 및 협약 승인" &&
+    normalize(currentCondition).includes(normalize("30억원미만")) &&
+    mapped.some((x) => x.symbol === "◎" && x.approver === "실장")
+  ) {
+    targetRegression = entry;
+  }
+}
+
+console.log("PDF_PAGE34_MAPPED_ROWS_START");
+console.log(JSON.stringify(mappedRows, null, 2));
+console.log("PDF_PAGE34_MAPPED_ROWS_END");
+
+const nearbyKeywordRows = targetPage.rows
+  .filter(
+    (row) =>
+      /계약|협약|30\s*억|◎|★|☆/.test(row.text)
+  )
+  .map(compactRow);
+
+console.log("PDF_PAGE34_KEYWORD_ROWS_START");
+console.log(JSON.stringify(nearbyKeywordRows, null, 2));
+console.log("PDF_PAGE34_KEYWORD_ROWS_END");
+
+if (!targetRegression) {
+  throw new Error(
+    "fill-down regression failed: 계약 및 협약 승인 / 30억원 미만 / 실장 ◎ was not reconstructed"
+  );
+}
+
+console.log("PDF_FILL_DOWN_ASSERT_START");
+console.log(JSON.stringify(targetRegression, null, 2));
+console.log("PDF_FILL_DOWN_ASSERT_END");
+
+const multiSymbolRows = pages.flatMap((page) =>
   page.rows
-    .filter((row)=>row.segments.length >= 3)
-    .slice(0,8)
-    .map((row)=>({
-      page:page.page,
-      y:row.y,
-      segmentCount:row.segments.length,
-      segments:row.segments,
+    .map((row) => ({ page: page.page, row, symbols: symbolsInRow(row) }))
+    .filter((x) => x.symbols.length >= 2)
+    .map((x) => ({
+      page: x.page,
+      row: x.row.row,
+      text: x.row.text,
+      symbols: x.symbols.map((s) => ({
+        symbol: s.symbol,
+        xCenter: Number(s.xCenter.toFixed(2)),
+        sourceText: s.sourceText,
+      })),
     }))
-).slice(0,30);
+);
 
-const tableHeader = pages
-  .flatMap((page) => page.rows)
-  .find((row) =>
-    normalize(row.text).includes(
-      normalize("단 계 단계 구분 직종 및 호봉 운영 목표")
-    )
-  );
+console.log("PDF_MULTI_SYMBOL_ROWS_START");
+console.log(JSON.stringify(multiSymbolRows.slice(0, 40), null, 2));
+console.log("PDF_MULTI_SYMBOL_ROWS_END");
 
-const tableDataRow = pages
-  .flatMap((page) => page.rows)
-  .find((row) =>
-    normalize(row.text).includes(
-      normalize("1 단계 적응 단계")
-    ) &&
-    normalize(row.text).includes(
-      normalize("기초 능력 배양")
-    )
-  );
-
-console.log("PDF_TABLE_ROW_ASSERT_START");
-console.log(JSON.stringify({
-  header: tableHeader ?? null,
-  dataRow: tableDataRow ?? null,
-  multiSegmentRows: multiSegment.length,
-}, null, 2));
-console.log("PDF_TABLE_ROW_ASSERT_END");
-
-if (!tableHeader || !tableDataRow) {
-  throw new Error("PDF table row reconstruction failed");
+for (const row of multiSymbolRows) {
+  const centers = row.symbols.map((s) => s.xCenter);
+  if (new Set(centers).size !== centers.length) {
+    throw new Error("multiple symbols in one row did not receive individual x coordinates");
+  }
 }
 
-if (multiSegment.length === 0) {
-  throw new Error("PDF x-position segmentation produced no multi-column row");
-}
-
-console.log("PDF_MULTI_SEGMENT_ROWS_START");
-console.log(JSON.stringify(multiSegment, null, 2));
-console.log("PDF_MULTI_SEGMENT_ROWS_END");
-
-if (items.reduce((s,p)=>s+p.length,0) === 0) {
-  throw new Error("No positioned PDF text items extracted");
-}
+console.log("PDF_STRUCTURED_REGRESSION_PASS");
