@@ -4024,10 +4024,7 @@ function createServer() {
          */
         const maxLength = 40000;
 
-        const preferredText =
-          result.markdown?.trim()
-            ? result.markdown
-            : result.text;
+        const preferredText = result.text;
 
         const text =
           preferredText.length >
@@ -4039,31 +4036,10 @@ function createServer() {
               "\n\n[본문이 길어 일부 생략됨]"
             : preferredText;
 
-        const tableNotice =
-          result.tables.length > 0
-            ? [
-                `구조 인식 표: ${result.tables.length}개`,
-                "※ HWP/HWPX 표의 행·열·병합셀 구조를 별도로 인식했습니다.",
-                "※ 복잡한 표는 search_regulation_text에서 검색어와 같은 셀의 행·열 문맥을 함께 반환합니다.",
-              ]
-            : [];
-
-        const pdfLayoutNotice =
-          result.extension
-            .toLowerCase() === "pdf"
-            ? [
-                `PDF 페이지: ${result.pdfTotalPages ?? "확인 필요"}쪽`,
-                result.pdfLayout.length > 0
-                  ? `좌표 기반 행 분석: ${result.pdfLayout.length}쪽`
-                  : "좌표 기반 행 분석: 사용 안 함",
-                ...(result.pdfLayoutSkippedReason
-                  ? [
-                      result.pdfLayoutSkippedReason,
-                    ]
-                  : []),
-                "※ PDF는 표 셀/병합 구조가 파일에 명시되지 않는 경우가 많아 x/y 좌표를 이용해 표 문맥을 추정합니다.",
-              ]
-            : [];
+        const tableNotice = result.extension==='hwp'||result.extension==='hwpx'
+          ? ["※ HWP/HWPX 최신 원문을 공통 파일선택 코어에서 읽었습니다."] : [];
+        const pdfLayoutNotice = result.extension==='pdf'
+          ? ["※ 최신 선택 파일이 PDF입니다. 본문 검색은 텍스트 레이어 기준입니다."] : [];
 
         return {
           content: [
@@ -4082,7 +4058,7 @@ function createServer() {
                 ...tableNotice,
                 ...pdfLayoutNotice,
                 "",
-                `----- 최신 규정 본문${result.markdown ? " (Markdown)" : ""} -----`,
+                "----- 최신 규정 본문 -----",
                 text,
               ].join("\n"),
             },
@@ -4131,19 +4107,10 @@ function createServer() {
         const text =
           result.text;
 
-        const tableMatches =
-          searchStructuredTables(
-            result.tables,
-            query,
-            8
-          );
-
-        const pdfLayoutMatches =
-          searchPdfLayoutRows(
-            result.pdfLayout,
-            query,
-            8
-          );
+        const tableResult = await searchLatestRegulationTable(name, query);
+        const tableRows = tableResult.rows;
+        const tableMatches:any[] = [];
+        const pdfLayoutMatches:any[] = [];
 
         const lowered =
           text.toLowerCase();
@@ -4237,10 +4204,11 @@ function createServer() {
                 `other_attachments: ${JSON.stringify(result.other_attachments)}`,
                 `검색어: ${query}`,
                 `본문 검색결과: ${matches.length}건`,
-                `HWP/HWPX 표 구조 검색결과: ${tableMatches.length}건`,
-                `PDF 좌표 행 검색결과: ${pdfLayoutMatches.length}건`,
+                `표 구조 검색결과: ${tableRows.length}건`,
+                "PDF 과거첨부 좌표 결과: 0건",
                 `ALIO: ${result.sourceUrl}`,
                 "",
+                ...(tableRows.length?["===== 최신 파일 표 구조 결과 =====",JSON.stringify(tableRows,null,2),""]:[]),
                 ...tableMatches.map(
                   ({ table, cell, row, mode }, index) =>
                     [
