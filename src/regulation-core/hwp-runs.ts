@@ -17,8 +17,12 @@ export function hwpParagraphEvidence(bytes:Uint8Array,shapes:any[]){
  const byText=new Map<string,{runs:TextRun[];notes:{mark:string;text:string}[]}[]>();
  for(const path of f.FullPaths.filter(p=>/\/BodyText\/Section\d+$/.test(p))){
   const section=Number(path.match(/\d+$/)![0]),raw=Uint8Array.from(CFB.find(f,path)!.content!),rs=records(compressed?inflateSync(raw):raw);
+  const ancestors:number[]=[];
   for(let i=0;i<rs.length;i++){
-   const head=rs[i];if(head.tag!==66||head.level===0)continue;let end=i+1;while(end<rs.length&&rs[end].level>head.level)end++;
+   while(ancestors.length&&rs[ancestors.at(-1)!].level>=rs[i].level)ancestors.pop();
+   const inNote=ancestors.some(a=>rs[a].tag===71&&ctrl(rs[a].data)==='fn  ');
+   ancestors.push(i);
+   const head=rs[i];if(head.tag!==66||head.level===0||inNote)continue;let end=i+1;while(end<rs.length&&rs[end].level>head.level)end++;
    const direct=rs.slice(i+1,end).filter(r=>r.level===head.level+1),textRec=direct.find(r=>r.tag===67);if(!textRec)continue;
    const changes=direct.find(r=>r.tag===68)?.data,points:{pos:number;id:number}[]=[];
    if(changes){const v=view(changes);for(let p=0;p+8<=changes.length;p+=8)points.push({pos:v.getUint32(p,true),id:v.getUint32(p+4,true)});}
@@ -37,7 +41,6 @@ export function hwpParagraphEvidence(bytes:Uint8Array,shapes:any[]){
     else if((ch>=1&&ch<=8)||ch===11||ch===12||(ch>=14&&ch<=23))p+=16;
     else{add(ch>=32||ch===10?String.fromCharCode(ch):[24,25,31].includes(ch)?' ':ch===30?'-':'',pos);p+=2;}
    }
-   let ancestorNote=false;for(let a=i-1;a>=0;a--){if(rs[a].tag===71&&rs[a].level<head.level){if(ctrl(rs[a].data)==='fn  '){ancestorNote=true;break;}if(ctrl(rs[a].data)==='tbl ')break;}}if(ancestorNote)continue;
    const key=section+'\0'+plain(data),items=byText.get(key)??[];items.push({runs,notes});byText.set(key,items);
   }
  }
