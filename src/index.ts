@@ -8,6 +8,8 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
+const MCP_VERSION = "1.10.0";
+
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
 
@@ -3760,7 +3762,7 @@ function publicErrorCode(error:unknown):'timeout'|'parse_error'|'upstream_error'
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.9.0",
+    version: MCP_VERSION,
   });
 
   server.registerTool(
@@ -3771,7 +3773,7 @@ function createServer() {
       inputSchema: {},
     },
     async () => {
-      const data={status:"ready",runtime:"Cloudflare Workers",version:"1.9.0",tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
+      const data={status:"ready",runtime:"Cloudflare Workers",version: MCP_VERSION,tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
       return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
     }
   );

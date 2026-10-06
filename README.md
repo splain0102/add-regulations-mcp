@@ -9,6 +9,13 @@
 - 인증: OAuth 2.1 + Cloudflare Access
 - 기본 원칙: 같은 규정명이 여러 번 존재할 경우 최신 제·개정본을 우선
 
+## 1.10.0: 종합 개선 및 버전 표시 통일
+
+- PR #7의 종합 개선(최신 첨부 선택, text/multi approver, PDF 병합 업무 귀속, 일반표 values, 각주 및 오류 처리)을 포함합니다.
+- package.json, package-lock.json의 프로젝트 버전과 MCP 서버·hello의 버전을 1.10.0으로 통일했습니다.
+- MCP 서버와 hello는 동일한 MCP_VERSION 상수를 사용합니다.
+- 기존 Cloudflare MCP 주소와 OAuth/Access 설정은 유지합니다.
+
 ## 1.9.1: 병합 조건 귀속 및 응답 크기 수정
 
 - 위임전결표의 조건 셀은 시작 행에서만 검색 결과를 생성합니다. 그 시작 행을 덮는 업무·구분 셀에 귀속하며, 병합 구간의 새 업무에 조건을 중복 귀속하지 않습니다.
