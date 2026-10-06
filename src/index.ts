@@ -2833,7 +2833,8 @@ function searchPdfLayoutRows(
   row: PdfLayoutRow;
   mode:
     | "row"
-    | "tokens";
+    | "tokens"
+    | "fill-down";
 }[] {
   const normalizedQuery =
     normalizeTableSearch(
@@ -2842,49 +2843,6 @@ function searchPdfLayoutRows(
 
   if (!normalizedQuery) {
     return [];
-  }
-
-  const results: {
-    page: PdfLayoutPage;
-    row: PdfLayoutRow;
-    mode:
-      | "row"
-      | "tokens";
-  }[] = [];
-
-  const seen =
-    new Set<string>();
-
-  for (const page of pages) {
-    for (const row of page.rows) {
-      if (
-        normalizeTableSearch(
-          row.text
-        ).includes(
-          normalizedQuery
-        )
-      ) {
-        const key =
-          `${page.page}:${row.row}`;
-
-        if (!seen.has(key)) {
-          seen.add(key);
-
-          results.push({
-            page,
-            row,
-            mode: "row",
-          });
-        }
-
-        if (
-          results.length >=
-          limit
-        ) {
-          return results;
-        }
-      }
-    }
   }
 
   const tokens =
@@ -2901,54 +2859,113 @@ function searchPdfLayoutRows(
       )
       .filter(Boolean);
 
-  if (
-    tokens.length >= 2
-  ) {
-    for (
-      const page of pages
-    ) {
-      for (
-        const row of page.rows
+  const results: {
+    page: PdfLayoutPage;
+    row: PdfLayoutRow;
+    mode:
+      | "row"
+      | "tokens"
+      | "fill-down";
+  }[] = [];
+
+  const seen =
+    new Set<string>();
+
+  for (const page of pages) {
+    const detectedHeader =
+      detectKnownPdfHeader(
+        page.rows
+      );
+
+    const header =
+      detectedHeader &&
+      detectedHeader.matched >= 2
+        ? detectedHeader
+        : null;
+
+    for (const row of page.rows) {
+      const rawRowText =
+        normalizeTableSearch(
+          row.text
+        );
+
+      const inheritedTask =
+        findPdfInheritedTask(
+          page,
+          row.row,
+          header
+        );
+
+      const combinedText =
+        inheritedTask
+          ? `${row.text} ${inheritedTask}`
+          : row.text;
+
+      const normalizedCombined =
+        normalizeTableSearch(
+          combinedText
+        );
+
+      const directMatch =
+        rawRowText.includes(
+          normalizedQuery
+        );
+
+      const combinedMatch =
+        normalizedCombined.includes(
+          normalizedQuery
+        );
+
+      const tokenMatch =
+        tokens.length >= 2 &&
+        tokens.every(
+          (token) =>
+            normalizedCombined.includes(
+              token
+            )
+        );
+
+      if (
+        !directMatch &&
+        !combinedMatch &&
+        !tokenMatch
       ) {
-        const rowText =
-          normalizeTableSearch(
-            row.text
-          );
+        continue;
+      }
 
-        if (
-          tokens.every(
-            (token) =>
-              rowText.includes(
-                token
-              )
-          )
-        ) {
-          const key =
-            `${page.page}:${row.row}`;
+      const key =
+        `${page.page}:${row.row}`;
 
-          if (!seen.has(key)) {
-            seen.add(key);
+      if (seen.has(key)) {
+        continue;
+      }
 
-            results.push({
-              page,
-              row,
-              mode: "tokens",
-            });
-          }
+      seen.add(key);
 
-          if (
-            results.length >=
-            limit
-          ) {
-            return results;
-          }
-        }
+      results.push({
+        page,
+        row,
+        mode:
+          directMatch
+            ? "row"
+            : inheritedTask
+              ? "fill-down"
+              : "tokens",
+      });
+
+      if (
+        results.length >=
+        limit
+      ) {
+        return results;
       }
     }
   }
 
   return results;
 }
+
+
 
 function renderPdfLayoutRow(
   row: PdfLayoutRow,
@@ -3045,6 +3062,7 @@ function renderPdfLayoutMatch(
   mode:
     | "row"
     | "tokens"
+    | "fill-down"
 ): string {
   const detectedHeader =
     detectKnownPdfHeader(
@@ -3107,9 +3125,11 @@ function renderPdfLayoutMatch(
 
   return [
     `PDF ${page.page}쪽`,
-    mode === "tokens"
-      ? "일치 방식: 같은 PDF 행의 복합 검색어 일치"
-      : "일치 방식: PDF 행 일치",
+    mode === "fill-down"
+      ? "일치 방식: PDF fill-down 문맥 + 현재 행 복합 일치"
+      : mode === "tokens"
+        ? "일치 방식: 같은 PDF 행의 복합 검색어 일치"
+        : "일치 방식: PDF 행 일치",
     `기준 행: ${row.row}, y=${row.y.toFixed(1)}`,
     `기준 내용: ${row.text}`,
     ...(header
