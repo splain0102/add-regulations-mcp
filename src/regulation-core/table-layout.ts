@@ -10,9 +10,10 @@ export type Box={x0:number;y0:number;x1:number;y1:number};
 export type Cell={row:number;col:number;rowSpan:number;colSpan:number;text:string;x0:number;x1:number};
 export type Table={id:string;page:number|null;cells:Cell[];coordinateSpace:'table-column'|'table-local-hwpunit';context:string};
 export type SymbolPosition={symbol:string;x0:number;x1:number;x_center:number;suffix:string|null;coordinatePrecision:'text-item'|'estimated-within-text-item'|'explicit-cell'|'glyph-advance'};
-export type StructuredRow={page:number|null;table_id:string;category:string|null;task:string|null;condition:string|null;approver:string|null;symbol:string;symbol_x_center:number;suffix:string|null;legend:string|null;confidence:number;version_warning:unknown;symbol_coordinates:SymbolPosition;bounding_box:Box;coordinate_space:string;header_evidence:unknown;raw_cells:unknown;needs_review:boolean;coordinate_type?:'logical_cell'|'pdf_point';row?:number;col?:number;x_center?:number;y?:number;column_detection?:'vertical_lines'|'header_midpoints'|null;confidence_basis?:string[];fill_down?:unknown;debug?:unknown;effective_approver?:string|null;approver_basis?:unknown};
+export type StructuredRow={page:number|null;table_id:string;category:string|null;task:string|null;condition:string|null;approver:string|null;approver_type?:'symbol'|'text';approvers?:Array<{name:string|null;symbol:string|null;legend:string|null;suffix?:string|null}>;multi_approver?:boolean;footnotes?:Array<{mark:string;text:string}>;related_regulations?:string[];symbol:string|null;symbol_x_center:number;suffix:string|null;legend:string|null;confidence:number;version_warning:unknown;symbol_coordinates:SymbolPosition|null;bounding_box:Box;coordinate_space:string;header_evidence:unknown;raw_cells:unknown;needs_review:boolean;coordinate_type?:'logical_cell'|'pdf_point';row?:number;col?:number;x_center?:number;y?:number;column_detection?:'vertical_lines'|'header_midpoints'|null;confidence_basis?:string[];fill_down?:unknown;debug?:unknown;effective_approver?:string|null;approver_basis?:unknown};
 const compact=(s:string)=>s.replace(/\s+/g,'');
 const roles=['사책/과책','운영','실장','부장(센터장)','사업기구장','부소장','소장'];
+const textApproverName=(text:string)=>{const v=compact(text).replace(/[（]/g,'(').replace(/[）]/g,')');for(const r of ['직상위자','책임원','부서장','사업기구장','부소장','실장','운영','소장'])if(v===r||v===r+'전결')return r;return null;};
 export function roleName(text:string):string|null {
  const v=compact(text).replace(/[（]/g,'(').replace(/[）]/g,')');
  if(/사책.*과책|과책.*사책/.test(v))return roles[0];
@@ -101,11 +102,23 @@ export function structureTables(tables:Table[],text:string):StructuredRow[] {
  last.condition=conditions.map(c=>c.text.trim()).filter(Boolean).join(' / ')||null;
  }
  // Only explicit rowSpan or continuation carry prior values; blank cells may be meaningful.
- for(const c of direct){if(!/[◎★☆]/.test(c.text)||c.col<minRole)continue;
- for(const symbol of splitSymbols(c.text,c.x0,c.x1,'explicit-cell').map(s=>({...s,x0:c.x0,x1:c.x1,x_center:(c.x0+c.x1)/2}))){
- const candidate=headers.filter(h=>c.col>=h.col&&c.col+c.colSpan<=h.col+h.span);const header=candidate.length===1?candidate[0]:null;
- out.push({page:table.page,table_id:table.id,...last,approver:header?.name??null,symbol:symbol.symbol,symbol_x_center:symbol.x_center,suffix:symbol.suffix,legend:legends[symbol.symbol],confidence:header?0.98:0.5,version_warning:null,symbol_coordinates:symbol,bounding_box:{x0:c.col,y0:row,x1:c.col+c.colSpan,y1:row+c.rowSpan},coordinate_space:table.coordinateSpace,header_evidence:header,raw_cells:active.map(c=>({col:c.col,row:c.row,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.text})),needs_review:!header});
- }}priorValues={...last};
+ const approvals:Array<{name:string|null;symbol:string|null;legend:string|null;suffix:string|null;cell:Cell;position:SymbolPosition|null;type:'symbol'|'text';header:typeof headers[number]|null}>=[];
+ for(const c of direct){if(c.col<minRole)continue;
+   if(/[◎★☆]/.test(c.text)){
+     for(const symbol of splitSymbols(c.text,c.x0,c.x1,'explicit-cell').map(s=>({...s,x0:c.x0,x1:c.x1,x_center:(c.x0+c.x1)/2}))){
+       const candidate=headers.filter(h=>c.col>=h.col&&c.col+c.colSpan<=h.col+h.span);const header=candidate.length===1?candidate[0]:null;
+       approvals.push({name:header?.name??null,symbol:symbol.symbol,legend:legends[symbol.symbol],suffix:symbol.suffix,cell:c,position:symbol,type:'symbol',header});
+     }
+   } else {
+     const textName=textApproverName(c.text);
+     if(textName) approvals.push({name:textName,symbol:null,legend:null,suffix:null,cell:c,position:null,type:'text',header:null});
+   }
+ }
+ if(approvals.length){
+   const first=approvals[0],multi=approvals.length>1;
+   out.push({page:table.page,table_id:table.id,...last,approver:first.name,approver_type:first.type,approvers:approvals.map(a=>({name:a.name,symbol:a.symbol,legend:a.legend,suffix:a.suffix})),multi_approver:multi,symbol:first.symbol,symbol_x_center:first.position?.x_center??first.cell.col,suffix:first.suffix,legend:first.legend,confidence:approvals.every(a=>a.name)?0.98:0.5,version_warning:null,symbol_coordinates:first.position,bounding_box:{x0:Math.min(...approvals.map(a=>a.cell.col)),y0:row,x1:Math.max(...approvals.map(a=>a.cell.col+a.cell.colSpan)),y1:row+1},coordinate_space:table.coordinateSpace,header_evidence:first.header,raw_cells:active.map(c=>({col:c.col,row:c.row,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.text})),needs_review:approvals.some(a=>!a.name)});
+ }
+ priorValues={...last};
  }
  }return out;
 }
@@ -117,6 +130,8 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  const revisions=[...(lastHeading?.[0]??'').matchAll(/20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2}/g)].map(m=>normalize(m[0])).filter(Boolean) as string[];
  const effective=[...section.matchAll(/(20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2})[^\n]{0,25}시행/g)].map(m=>normalize(m[1])).filter(Boolean) as string[];
  const r=revisions.sort().at(-1),e=effective.sort().at(-1);if(r)dates.push({source:'body_last_revision_date',date:r});if(e)dates.push({source:'body_last_effective_date',date:e});
+ const dayDiff=(a:string,b:string)=>Math.abs(Date.parse(a+'T00:00:00Z')-Date.parse(b+'T00:00:00Z'))/86400000;
  const mismatches=dates.flatMap((d,i)=>dates.slice(i+1).filter(o=>o.date!==d.date).map(o=>({left:d,right:o,kind:d.source.includes('effective')||o.source.includes('effective')?'effective_date_difference':'revision_date_mismatch'})));
- return {dates,checked:dates.length>=2,warning:mismatches.length?{code:'version_date_mismatch',mismatches,note:'시행일과 개정일 차이는 정상일 수 있으므로 원문 확인이 필요합니다.'}:null,missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s))};
+ const onlyEffectiveNear=mismatches.length>0&&mismatches.every(m=>m.kind==='effective_date_difference'&&dayDiff(m.left.date,m.right.date)<=7);
+ return {dates,checked:dates.length>=2,info:onlyEffectiveNear?{code:'effective_date_near_revision',mismatches}:null,warning:mismatches.length&&!onlyEffectiveNear?{code:'version_date_mismatch',mismatches,note:'시행일과 개정일 차이는 정상일 수 있으므로 원문 확인이 필요합니다.'}:null,missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s))};
 }
