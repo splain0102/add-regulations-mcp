@@ -1,3 +1,13 @@
+## 1.10.1 — second validation fixes (draft)
+
+- Metadata lookup uses a bounded, cached supplementary-provision scan instead of the full document/table parser. Cache identity includes fileNo and idate.
+- A latest attachment confirmed by both filename and supplementary provisions prevents obsolete attachments from being opened. Individual probe failures are recorded as `parse_failed` and do not reject the remaining candidates.
+- All table paths default to compact output. Headers appear once in `tables`; values, text/multiple approvers, footnotes and PDF point evidence remain available. Detailed cells require `compact:false`; pagination uses `offset`/`next_offset`.
+- Delegation tables retain their table classification even without an approval symbol. Carried condition cells cannot create a new ghost row under the following task.
+- Add `npm run test:second-fixes` for ten consecutive metadata/table iterations, general-table compact/detailed output, isolated attachment failure and probe cache invalidation.
+
+This draft addresses P0 and the visible part of P1. The submitted request ended mid-sentence; the other three issues have not been specified. No production deployment or Site Publish is part of this draft.
+
 # ADD Regulations MCP
 
 국방과학연구소(ADD)의 ALIO 내부규정을 조회하고, 최신 첨부파일의 본문까지 검색할 수 있도록 만든 Remote MCP 서버입니다.
@@ -315,4 +325,5 @@ ALIO 목록의 제·개정일과 첨부파일명에 적힌 날짜가 서로 다�
 이 프로젝트는 ALIO 조회/문서 파싱 로직과 Cloudflare OAuth/배포 로직을 가능한 한 분리하는 방향으로 유지합니다.
 
 향후 다른 MCP 호스팅 환경이나 ChatGPT Site-hosted MCP로 이식할 때도 ALIO 및 HWP/PDF 처리 로직을 최대한 재사용하는 것이 목표입니다.
+
 

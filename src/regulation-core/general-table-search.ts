@@ -66,6 +66,16 @@ export function searchGeneralTables(tables:Table[],query:string,delegationRows:S
   }
   const base={source_type:sourceType,analysis_type:(Math.max(0,...table.cells.map(c=>c.row+c.rowSpan))===1&&Math.max(0,...table.cells.map(c=>c.col+c.colSpan))===1)?'text_box':'general_table',coordinate_type:'logical_cell',coordinate_space:'logical-cell-address',page:null,table_id:table.id,row,match_mode:mode,matched_cell:cellJson(cell),cells:contextualCells,columns,values,header_evidence:{rows:headers},raw_cells:cells.map(cellJson),needs_review:false,bounding_box:{x0:0,y0:row,x1:Math.max(...cells.map(c=>c.col+c.colSpan)),y1:row+1}};
   const specialized=delegationRows.filter(r=>r.table_id===table.id&&r.bounding_box.y0===row);
-  return specialized.length?specialized.map(r=>({...base,...r,analysis_type:'delegation_table',coordinate_type:'logical_cell',row,col:r.bounding_box.x0,coordinate:{coordinate_type:'logical_cell',row,col:r.bounding_box.x0},symbol_coordinates:{...r.symbol_coordinates,coordinate_type:'logical_cell',row,col:r.bounding_box.x0},header_evidence:{...(r.header_evidence as object??{}),rows:headers,columns},confidence_basis:['explicit_cell_span','header_detected','symbol_inside_column']})):[base];
+  const isDelegation=roleColumns.length>=2||delegationRows.some(r=>r.table_id===table.id);
+  if(isDelegation&&!headerRows.includes(row)){
+   const minRole=Math.min(...roleColumns.map(h=>h.col));
+   const contentCols=[...new Set(table.cells.filter(c=>c.col<minRole).map(c=>c.col))].sort((a,b)=>a-b).slice(0,3);
+   const fieldCells=contentCols.map(col=>cells.find(c=>c.col<=col&&c.col+c.colSpan>col));
+   const conditionCell=fieldCells[2],taskCell=fieldCells[1];
+   // A carried condition cannot be attached to a new task beginning inside its span.
+   if(!specialized.length&&conditionCell&&conditionCell!==taskCell&&conditionCell.row!==row)return [];
+   if(!specialized.length)return [{...base,analysis_type:'delegation_table',category:fieldCells[0]?.text??null,task:taskCell?.text??null,condition:conditionCell!==taskCell?conditionCell?.text??null:null,approver:null,symbol:null,suffix:null,legend:null,confidence:0,needs_review:true,review_reasons:['delegation_approval_evidence_missing']}];
+  }
+  return specialized.length?specialized.map(r=>({...base,...r,analysis_type:'delegation_table',coordinate_type:'logical_cell',row,col:r.bounding_box.x0,coordinate:{coordinate_type:'logical_cell',row,col:r.bounding_box.x0},symbol_coordinates:{...r.symbol_coordinates,coordinate_type:'logical_cell',row,col:r.bounding_box.x0},header_evidence:{...(r.header_evidence as object??{}),rows:headers,columns},confidence_basis:['explicit_cell_span','header_detected','symbol_inside_column']})):[{...base,...(isDelegation?{analysis_type:'delegation_table',approver:null,needs_review:true}: {})}];
  });
 }

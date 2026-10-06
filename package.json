@@ -1,13 +1,14 @@
 {
   "name": "add-regulations-mcp",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "private": true,
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "build:check": "wrangler deploy --dry-run --outdir .build-check",
     "test:tables": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/structured-table-regression.ts",
-    "test:delegation-response": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/delegation-response-regression.ts"
+    "test:delegation-response": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/delegation-response-regression.ts",
+    "test:second-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/second-fixes-regression.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.0.0",
@@ -16,7 +17,8 @@
     "fflate": "^0.8.2",
     "zod": "^4.5.4",
     "@ssabrojs/hwpxjs": "0.4.0",
-    "unpdf": "1.8.1"
+    "unpdf": "1.8.1",
+    "cfb": "1.2.2"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"

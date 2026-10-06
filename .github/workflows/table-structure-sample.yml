@@ -22,10 +22,14 @@ jobs:
       - run: node scripts/table-sample.mjs
       - id: comprehensive
         run: node --use-env-proxy --import ./scripts/test-loader.mjs scripts/comprehensive-regression.ts
+      - name: second-fixes regression
+        run: npm run test:second-fixes
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: comprehensive-regression
-          path: reports/comprehensive-regression.json
+          path: |
+            reports/comprehensive-regression.json
+            reports/second-fixes-regression.json
           if-no-files-found: ignore
       - run: npx wrangler deploy --dry-run --outdir /tmp/add-regulations-mcp-dry-run

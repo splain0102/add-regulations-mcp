@@ -3,7 +3,7 @@ import {parseHwp} from '@ssabrojs/hwpxjs/browser';
 export {extractPdfLayout} from './pdf-table-layout';
 
 export class DocumentError extends Error {
- code:'timeout'|'download_error'|'parse_error'|'no_text_layer'|'layout_error';
+ code:'timeout'|'download_error'|'parse_error'|'no_text_layer'|'layout_error'|'selection_error'|'upstream_error';
  constructor(code:DocumentError['code'],message:string){super(message);this.code=code;this.name='DocumentError';}
 }
 export type Box={x0:number;y0:number;x1:number;y1:number};
@@ -143,3 +143,4 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  const onlyEffectiveNear=mismatches.length>0&&mismatches.every(m=>m.kind==='effective_date_difference'&&dayDiff(m.left.date,m.right.date)<=7);
  return {dates,checked:dates.length>=2,info:onlyEffectiveNear?{code:'effective_date_near_revision',mismatches}:null,warning:mismatches.length&&!onlyEffectiveNear?{code:'version_date_mismatch',mismatches,note:'시행일과 개정일 차이는 정상일 수 있으므로 원문 확인이 필요합니다.'}:null,missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s))};
 }
+
