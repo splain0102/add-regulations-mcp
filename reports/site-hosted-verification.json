@@ -1,0 +1,185 @@
+{
+  "site": {
+    "name": "add-regulations-portal",
+    "publishedVersion": 5,
+    "sourceCommit": "793d45ca186867e0e1986a0468f272a5fdb9cc95",
+    "url": "https://add-regulations-portal.splain0102.chatgpt.site"
+  },
+  "execution": "Actual published Site-hosted MCP calls; this is not a Cloudflare deployment test.",
+  "tests": [
+    {
+      "name": "위임전결규정",
+      "query": "30억원 미만",
+      "status": "passed",
+      "actualMatches": 3,
+      "structureMatches": true,
+      "needs_review": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "사업관리부서 예산관리부서",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "군수용 기술용역",
+      "status": "passed",
+      "actualMatches": 2,
+      "structureMatches": true,
+      "needs_review": [
+        false,
+        false
+      ]
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "민수용 기술용역",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "연구용역",
+      "status": "passed",
+      "actualMatches": 4,
+      "structureMatches": true,
+      "needs_review": [
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "군지원 기술용역",
+      "status": "passed",
+      "actualMatches": 4,
+      "structureMatches": true,
+      "needs_review": [
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "민군기술협력 담당부서",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    },
+    {
+      "name": "보고서 작성 및 관리요령",
+      "query": "소내망",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    },
+    {
+      "name": "보고서 작성 및 관리요령",
+      "query": "국방망",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    },
+    {
+      "name": "보고서 작성 및 관리요령",
+      "query": "통제(R) 원문",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    },
+    {
+      "name": "연구시설·장비의 관리 등에 관한 요령",
+      "query": "장비명 제작사 모델명",
+      "status": "passed",
+      "actualMatches": 4,
+      "structureMatches": true,
+      "needs_review": [
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "연구시설·장비의 관리 등에 관한 요령",
+      "query": "기존 장비명 처분계획",
+      "status": "passed",
+      "actualMatches": 2,
+      "structureMatches": true,
+      "needs_review": [
+        false,
+        false
+      ]
+    },
+    {
+      "name": "계약요령",
+      "query": "상호 구분",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    },
+    {
+      "name": "계약요령",
+      "query": "제 3 차",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    },
+    {
+      "name": "계약요령",
+      "query": "낙찰금액",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    },
+    {
+      "name": "계약요령",
+      "query": "제 1 차",
+      "status": "passed",
+      "actualMatches": 1,
+      "structureMatches": true,
+      "needs_review": [
+        false
+      ]
+    }
+  ],
+  "cloudflareDeployment": "not_performed"
+}

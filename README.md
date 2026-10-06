@@ -9,6 +9,33 @@
 - 인증: OAuth 2.1 + Cloudflare Access
 - 기본 원칙: 같은 규정명이 여러 번 존재할 경우 최신 제·개정본을 우선
 
+## 1.9.0: 범용 규정 표 검색
+
+기존 Site `add-regulations-portal` 게시 버전 5의 표 검색 코어(소스 커밋 `793d45ca186867e0e1986a0468f272a5fdb9cc95`)를 Cloudflare 서버에 반영했습니다. OAuth 2.1, Cloudflare Access, 기존 목록·본문·조문 검색 도구는 유지합니다.
+
+`search_regulation_table({name, query, limit?, includeRegion?})`는 위임전결표 외 일반 표도 검색합니다.
+
+- HWP/HWPX: 실제 셀의 `row`, `col`, `rowSpan`, `colSpan`을 보존하고 병합셀 아래 행에도 같은 셀 증거를 유지합니다. 여러 검색어가 같은 논리 행의 다른 셀에 분산되어 있어도 검색됩니다.
+- 다단 헤더: `header_evidence`와 각 셀의 `header_path`를 반환합니다. 일반 표에 전결권자를 강제로 배정하지 않습니다.
+- 위임전결표: 실제 기호와 헤더로 판단하고 근거가 부족하면 `needs_review=true`를 반환합니다.
+- PDF: `coordinate_type=pdf_point`로 실제 페이지 좌표를 반환하며 HWP의 `logical_cell`과 구분합니다. 과거 PDF fileNo 166852의 실제 헤더는 3열이고 최신 HWP의 7열로 보정하지 않습니다.
+- 표 코어 문서 캐시는 `fileNo + idate`를 사용합니다. ALIO의 `stDate=제·개정일`, `idate=최종수정일`과 재시도를 유지합니다.
+
+### 검증과 배포 상태
+
+Site 게시 버전 5에서는 A–E 16개 실제 Site-hosted 호출을 검증했습니다. 이 사실은 별도 Cloudflare 서버 배포 성공을 의미하지 않습니다. 이 브랜치의 Cloudflare 런타임 번들은 `npm run build:check`로 확인하고, 코어는 `npm run test:tables`로 실제 ALIO 파일의 셀 구조와 A–F 회귀를 검사합니다. PDF F는 최신 답변에 대체 사용하지 않는 과거 개정본 회귀시험입니다.
+
+이번 작업 환경에는 Cloudflare 인증이 없어 이 변경의 Cloudflare production 배포와 Claude 원격 호출은 아직 수행하지 않았습니다. GitHub push만으로 기존 Worker가 변경되었다고 간주하지 마십시오. 인증된 기존 Cloudflare 프로젝트에서 다음 명령을 실행하고 `hello.version=1.9.0`과 아래 기능 상태를 확인해야 합니다.
+
+```sh
+npm ci
+npm run build:check
+npm run test:tables  # Node 24 이상; ALIO 접근 필요
+npm run deploy
+```
+
+배포 후 `hello`는 `tableStructure`, `pdfLayout`, `symbolCoordinates`, `columnMapping`, `fillDown`, `versionCheck`, `generalTables`를 반환합니다. 이 값은 구현 상태이며 실제 Cloudflare 원격 회귀시험을 대신하지 않습니다. 기존 `wrangler.jsonc`의 Worker명, KV 및 OAuth/Access 설정과 비밀값은 유지합니다.
+
 ## 현재 확인된 기능
 
 실제 Claude 연결을 통해 아래 기능을 순서대로 검증했습니다.
@@ -268,3 +295,4 @@ ALIO 목록의 제·개정일과 첨부파일명에 적힌 날짜가 서로 다�
 이 프로젝트는 ALIO 조회/문서 파싱 로직과 Cloudflare OAuth/배포 로직을 가능한 한 분리하는 방향으로 유지합니다.
 
 향후 다른 MCP 호스팅 환경이나 ChatGPT Site-hosted MCP로 이식할 때도 ALIO 및 HWP/PDF 처리 로직을 최대한 재사용하는 것이 목표입니다.
+

@@ -3,6 +3,28 @@ import { HwpxReader, hwpToHwpx, parseHwp, hwpToMarkdown } from "@ssabrojs/hwpxjs
 const URL =
   "https://www.alio.go.kr/download/rulefiledown.json?fileNo=239154";
 
+const TECHNICAL_SERVICE_URL =
+  "https://www.alio.go.kr/download/rulefiledown.json?fileNo=228379";
+
+
+async function fetchWithRetry(url, init, attempts = 4) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      if (response.ok || response.status < 500) return response;
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+  throw lastError;
+}
+
+
 function paragraphText(p) {
   const runText = Array.isArray(p.runs)
     ? p.runs.map((r) => r.text ?? "").join("")
@@ -59,7 +81,7 @@ function findKeywordContexts(tables, keyword) {
   return results;
 }
 
-const response = await fetch(URL, {
+const response = await fetchWithRetry(URL, {
   headers: {
     "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-Table-Test/1.0",
   },
@@ -255,3 +277,251 @@ if (hwpxRowSpanCount === 0 || hwpxColSpanCount === 0) {
 if (!hwpxMarkdown.includes("기술용역")) {
   throw new Error("HWPX markdown lost expected table text");
 }
+
+
+async function runGeneralTableRegression() {
+  const response = await fetchWithRetry(TECHNICAL_SERVICE_URL, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-General-Table-Test/1.0",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`technical service download failed: HTTP ${response.status}`);
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const doc = parseHwp(bytes);
+  const tables = [];
+
+  for (const section of doc.sections ?? []) {
+    for (const paragraph of section.paragraphs ?? []) {
+      for (const control of paragraph.controls ?? []) {
+        if (control.kind === "table") tables.push(control);
+      }
+    }
+  }
+
+  const businessTable = tables.find((table) => {
+    const all = table.cells.map(cellText).join(" ");
+    return all.includes("사업 구분") &&
+      all.includes("사업관리부서") &&
+      all.includes("예산관리부서") &&
+      all.includes("연구용역") &&
+      all.includes("군지원 기술용역");
+  });
+
+  if (!businessTable) {
+    throw new Error("general table regression failed: 업무유형별 담당부서 표를 찾지 못함");
+  }
+
+  const rowSnapshots = [];
+  for (let row = 0; row < businessTable.rowCount; row++) {
+    const cells = rowCells(businessTable, row)
+      .filter((cell) => cellText(cell))
+      .map((cell) => ({
+        col: cell.col,
+        rowSpan: cell.rowSpan,
+        colSpan: cell.colSpan,
+        text: cellText(cell),
+      }));
+    if (cells.length) rowSnapshots.push({ row, cells });
+  }
+
+  const flat = rowSnapshots
+    .flatMap((entry) => entry.cells.map((cell) => cell.text))
+    .join(" ");
+
+  for (const expected of [
+    "사업 구분",
+    "사업관리부서",
+    "예산관리부서",
+    "연구용역",
+    "군지원 기술용역",
+    "군수용 기술용역",
+    "민수용 기술용역",
+    "민군기술협력 담당부서",
+  ]) {
+    if (!flat.includes(expected)) {
+      throw new Error(`general table regression lost expected text: ${expected}`);
+    }
+  }
+
+  const hasMergedCell = businessTable.cells.some(
+    (cell) => Number(cell.rowSpan ?? 1) > 1 || Number(cell.colSpan ?? 1) > 1
+  );
+  if (!hasMergedCell) {
+    throw new Error("general table regression failed: merged-cell evidence missing");
+  }
+
+  console.log("GENERAL_TABLE_REGRESSION_PASS", JSON.stringify({
+    fileNo: "228379",
+    tableShape: {
+      rows: businessTable.rowCount,
+      cols: businessTable.colCount,
+    },
+    headers: ["사업 구분", "사업관리부서", "예산관리부서"],
+    cases: [
+      "연구용역",
+      "군지원 기술용역",
+      "군수용 기술용역",
+      "민수용 기술용역",
+      "민군기술협력 담당부서",
+    ],
+    hasMergedCell,
+    rowSnapshots,
+  }));
+}
+
+await runGeneralTableRegression();
+
+
+const CROSS_REGULATION_CASES = [
+  {
+    name: "보고서 작성 및 관리요령",
+    fileNo: "239155",
+    requiredGroups: [
+      ["구분", "관 리 등 급", "공개대상"],
+      ["소내망", "국방망"],
+    ],
+  },
+  {
+    name: "연구시설·장비의 관리 등에 관한 요령",
+    fileNo: "228382",
+    requiredGroups: [
+      ["순번", "장비명", "제작사", "모델명", "취득연도"],
+      ["기존 장비명", "용도", "구축가격", "활용상태", "처분계획"],
+    ],
+  },
+  {
+    name: "계약요령",
+    fileNo: "238456",
+    requiredGroups: [
+      ["상호", "구분"],
+      ["제 1 차", "제 2 차", "제 3 차"],
+    ],
+  },
+];
+
+async function parseTablesFromFileNo(fileNo) {
+  const response = await fetchWithRetry(
+    `https://www.alio.go.kr/download/rulefiledown.json?fileNo=${fileNo}`,
+    { headers: { "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-Cross-Regulation-Test/1.0" } }
+  );
+  if (!response.ok) throw new Error(`download failed for ${fileNo}: HTTP ${response.status}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const doc = parseHwp(bytes);
+  const tables = [];
+  for (const section of doc.sections ?? []) {
+    for (const paragraph of section.paragraphs ?? []) {
+      for (const control of paragraph.controls ?? []) {
+        if (control.kind === "table") tables.push(control);
+      }
+    }
+  }
+  return tables;
+}
+
+async function runCrossRegulationTableRegression() {
+  const summaries = [];
+  for (const testCase of CROSS_REGULATION_CASES) {
+    const tables = await parseTablesFromFileNo(testCase.fileNo);
+    const groups = testCase.requiredGroups.map((group) => {
+      const tableIndex = tables.findIndex((table) => {
+        const flat = table.cells.map(cellText).join(" ");
+        return group.every((term) => flat.includes(term));
+      });
+      if (tableIndex < 0) {
+        throw new Error(
+          `cross regulation table regression failed: ${testCase.name} missing table group ${group.join(" / ")}`
+        );
+      }
+      const table = tables[tableIndex];
+      return {
+        terms: group,
+        tableIndex,
+        rowCount: table.rowCount,
+        colCount: table.colCount,
+        merged: table.cells.some(
+          (cell) => Number(cell.rowSpan ?? 1) > 1 || Number(cell.colSpan ?? 1) > 1
+        ),
+        sample: table.cells
+          .filter((cell) => cellText(cell))
+          .slice(0, 18)
+          .map((cell) => ({
+            row: cell.row,
+            col: cell.col,
+            rowSpan: cell.rowSpan,
+            colSpan: cell.colSpan,
+            text: cellText(cell).slice(0, 100),
+          })),
+      };
+    });
+    summaries.push({
+      name: testCase.name,
+      fileNo: testCase.fileNo,
+      tableCount: tables.length,
+      groups,
+    });
+  }
+  console.log("CROSS_REGULATION_TABLE_REGRESSION_PASS", JSON.stringify(summaries));
+}
+
+await runCrossRegulationTableRegression();
+
+
+function genericSearchTable(tables, query, limit = 8) {
+  const q = normalizeTableSearch(query);
+  const tokens = query.normalize("NFKC").split(/[\s,;/]+/).map(normalizeTableSearch).filter(Boolean);
+  const results = [];
+  const seen = new Set();
+  for (const table of tables) {
+    for (const cell of table.cells) {
+      if (!normalizeTableSearch(cellText(cell)).includes(q)) continue;
+      const key = `${table.index}:cell:${cell.row}:${cell.col}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({ table, cell, row: cell.row, mode: "cell" });
+      if (results.length >= limit) return results;
+    }
+  }
+  if (tokens.length >= 2) {
+    for (const table of tables) {
+      for (let row = 0; row < table.rowCount; row++) {
+        const cells = table.cells.filter(cell => cell.row <= row && row < cell.row + (cell.rowSpan ?? 1));
+        const text = normalizeTableSearch(cells.map(cellText).join(" "));
+        if (!tokens.every(token => text.includes(token))) continue;
+        const anchor = cells.find(cell => cellText(cell));
+        if (!anchor) continue;
+        const key = `${table.index}:row:${row}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push({ table, cell: anchor, row, mode: "row" });
+        if (results.length >= limit) return results;
+      }
+    }
+  }
+  return results;
+}
+
+async function runGenericTableSearchRegression() {
+  const cases = [
+    { name: "보고서 작성 및 관리요령", fileNo: "239155", query: "소내망", expected: ["소내망", "⊙"] },
+    { name: "연구시설·장비의 관리 등에 관한 요령", fileNo: "228382", query: "장비명 제작사 모델명", expected: ["장비명", "제작사", "모델명"] },
+    { name: "계약요령", fileNo: "238456", query: "제 3 차", expected: ["제 3 차"] },
+  ];
+  const summary = [];
+  for (const testCase of cases) {
+    const tables = await parseTablesFromFileNo(testCase.fileNo);
+    tables.forEach((table, index) => { table.index = index; });
+    const matches = genericSearchTable(tables, testCase.query, 8);
+    if (!matches.length) throw new Error(`generic table search failed: ${testCase.name} / ${testCase.query}`);
+    const rowText = matches.flatMap(({table,row}) => table.cells.filter(cell => cell.row <= row && row < cell.row + (cell.rowSpan ?? 1)).map(cellText)).join(" ");
+    for (const expected of testCase.expected) {
+      if (!rowText.includes(expected)) throw new Error(`generic table search missing expected text: ${testCase.name} / ${expected}`);
+    }
+    summary.push({ name:testCase.name, query:testCase.query, matches:matches.length, first:{table:matches[0].table.index+1,row:matches[0].row,mode:matches[0].mode} });
+  }
+  console.log("GENERIC_TABLE_SEARCH_REGRESSION_PASS", JSON.stringify(summary));
+}
+
+await runGenericTableSearchRegression();
