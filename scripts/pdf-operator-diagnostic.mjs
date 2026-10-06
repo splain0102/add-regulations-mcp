@@ -4,9 +4,15 @@ if(!r.ok) throw new Error(String(r.status));
 const pdf=await getDocumentProxy(new Uint8Array(await r.arrayBuffer()));
 const page=await pdf.getPage(17);
 const ops=await page.getOperatorList();
+const counts=new Map();
+const samples=new Map();
 for(let i=0;i<ops.fnArray.length;i++){
-  const s=JSON.stringify(ops.argsArray[i]);
-  if(/사책|과책|운영|실장|센터|부소장|소장|국정감사/.test(s)){
-    console.log("OP",i,ops.fnArray[i],s);
-  }
+  const fn=ops.fnArray[i];
+  counts.set(fn,(counts.get(fn)??0)+1);
+  if(!samples.has(fn)) samples.set(fn,[]);
+  if(samples.get(fn).length<4) samples.get(fn).push(ops.argsArray[i]);
+}
+console.log("COUNTS",JSON.stringify([...counts.entries()].sort((a,b)=>b[1]-a[1])));
+for(const [fn,args] of [...samples.entries()].sort((a,b)=>a[0]-b[0])){
+  console.log("FN",fn,JSON.stringify(args).slice(0,5000));
 }
