@@ -156,59 +156,113 @@ function groupRows(items, page) {
 
 function clusterHeaderSegments(rows, start, count) {
   const nodes = [];
+
   for (let offset = 0; offset < count; offset++) {
     const row = rows[start + offset];
     if (!row) continue;
-    for (const seg of row.segments) {
-      nodes.push({ ...seg, rowOffset: offset, y: row.y });
+
+    for (const segment of row.segments) {
+      const sourceItems =
+        Array.isArray(segment.sourceItems) && segment.sourceItems.length
+          ? segment.sourceItems
+          : [
+              {
+                str: segment.text,
+                x: segment.x,
+                width: segment.xEnd - segment.x,
+                fontSize: segment.fontSize,
+              },
+            ];
+
+      for (const item of sourceItems) {
+        const text = String(item.str ?? "").replace(/\s+/g, " ").trim();
+        if (!text) continue;
+
+        const x = Number(item.x);
+        const width = Number(item.width);
+        if (!Number.isFinite(x)) continue;
+
+        nodes.push({
+          x,
+          xEnd: x + (Number.isFinite(width) ? width : 0),
+          text,
+          rowOffset: offset,
+          y: row.y,
+          fontSize: Number(item.fontSize) || row.fontMedian || 9,
+        });
+      }
     }
   }
 
-  const clusters = [];
-  for (const node of nodes) {
-    const nodeWidth = Math.max(1, node.xEnd - node.x);
-    const nodeCenter = centerOf(node);
-    let best;
-    let bestScore = -1;
+  const expected = EXPECTED_HEADERS.map((name) => ({
+    name,
+    normalized: normalizeHeader(name),
+  }));
+  const expectedSet = new Set(expected.map((x) => x.normalized));
 
-    for (const cluster of clusters) {
-      if (cluster.nodes.some((n) => n.rowOffset === node.rowOffset)) continue;
+  const orderedNodes = [...nodes].sort(
+    (a, b) => a.rowOffset - b.rowOffset || a.x - b.x
+  );
 
-      const cx0 = Math.min(...cluster.nodes.map((n) => n.x));
-      const cx1 = Math.max(...cluster.nodes.map((n) => n.xEnd));
-      const cWidth = Math.max(1, cx1 - cx0);
-      const overlap = horizontalOverlap(node, { x: cx0, xEnd: cx1 });
-      const overlapRatio = overlap / Math.min(nodeWidth, cWidth);
-      const cCenter = (cx0 + cx1) / 2;
-      const centerDistance = Math.abs(nodeCenter - cCenter);
-      const proximity = centerDistance <= Math.max(5, Math.min(nodeWidth, cWidth) * 0.45);
+  function relation(a, b) {
+    const widthA = Math.max(1, a.xEnd - a.x);
+    const widthB = Math.max(1, b.xEnd - b.x);
 
-      const score = overlapRatio * 10 - centerDistance / 100;
-      if ((overlapRatio >= 0.2 || proximity) && score > bestScore) {
-        best = cluster;
-        bestScore = score;
+    if (a.rowOffset === b.rowOffset) {
+      const left = a.x <= b.x ? a : b;
+      const right = left === a ? b : a;
+      const gap = Math.max(0, right.x - left.xEnd);
+      const font = Math.max(1, Math.min(a.fontSize, b.fontSize));
+      return gap <= Math.max(8, font * 1.8);
+    }
+
+    const overlap = horizontalOverlap(a, b);
+    const overlapRatio = overlap / Math.min(widthA, widthB);
+    const centerDistance = Math.abs(centerOf(a) - centerOf(b));
+    return (
+      overlapRatio >= 0.18 ||
+      centerDistance <= Math.max(6, Math.min(widthA, widthB) * 0.55)
+    );
+  }
+
+  function connected(combo) {
+    if (combo.length <= 1) return true;
+
+    const visited = new Set([0]);
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      for (let i = 0; i < combo.length; i++) {
+        if (!visited.has(i)) continue;
+        for (let j = 0; j < combo.length; j++) {
+          if (visited.has(j)) continue;
+          if (relation(combo[i], combo[j])) {
+            visited.add(j);
+            changed = true;
+          }
+        }
       }
     }
 
-    if (best) {
-      best.nodes.push(node);
-    } else {
-      clusters.push({ nodes: [node] });
-    }
+    return visited.size === combo.length;
   }
 
-  return clusters.map((cluster) => {
-    const ordered = [...cluster.nodes].sort(
+  function candidateFromNodes(combo) {
+    const ordered = [...combo].sort(
       (a, b) => a.rowOffset - b.rowOffset || a.x - b.x
     );
+    const text = ordered.map((n) => n.text).join(" ");
+    const normalized = normalizeHeader(text);
     const x = Math.min(...ordered.map((n) => n.x));
     const xEnd = Math.max(...ordered.map((n) => n.xEnd));
+
     return {
       x,
       xEnd,
       xCenter: (x + xEnd) / 2,
-      text: ordered.map((n) => n.text).join(" "),
-      normalized: normalizeHeader(ordered.map((n) => n.text).join(" ")),
+      text,
+      normalized,
       rowOffsets: [...new Set(ordered.map((n) => n.rowOffset))],
       parts: ordered.map((n) => ({
         rowOffset: n.rowOffset,
@@ -217,7 +271,55 @@ function clusterHeaderSegments(rows, start, count) {
         text: n.text,
       })),
     };
-  });
+  }
+
+  const candidates = [];
+
+  for (let i = 0; i < orderedNodes.length; i++) {
+    const one = candidateFromNodes([orderedNodes[i]]);
+    if (expectedSet.has(one.normalized)) candidates.push(one);
+
+    for (let j = i + 1; j < orderedNodes.length; j++) {
+      const pairNodes = [orderedNodes[i], orderedNodes[j]];
+      if (!connected(pairNodes)) continue;
+
+      const pair = candidateFromNodes(pairNodes);
+      if (expectedSet.has(pair.normalized)) candidates.push(pair);
+
+      for (let k = j + 1; k < orderedNodes.length; k++) {
+        const tripleNodes = [
+          orderedNodes[i],
+          orderedNodes[j],
+          orderedNodes[k],
+        ];
+        if (!connected(tripleNodes)) continue;
+
+        const triple = candidateFromNodes(tripleNodes);
+        if (expectedSet.has(triple.normalized)) candidates.push(triple);
+      }
+    }
+  }
+
+  const deduped = [];
+  for (const target of expected) {
+    const matches = candidates
+      .filter((candidate) => candidate.normalized === target.normalized)
+      .sort((a, b) => {
+        const rowsA = a.rowOffsets.length;
+        const rowsB = b.rowOffsets.length;
+        if (rowsA !== rowsB) return rowsB - rowsA;
+
+        const widthA = a.xEnd - a.x;
+        const widthB = b.xEnd - b.x;
+        if (widthA !== widthB) return widthA - widthB;
+
+        return a.x - b.x;
+      });
+
+    if (matches[0]) deduped.push(matches[0]);
+  }
+
+  return deduped;
 }
 
 function detectHeaderCandidate(rows) {
@@ -389,6 +491,7 @@ const response = await fetchWithRetry(PDF_URL, {
 if (!response.ok) throw new Error("pdf HTTP " + response.status);
 
 const bytes = new Uint8Array(await response.arrayBuffer());
+const downloadedBytes = bytes.byteLength;
 const pdf = await getDocumentProxy(bytes);
 const { totalPages, items } = await extractTextItems(pdf);
 const plain = await extractText(pdf, { mergePages: true });
@@ -403,7 +506,7 @@ console.log(
   JSON.stringify(
     {
       fileNo: "166852",
-      bytes: bytes.byteLength,
+      bytes: downloadedBytes,
       totalPages,
       totalItems: items.reduce((sum, pageItems) => sum + pageItems.length, 0),
       plainTextLength: Array.isArray(plain.text)
