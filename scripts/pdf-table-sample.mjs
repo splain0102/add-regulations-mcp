@@ -519,6 +519,32 @@ console.log(
 );
 console.log("PDF_LAYOUT_META_END");
 
+const page34Debug = pages.find((page) => page.page === 34);
+if (page34Debug) {
+  console.log("PDF_PAGE34_HEADER_ZONE_START");
+  console.log(
+    JSON.stringify(
+      page34Debug.rows.slice(0, 14).map((row) => ({
+        row: row.row,
+        y: row.y,
+        text: row.text,
+        rawItems: row.segments.flatMap((segment) =>
+          (segment.sourceItems ?? []).map((item) => ({
+            str: item.str,
+            x: item.x,
+            xEnd: Number(item.x) + Number(item.width || 0),
+            y: item.y,
+            width: item.width,
+          }))
+        ),
+      })),
+      null,
+      2
+    )
+  );
+  console.log("PDF_PAGE34_HEADER_ZONE_END");
+}
+
 const pageCandidates = pages
   .map((page) => ({
     page: page.page,
