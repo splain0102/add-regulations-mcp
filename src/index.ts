@@ -2967,6 +2967,259 @@ function searchPdfLayoutRows(
 
 
 
+type PdfStructuredMatch = {
+  sourceType: "pdf";
+  page: number;
+  row: number;
+  task: string | null;
+  condition: string | null;
+  approver: string | null;
+  symbol: "◎" | "★" | "☆" | null;
+  suffix: string | null;
+  coordinate: {
+    x0: number;
+    x1: number;
+    xCenter: number;
+    y: number;
+    coordinateType: "pdf_point";
+    precision: "raw-item-exact" | "glyph-width-estimate";
+  } | null;
+  headerEvidence: {
+    columns: string[];
+    multiline: string[];
+    mappingMethod: "header_midpoints";
+  } | null;
+  needsReview: boolean;
+  reviewReasons: string[];
+};
+
+function extractPdfCondition(
+  row: PdfLayoutRow
+): string | null {
+  const match =
+    row.text.match(
+      /(\d+(?:\.\d+)?\s*(?:억|천|백|십)?\s*원\s*(?:이상|이하|미만|초과))/u
+    );
+
+  return (
+    match?.[1]
+      ?.replace(/\s+/g, " ")
+      .trim() ??
+    null
+  );
+}
+
+function buildPdfStructuredMatches(
+  page: PdfLayoutPage,
+  row: PdfLayoutRow
+): PdfStructuredMatch[] {
+  const detectedHeader =
+    detectKnownPdfHeader(
+      page.rows
+    );
+
+  const header =
+    detectedHeader &&
+    detectedHeader.matched >= 2
+      ? detectedHeader
+      : null;
+
+  const task =
+    findPdfInheritedTask(
+      page,
+      row.row,
+      header
+    );
+
+  const condition =
+    extractPdfCondition(
+      row
+    );
+
+  const boundaries =
+    header
+      ? makePdfHeaderBoundaries(
+          header.columns
+        )
+      : [];
+
+  const symbols =
+    extractPdfSymbols(
+      row
+    );
+
+  const multiline =
+    header?.columns
+      .filter(
+        (column) =>
+          column.rowOffsets
+            .length > 1
+      )
+      .map(
+        (column) =>
+          column.name
+      ) ??
+    [];
+
+  if (
+    symbols.length === 0
+  ) {
+    return [
+      {
+        sourceType: "pdf",
+        page: page.page,
+        row: row.row,
+        task,
+        condition,
+        approver: null,
+        symbol: null,
+        suffix: null,
+        coordinate: null,
+        headerEvidence:
+          header
+            ? {
+                columns:
+                  header.order,
+                multiline,
+                mappingMethod:
+                  "header_midpoints",
+              }
+            : null,
+        needsReview: true,
+        reviewReasons: [
+          "검색 행에 전결 기호가 없어 전결권자를 확정할 수 없음",
+          ...(!header
+            ? [
+                "전결 헤더를 충분히 복원하지 못함",
+              ]
+            : []),
+        ],
+      },
+    ];
+  }
+
+  return symbols.map(
+    (symbol) => {
+      const approver =
+        boundaries.length
+          ? mapPdfSymbolToHeader(
+              symbol,
+              boundaries
+            )
+          : null;
+
+      const reviewReasons:
+        string[] = [];
+
+      if (!header) {
+        reviewReasons.push(
+          "전결 헤더를 충분히 복원하지 못함"
+        );
+      }
+
+      if (!approver) {
+        reviewReasons.push(
+          "기호를 전결권자 열에 매핑하지 못함"
+        );
+      }
+
+      if (
+        symbol.precision ===
+        "glyph-width-estimate"
+      ) {
+        reviewReasons.push(
+          "기호 x좌표가 glyph-width 추정값임"
+        );
+      }
+
+      return {
+        sourceType:
+          "pdf" as const,
+        page:
+          page.page,
+        row:
+          row.row,
+        task,
+        condition,
+        approver,
+        symbol:
+          symbol.symbol,
+        suffix:
+          symbol.suffix,
+        coordinate: {
+          x0:
+            symbol.x0,
+          x1:
+            symbol.x1,
+          xCenter:
+            symbol.xCenter,
+          y:
+            symbol.y,
+          coordinateType:
+            symbol.coordinateType,
+          precision:
+            symbol.precision,
+        },
+        headerEvidence:
+          header
+            ? {
+                columns:
+                  header.order,
+                multiline,
+                mappingMethod:
+                  "header_midpoints" as const,
+              }
+            : null,
+        needsReview:
+          reviewReasons.length >
+          0,
+        reviewReasons,
+      };
+    }
+  );
+}
+
+function renderPdfStructuredMatch(
+  match: PdfStructuredMatch
+): string {
+  return [
+    `source_type: ${match.sourceType}`,
+    `page: ${match.page}`,
+    `row: ${match.row}`,
+    `task: ${match.task ?? "(확인 필요)"}`,
+    `condition: ${match.condition ?? "(없음/확인 필요)"}`,
+    `approver: ${match.approver ?? "(확인 필요)"}`,
+    `symbol: ${match.symbol ?? "(없음)"}`,
+    `suffix: ${match.suffix ?? "(없음)"}`,
+    ...(match.coordinate
+      ? [
+          `coordinate: x0=${match.coordinate.x0.toFixed(2)}, x1=${match.coordinate.x1.toFixed(2)}, x_center=${match.coordinate.xCenter.toFixed(2)}, y=${match.coordinate.y.toFixed(2)}, coordinate_type=${match.coordinate.coordinateType}, precision=${match.coordinate.precision}`,
+        ]
+      : []),
+    ...(match.headerEvidence
+      ? [
+          `header_evidence: ${match.headerEvidence.columns.join(" | ")}`,
+          ...(match.headerEvidence.multiline.length
+            ? [
+                `header_multiline: ${match.headerEvidence.multiline.join(" | ")}`,
+              ]
+            : []),
+          `header_mapping: ${match.headerEvidence.mappingMethod}`,
+        ]
+      : [
+          "header_evidence: (확인 필요)",
+        ]),
+    `needs_review: ${match.needsReview ? "true" : "false"}`,
+    ...(match.reviewReasons.length
+      ? [
+          `review_reasons: ${match.reviewReasons.join(" / ")}`,
+        ]
+      : []),
+  ].join("\n");
+}
+
+
+
 function renderPdfLayoutRow(
   row: PdfLayoutRow,
   header:
@@ -4007,15 +4260,33 @@ function createServer() {
                   ? [""]
                   : []),
                 ...pdfLayoutMatches.map(
-                  ({ page, row, mode }, index) =>
-                    [
-                      `===== PDF 레이아웃 결과 ${index + 1} =====`,
+                  ({ page, row, mode }, index) => {
+                    const structured =
+                      buildPdfStructuredMatches(
+                        page,
+                        row
+                      );
+
+                    return [
+                      `===== PDF 구조화 결과 ${index + 1} =====`,
+                      ...structured.map(
+                        (match, structuredIndex) =>
+                          [
+                            `--- 구조화 행 ${structuredIndex + 1} ---`,
+                            renderPdfStructuredMatch(
+                              match
+                            ),
+                          ].join("\n")
+                      ),
+                      "",
+                      "원시 좌표 문맥:",
                       renderPdfLayoutMatch(
                         page,
                         row,
                         mode
                       ),
-                    ].join("\n")
+                    ].join("\n");
+                  }
                 ),
                 ...(pdfLayoutMatches.length
                   ? [""]
