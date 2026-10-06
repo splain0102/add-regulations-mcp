@@ -1,3 +1,4 @@
+import { searchLatestRegulationTable } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -3744,7 +3745,7 @@ function extractArticleSnippet(
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.8.0",
+    version: "1.9.0",
   });
 
   server.registerTool(
@@ -3754,19 +3755,10 @@ function createServer() {
         "국방과학연구소 규정 MCP 연결상태를 확인합니다.",
       inputSchema: {},
     },
-    async () => ({
-      content: [
-        {
-          type: "text",
-          text:
-            "국방과학연구소 규정 MCP 정상 작동\n" +
-            "최신 규정 우선: ON\n" +
-            "HWP/HWPX/PDF 본문 읽기: ON\n" +
-            "HWP/HWPX 표 구조 인식: ON\n" +
-            "PDF 좌표 기반 표/행 인식: ON",
-        },
-      ],
-    })
+    async () => {
+      const data={status:"ready",runtime:"Cloudflare Workers",version:"1.9.0",tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
+      return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
+    }
   );
 
   server.registerTool(
@@ -4322,160 +4314,29 @@ function createServer() {
   server.registerTool(
     "search_regulation_table",
     {
-      description:
-        "최신 규정의 표를 범용 검색합니다. HWP/HWPX는 실제 셀·행·열·병합 구조를 반환하고, PDF는 좌표 기반 행 구조를 반환합니다. 위임전결표는 기호와 헤더 증거가 충분할 때 전결권자까지 구조화합니다.",
+      description: "최신 규정의 일반 표와 위임전결표를 검색합니다. HWP/HWPX 실제 셀·병합·다단 헤더와 PDF point 좌표를 반환합니다. 일반 표의 전결권자는 추정하지 않으며 증거가 부족한 PDF는 needs_review로 표시합니다.",
       inputSchema: {
         name: z.string().min(1),
         query: z.string().min(1),
-        limit: z.number().int().min(1).max(20).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
         includeRegion: z.boolean().optional(),
       },
     },
     async ({ name, query, limit, includeRegion }) => {
       try {
-        const result = await getLatestRegulationText(name);
-        const maxResults = limit ?? 8;
-        const hwpMatches = searchStructuredTables(
-          result.tables,
-          query,
-          maxResults
-        );
-        const pdfMatches = searchPdfLayoutRows(
-          result.pdfLayout,
-          query,
-          maxResults
-        );
-
-        const rows = hwpMatches.map(
-          ({ table, cell, row, mode }) => {
-            const rowCells = tableCellsForRow(table, row);
-            const headerRows = Array.from(
-              new Set(
-                table.cells
-                  .filter((candidate) => candidate.row <= 2 && candidate.text)
-                  .map((candidate) => candidate.row)
-              )
-            ).sort((a, b) => a - b).slice(0, 3);
-
-            return {
-              source_type: result.extension.toLowerCase(),
-              table: table.index + 1,
-              row,
-              match_mode: mode,
-              matched_cell: {
-                row: cell.row,
-                col: cell.col,
-                row_span: cell.rowSpan,
-                col_span: cell.colSpan,
-                text: cell.text,
-              },
-              cells: rowCells.map((candidate) => ({
-                row: candidate.row,
-                col: candidate.col,
-                row_span: candidate.rowSpan,
-                col_span: candidate.colSpan,
-                text: candidate.text,
-              })),
-              header_evidence: headerRows.map((headerRow) => ({
-                row: headerRow,
-                cells: tableCellsForRow(table, headerRow).map((candidate) => ({
-                  col: candidate.col,
-                  row_span: candidate.rowSpan,
-                  col_span: candidate.colSpan,
-                  text: candidate.text,
-                })),
-              })),
-              region: includeRegion
-                ? renderStructuredTableMatch(table, cell, row, mode)
-                : undefined,
-              needs_review: false,
-            };
-          }
-        );
-
-        const pdfRows = pdfMatches.flatMap(
-          ({ page, row, mode }) =>
-            buildPdfStructuredMatches(page, row).map((match) => ({
-              source_type: "pdf",
-              page: match.page,
-              row: match.row,
-              match_mode: mode,
-              task: match.task,
-              condition: match.condition,
-              approver: match.approver,
-              symbol: match.symbol,
-              suffix: match.suffix,
-              coordinate: match.coordinate
-                ? {
-                    x0: match.coordinate.x0,
-                    x1: match.coordinate.x1,
-                    x_center: match.coordinate.xCenter,
-                    y: match.coordinate.y,
-                    coordinate_type: match.coordinate.coordinateType,
-                    precision: match.coordinate.precision,
-                  }
-                : null,
-              header_evidence: match.headerEvidence
-                ? {
-                    columns: match.headerEvidence.columns,
-                    multiline: match.headerEvidence.multiline,
-                    mapping_method: match.headerEvidence.mappingMethod,
-                  }
-                : null,
-              region: includeRegion
-                ? renderPdfLayoutMatch(page, row, mode)
-                : undefined,
-              needs_review: match.needsReview,
-              review_reasons: match.reviewReasons,
-            }))
-        );
-
-        const structuredRows = [...rows, ...pdfRows].slice(0, maxResults);
-
-        return {
-          structuredContent: {
-            regulationName: result.regulationName,
-            revisionDate: result.revisionDate ?? null,
-            filename: result.filename,
-            sourceUrl: result.sourceUrl,
-            query,
-            totalMatches: structuredRows.length,
-            totalStructuredRows: structuredRows.length,
-            rows: structuredRows,
-          },
-          content: [
-            {
-              type: "text",
-              text: [
-                `규정명: ${result.regulationName}`,
-                `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
-                `최신파일: ${result.filename}`,
-                `검색어: ${query}`,
-                `표 구조 검색결과: ${structuredRows.length}건`,
-                `ALIO: ${result.sourceUrl}`,
-                "",
-                ...(structuredRows.length
-                  ? structuredRows.map((entry, index) =>
-                      [
-                        `===== 구조화 표 결과 ${index + 1} =====`,
-                        JSON.stringify(entry, null, 2),
-                      ].join("\n")
-                    )
-                  : ["해당 검색어와 일치하는 표 구조를 찾지 못했습니다."]),
-              ].join("\n"),
-            },
-          ],
+        const result = await searchLatestRegulationTable(name, query);
+        const { rows, ...meta } = result;
+        const visible = rows.slice(0, limit ?? 30);
+        const data = {
+          ...meta, query, totalMatches: rows.length,
+          totalStructuredRows: rows.length, rows: visible,
+          ...(includeRegion ? {regions:visible.map(row=>({page:row.page,bounding_box:row.bounding_box,coordinate_space:row.coordinate_space,table_id:row.table_id,image:null}))}:{}),
         };
+        return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
       } catch (error) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: error instanceof Error ? error.message : String(error),
-            },
-          ],
-        };
+        const code=error&&typeof error==="object"&&"code" in error?String(error.code):"parse_error";
+        const data={error:{code,message:error instanceof Error?error.message:String(error)}};
+        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
     }
   );
@@ -4589,3 +4450,4 @@ export default new OAuthProvider<Env>({
     fetch: handleAccessRequest,
   },
 });
+
