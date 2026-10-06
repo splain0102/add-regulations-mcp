@@ -68,7 +68,7 @@ export function extractHwpTables(bytes:Uint8Array):Table[] {
  const doc=parseHwp(bytes),tables:Table[]=[];let context='';
  type Paragraph=typeof doc.sections[number]['paragraphs'][number];
  function walk(paragraphs:Paragraph[],section:number){for(const p of paragraphs){if(p.text.trim())context=p.text.trim();for(const control of p.controls){if(control.kind==='table'){
- const cells=control.cells.map(c=>({row:c.row,col:c.col,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.paragraphs.map(p=>p.text).join('\n').trim(),x0:c.col,x1:c.col+c.colSpan}));
+ const cells=control.cells.map(c=>({row:c.row,col:c.col,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.paragraphs.map((p:any)=>Array.isArray(p.runs)&&p.runs.length?p.runs.map((r:any)=>r.text??'').join(''):p.text).join('\n').trim(),x0:c.col,x1:c.col+c.colSpan}));
  tables.push({id:`section${section}:table${tables.length}`,page:null,cells,coordinateSpace:'table-column',context});for(const c of control.cells)walk(c.paragraphs,section);
  }else if('paragraphs' in control)walk(control.paragraphs,section);}}}
  doc.sections.forEach((s,i)=>walk(s.paragraphs,i));return tables;
@@ -78,6 +78,14 @@ function fieldName(text:string):'category'|'task'|'condition'|null {
 }
 export function structureTables(tables:Table[],text:string):StructuredRow[] {
  const out:StructuredRow[]=[],legends=parseLegends(text);
+ const footnoteMap=new Map<string,string>();
+ for(const line of text.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)){
+   const m=line.match(/^((?:\d+\)|※+))\s*(.{3,})$/);if(m&&!footnoteMap.has(m[1]))footnoteMap.set(m[1],m[2].trim());
+ }
+ const linkedFootnotes=(...values:(string|null)[])=>{const joined=values.filter(Boolean).join(' '),marks=new Set<string>();
+   for(const m of joined.matchAll(/(?:^|\s)(\d+\)|※+)/g))marks.add(m[1]);
+   return [...marks].flatMap(mark=>footnoteMap.has(mark)?[{mark,text:footnoteMap.get(mark)!}]:[]);
+ };
  let priorSignature='',priorValues:{category:string|null;task:string|null;condition:string|null}={category:null,task:null,condition:null};
  for(const table of tables){
  const rowNums=[...new Set(table.cells.map(c=>c.row))].sort((a,b)=>a-b);let headers:{name:string;col:number;span:number;source:string}[]=[],fields:{name:'category'|'task'|'condition';col:number;span:number}[]=[],last={category:null,task:null,condition:null} as typeof priorValues;
@@ -116,7 +124,7 @@ export function structureTables(tables:Table[],text:string):StructuredRow[] {
  }
  if(approvals.length){
    const first=approvals[0],multi=approvals.length>1;
-   out.push({page:table.page,table_id:table.id,...last,approver:first.name,approver_type:first.type,approvers:approvals.map(a=>({name:a.name,symbol:a.symbol,legend:a.legend,suffix:a.suffix})),multi_approver:multi,symbol:first.symbol,symbol_x_center:first.position?.x_center??first.cell.col,suffix:first.suffix,legend:first.legend,confidence:approvals.every(a=>a.name)?0.98:0.5,version_warning:null,symbol_coordinates:first.position,bounding_box:{x0:Math.min(...approvals.map(a=>a.cell.col)),y0:row,x1:Math.max(...approvals.map(a=>a.cell.col+a.cell.colSpan)),y1:row+1},coordinate_space:table.coordinateSpace,header_evidence:first.header,raw_cells:active.map(c=>({col:c.col,row:c.row,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.text})),needs_review:approvals.some(a=>!a.name)});
+   out.push({page:table.page,table_id:table.id,...last,approver:first.name,approver_type:first.type,approvers:approvals.map(a=>({name:a.name,symbol:a.symbol,legend:a.legend,suffix:a.suffix})),multi_approver:multi,footnotes:linkedFootnotes(last.task,last.condition),related_regulations:approvals.some(a=>a.symbol==='★')?['부설 국방신속획득기술연구원 위임전결규정']:[],symbol:first.symbol,symbol_x_center:first.position?.x_center??first.cell.col,suffix:first.suffix,legend:first.legend,confidence:approvals.every(a=>a.name)?0.98:0.5,version_warning:null,symbol_coordinates:first.position,bounding_box:{x0:Math.min(...approvals.map(a=>a.cell.col)),y0:row,x1:Math.max(...approvals.map(a=>a.cell.col+a.cell.colSpan)),y1:row+1},coordinate_space:table.coordinateSpace,header_evidence:first.header,raw_cells:active.map(c=>({col:c.col,row:c.row,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.text})),needs_review:approvals.some(a=>!a.name)});
  }
  priorValues={...last};
  }
