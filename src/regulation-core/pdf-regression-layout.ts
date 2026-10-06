@@ -1436,6 +1436,19 @@ function findPdfInheritedTask(
   // This deliberately allows a task label printed below its first child row
   // to own rows above it (common when the label is vertically centred).
   titles.sort((a,b)=>b.y-a.y);
+  const targetPos=titles.findIndex(t=>t.row===rowIndex);
+  if(targetPos>=0)return titles[targetPos].text;
+  const above=titles.filter(t=>t.row<rowIndex).sort((a,b)=>b.row-a.row)[0];
+  const below=titles.filter(t=>t.row>rowIndex).sort((a,b)=>a.row-b.row)[0];
+  if(above&&below){
+    const aboveRow=page.rows.find(r=>r.row===above.row);
+    const aboveText=aboveRow?.text??'';
+    // A numbered task that already contains its own approval marker/text is a
+    // self-contained row. Rows immediately following it can belong to the next
+    // vertically-centred merged task whose label is printed later.
+    const aboveSelfContained=/[◎★☆]/.test(aboveText)||/(직상위자|책임원|부서장|사업기구장|부소장|실장|운영|소장)\s*$/.test(aboveText);
+    if(aboveSelfContained)return below.text;
+  }
   let best=titles[0],distance=Math.abs(targetY-best.y);
   for(const title of titles){const d=Math.abs(targetY-title.y);if(d<distance){best=title;distance=d;}}
   return best.text;
