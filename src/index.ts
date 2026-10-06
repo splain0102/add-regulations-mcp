@@ -1098,6 +1098,8 @@ function searchStructuredTables(
 ): {
   table: StructuredTable;
   cell: StructuredTableCell;
+  row: number;
+  mode: "cell" | "row";
 }[] {
   const q = normalizeTableSearch(query);
 
@@ -1106,7 +1108,11 @@ function searchStructuredTables(
   const results: {
     table: StructuredTable;
     cell: StructuredTableCell;
+    row: number;
+    mode: "cell" | "row";
   }[] = [];
+
+  const seen = new Set<string>();
 
   for (const table of tables) {
     for (const cell of table.cells) {
@@ -1114,13 +1120,74 @@ function searchStructuredTables(
         normalizeTableSearch(cell.text)
           .includes(q)
       ) {
-        results.push({
-          table,
-          cell,
-        });
+        const key =
+          `${table.index}:cell:${cell.row}:${cell.col}`;
+
+        if (!seen.has(key)) {
+          seen.add(key);
+          results.push({
+            table,
+            cell,
+            row: cell.row,
+            mode: "cell",
+          });
+        }
 
         if (results.length >= limit) {
           return results;
+        }
+      }
+    }
+  }
+
+  const tokens = query
+    .normalize("NFKC")
+    .split(/[\s,;/]+/)
+    .map((token) =>
+      normalizeTableSearch(token)
+    )
+    .filter(Boolean);
+
+  if (tokens.length >= 2) {
+    for (const table of tables) {
+      for (let row = 0; row < table.rowCount; row++) {
+        const rowCells =
+          tableCellsForRow(table, row);
+        const rowText =
+          normalizeTableSearch(
+            rowCells
+              .map((cell) => cell.text)
+              .join(" ")
+          );
+
+        if (
+          tokens.every((token) =>
+            rowText.includes(token)
+          )
+        ) {
+          const anchor =
+            rowCells.find((cell) =>
+              cell.text.trim()
+            );
+
+          if (!anchor) continue;
+
+          const key =
+            `${table.index}:row:${row}`;
+
+          if (!seen.has(key)) {
+            seen.add(key);
+            results.push({
+              table,
+              cell: anchor,
+              row,
+              mode: "row",
+            });
+          }
+
+          if (results.length >= limit) {
+            return results;
+          }
         }
       }
     }
@@ -1131,7 +1198,9 @@ function searchStructuredTables(
 
 function renderStructuredTableMatch(
   table: StructuredTable,
-  cell: StructuredTableCell
+  cell: StructuredTableCell,
+  row: number,
+  mode: "cell" | "row"
 ): string {
   const headerRows =
     Array.from(
@@ -1151,11 +1220,11 @@ function renderStructuredTableMatch(
   const nearbyRows =
     Array.from(
       new Set([
-        Math.max(0, cell.row - 1),
-        cell.row,
+        Math.max(0, row - 1),
+        row,
         Math.min(
           table.rowCount - 1,
-          cell.row + 1
+          row + 1
         ),
       ])
     ).sort((a, b) => a - b);
@@ -1173,20 +1242,30 @@ function renderStructuredTableMatch(
   const endCol =
     cell.col + cell.colSpan - 1;
 
+  const matchInfo =
+    mode === "row"
+      ? [
+          "일치 방식: 같은 행의 여러 셀 복합 일치",
+          `기준 행: r${row}`,
+        ]
+      : [
+          "일치 방식: 셀 일치",
+          `일치 셀: r${cell.row}${cell.rowSpan > 1 ? `-r${endRow}` : ""}, c${cell.col}${cell.colSpan > 1 ? `-c${endCol}` : ""}`,
+          `일치 내용: ${cell.text || "(빈칸)"}`,
+        ];
+
   return [
     `표 ${table.index + 1} (${table.rowCount}행 × ${table.colCount}열)`,
-    `일치 셀: r${cell.row}${cell.rowSpan > 1 ? `-r${endRow}` : ""}, c${cell.col}${cell.colSpan > 1 ? `-c${endCol}` : ""}`,
-    `일치 내용: ${cell.text || "(빈칸)"}`,
+    ...matchInfo,
     "행·열 문맥:",
     ...rows.map(
-      (row) => renderTableRow(
+      (targetRow) => renderTableRow(
         table,
-        row
+        targetRow
       )
     ),
   ].join("\n");
 }
-
 async function getLatestRegulationByName(
   name: string
 ) {
@@ -1978,12 +2057,14 @@ function createServer() {
                 `ALIO: ${result.sourceUrl}`,
                 "",
                 ...tableMatches.map(
-                  ({ table, cell }, index) =>
+                  ({ table, cell, row, mode }, index) =>
                     [
                       `===== 표 구조 결과 ${index + 1} =====`,
                       renderStructuredTableMatch(
                         table,
-                        cell
+                        cell,
+                        row,
+                        mode
                       ),
                     ].join("\n")
                 ),
