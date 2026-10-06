@@ -5,6 +5,7 @@ import {normalizedText,normalizeTableSearch as norm} from '../src/regulation-cor
 import {tableToolResponse} from '../src/regulation-core/table-response';
 
 import {call} from './registered-handlers';
+import {versionCheck} from '../src/regulation-core/table-layout';
 const table=(name:string,query:string,extra:Record<string,unknown>={})=>call('search_regulation_table',{name,query,...extra});
 const report:any={execution:'Actual registered MCP handlers and Zod defaults in Node; real ALIO downloads; no production OAuth call',tests:[]};
 async function test(id:number,label:string,fn:()=>Promise<unknown>){const entry:any={id,label};try{entry.evidence=await fn();entry.status='passed';}catch(error){entry.status='failed';entry.error=String(error);}report.tests.push(entry);console.log('SECOND_ACCEPTANCE',id,entry.status,label,entry.error??'');}
@@ -48,6 +49,9 @@ await test(12,'text search HWP file, compact table evidence and no PDF coordinat
 await test(13,'contract default compact <=15000 chars without duplicate detail keys',async()=>{const r=await contract(),size=JSON.stringify(r).length;assert(size<=15000,String(size));assert.equal(r.structuredContent.compact,true);noSnake(r);for(const row of r.structuredContent.rows)for(const key of ['cells','raw_cells','header_evidence','header_path','bounding_box','columns'])assert(!(key in row));return {size,rows:r.structuredContent.rows.length};});
 await test(14,'committee selection states effective/filename evidence, not missing revision',async()=>{const r=await call('get_regulation',{name:'계약심의위원회 구성 및 운영방침'}),m=r.structuredContent;assert(Array.isArray(m.selection_reason));assert(!m.selection_reason.includes('body_revision_date_matches_alio'));assert(m.selection_reason.includes('body_effective_date_matches_alio'));assert(m.selection_reason.includes('attachment_filename_date_matches_alio'));return {selection_reason:m.selection_reason,version_check:m.version_check};});
 await test(15,'historical attachment dates and actual organization revision evidence',async()=>{
+ const revisionText='부칙 <규제929호, 2024. 12. 30.>\n이 규정은 2025년 1월 1일부터 시행한다.';
+ assert.equal(versionCheck('2024-12-30','2024-12',revisionText).warning,null);
+ assert(versionCheck('2024-12-30','2024-11',revisionText).warning);
  const m=(await call('get_regulation',{name:'직제규정'})).structuredContent;assert(m.selection_reason.includes('body_revision_date_matches_alio'));assert(m.other_attachments.every((f:any)=>f.detectedDate));
  assert.equal(m.other_attachments.find((f:any)=>f.name==='직제규정(21년 6월 개정).pdf')?.detectedDate,'2021-06');
  const prototype=(await call('get_regulation',{name:'시작품 업무방침'})).structuredContent;assert.equal(prototype.other_attachments.find((f:any)=>f.name==='시작품 업무방침(2024년도 2월 개정).hwp')?.detectedDate,'2024-02');
