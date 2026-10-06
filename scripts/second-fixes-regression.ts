@@ -5,6 +5,7 @@ import {getRegulationMetadata,searchLatestRegulationTable,selectLatestAttachment
 import {tableToolResponse} from '../src/regulation-core/table-response';
 import {extractRevisionSection} from '../src/regulation-core/revision-probe';
 import {versionCheck} from '../src/regulation-core/table-layout';
+import {zipSync,strToU8} from 'fflate';
 
 const evidence:any={execution:'Actual registered metadata/table handlers using actual ALIO originals in Node; not authenticated production MCP',tests:[]};
 const queries=['계약 승인','귀국보고','병가','국내 출장'];
@@ -38,6 +39,7 @@ const section=await extractRevisionSection(bytes,'hwp');assert(section.length<64
 assert(versionCheck('2026-07-15','2026-07-15',section).dates.some(d=>d.source==='body_last_effective_date'&&d.date==='2026-07-15'));
 let downloads=0;
 globalThis.fetch=async(input,init)=>{
+ if(String(input).includes('probe-hwpx'))return new Response(zipSync({'Contents/section0.xml':strToU8('<hp:section><hp:p><hp:t>부칙</hp:t></hp:p><hp:p><hp:t>이 규정은 2026년 7월 15일부터 시행한다.</hp:t></hp:p></hp:section>')}),{headers:{'content-disposition':'attachment; filename=unit.hwpx'}});
  const url=String(input);if(url.includes('probe-bad'))return new Response('invalid hwp',{headers:{'content-disposition':'attachment; filename=broken.hwp'}});
  if(url.includes('probe-good')){downloads++;return new Response(bytes,{headers:{'content-disposition':'attachment; filename=good.hwp'}});}
  if(url.includes('probe-old'))throw new Error('historical attachment must not be opened once latest is confirmed');
@@ -51,7 +53,11 @@ try{
  assert.equal(selected.selected?.fileNo,good.fileNo);assert.equal(selected.other_attachments.find(f=>f.fileNo===bad.fileNo)?.selection_reason,'parse_failed');
  await selectLatestAttachment([good],'2026-07-15','2026-07-29');assert.equal(downloads,1);
  await selectLatestAttachment([good],'2026-07-15','2026-07-30');assert.equal(downloads,2);
- evidence.faultIsolation={failedAttachment:'parse_failed',laterAttachmentSelected:true,oldAttachmentsSkipped:true,probeCacheHit:true,idateInvalidation:true};
+ // Explicit synthetic fixture: preserve same-revision HWPX preference even
+ // when its filename supplies only a month. This is not an ALIO HWPX audit.
+ const hwpx:Attachment={name:'unit.hwpx',fileNo:'second-fixes-hwpx',extension:'hwpx',detectedDate:'2026-07',url:'https://example.invalid/probe-hwpx'};
+ const sameRevision=await selectLatestAttachment([good,hwpx],'2026-07-15','2026-07-29');assert.equal(sameRevision.selected?.fileNo,hwpx.fileNo);
+ evidence.faultIsolation={failedAttachment:'parse_failed',laterAttachmentSelected:true,oldAttachmentsSkipped:true,probeCacheHit:true,idateInvalidation:true,syntheticSameRevisionHwpxPriority:true};
 }finally{globalThis.fetch=originalFetch;}
 writeFileSync('reports/second-fixes-regression.json',JSON.stringify(evidence,null,2));
 console.log('SECOND_FIXES_REGRESSION_RESULT',JSON.stringify({passed:true,consecutiveIterations:10,failures:0,...evidence.general,faultIsolation:evidence.faultIsolation}));

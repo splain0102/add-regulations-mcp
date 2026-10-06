@@ -439,10 +439,12 @@ export async function selectLatestAttachment(attachments:Attachment[],revisionDa
  const formatRank=(f:Attachment)=>f.extension==='hwpx'?3:f.extension==='hwp'?2:f.extension==='pdf'?1:0;
  const evidence=[];
  const ordered=[...attachments].sort((a,b)=>Number(b.detectedDate===officialDate)-Number(a.detectedDate===officialDate)||formatRank(b)-formatRank(a)||Number(b.fileNo)-Number(a.fileNo));
- let confirmedLatest=false;
+ let confirmedLatest:Attachment|undefined;
  // Serial probes keep large document/PDF allocations out of the same isolate at once.
  for(const file of ordered){
-  if(confirmedLatest&&file.detectedDate!==officialDate){evidence.push({file,bodyMatch:false,failed:false,filenameMatch:false,excluded:true,matchedReasons:[] as string[]});continue;}
+  const sameFilenamePeriod=!!officialDate&&!!file.detectedDate&&officialDate.startsWith(file.detectedDate);
+  const possiblyNewer=!!confirmedLatest&&Number(file.fileNo)>Number(confirmedLatest.fileNo);
+  if(confirmedLatest&&!sameFilenamePeriod&&!possiblyNewer&&formatRank(file)<=formatRank(confirmedLatest)){evidence.push({file,bodyMatch:false,failed:false,filenameMatch:false,excluded:true,matchedReasons:[] as string[]});continue;}
   let bodyMatch=false,failed=false;const matchedReasons:string[]=[];
   try{
    const text=officialDate?await attachmentRevisionText(file,updatedDate):'';
@@ -452,7 +454,7 @@ export async function selectLatestAttachment(attachments:Attachment[],revisionDa
   }catch(error){failed=true;console.warn('attachment_selection_probe_failed',{fileNo:file.fileNo,code:'parse_failed',message:error instanceof Error?error.message:String(error),stack:error instanceof Error?error.stack:undefined});}
   const filenameMatch=!!officialDate&&!!file.detectedDate&&(file.detectedDate===officialDate||file.detectedDate.length===7&&officialDate.startsWith(file.detectedDate+'-'));
   if(filenameMatch)matchedReasons.unshift('attachment_filename_date_matches_alio');
-  if(!failed&&bodyMatch&&filenameMatch)confirmedLatest=true;
+  if(!failed&&bodyMatch&&filenameMatch)confirmedLatest=file;
   evidence.push({file,bodyMatch,failed,filenameMatch,excluded:false,matchedReasons});
  }
  const valid=evidence.filter(e=>!e.failed&&!e.excluded).sort((a,b)=>Number(b.bodyMatch)-Number(a.bodyMatch)||Number(b.filenameMatch)-Number(a.filenameMatch)||formatRank(b.file)-formatRank(a.file)||Number(b.file.fileNo)-Number(a.file.fileNo));
