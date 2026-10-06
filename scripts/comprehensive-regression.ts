@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {writeFileSync} from 'node:fs';
-import {getLatestRegulationText,searchLatestRegulationTable} from '../src/regulation-core/regulations';
+import {getLatestRegulationText,searchLatestRegulationTable,fetchWithRetry} from '../src/regulation-core/regulations';
+import {extractPdfRichContent,searchPdfLayoutRows,buildPdfStructuredMatches} from '../src/regulation-core/pdf-regression-layout';
 
 const report:any={startedAt:new Date().toISOString(),baseline:[
  {id:'P1',before:'tools selected old PDF for 위임전결규정/직제규정',expected:'single latest attachment selection'},
@@ -26,6 +27,11 @@ await test(10,'시작품 평가기준 compact values',async()=>{const r:any=awai
 await test(11,'nonexistent table query returns empty',async()=>{const r:any=await table('위임전결규정','존재하지않는업무xyz');assert.deepEqual(r.rows,[]);return {rows:r.rows};});
 await test(12,'domestic trip text uses HWP latest, not PDF',async()=>{const x:any=await getLatestRegulationText('위임전결규정');assert.equal(x.fileNo,'239154');assert.equal(x.extension,'hwp');assert(compact(x.text).includes(compact('국내 출장')));return {fileNo:x.fileNo,extension:x.extension};});
 await test(13,'compact contract payload <=15000 chars',async()=>{const r:any=await table('위임전결규정','계약 승인');const rows=r.rows.slice(0,30).map((row:any)=>({analysis_type:row.analysis_type,table_id:row.table_id,row:row.row,task:row.task??null,condition:row.condition??null,approver:row.approver??null,approver_type:row.approver_type??null,approvers:row.approvers??undefined,multi_approver:row.multi_approver??false,symbol:row.symbol??null,suffix:row.suffix??null,values:row.values??{},columns:row.columns??[],footnotes:row.footnotes??[],needs_review:row.needs_review}));const length=JSON.stringify({rows}).length;assert(length<=15000,'compact payload '+length);return {length,rows:rows.length};});
+
+
+await test(14,'historical PDF centered merged task ownership',async()=>{const response=await fetchWithRetry('https://www.alio.go.kr/download/rulefiledown.json?fileNo=166852');assert(response.ok);const pdf=await extractPdfRichContent(new Uint8Array(await response.arrayBuffer()));const matches=searchPdfLayoutRows(pdf.pages,'사업기구별 분기계획 승인',20).flatMap(({page,row})=>buildPdfStructuredMatches(page,row));const row=matches.find((x:any)=>JSON.stringify(x).includes('사업기구별 분기계획 승인'));assert(row);assert(compact(row.task).includes(compact('8) 공무국외출장')),JSON.stringify(row));return row;});
+await test(15,'겸직허가 추천 text approver',async()=>{const r:any=await table('위임전결규정','겸직허가 추천');const row=r.rows.find((x:any)=>JSON.stringify(x).includes('겸직허가 추천'));assert(row);assert.equal(row.approver,'직상위자');assert.equal(row.approver_type,'text');return row;});
+await test(16,'domestic trip footnotes safe and star related regulation',async()=>{const trip:any=await table('위임전결규정','국내 출장');assert(trip.rows.every((x:any)=>Array.isArray(x.footnotes??[])));const star:any=await table('위임전결규정','계약 승인');const starRow=star.rows.find((x:any)=>(x.approvers??[]).some((a:any)=>a.symbol==='★')||x.symbol==='★');assert(starRow);assert((starRow.related_regulations??[]).includes('부설 국방신속획득기술연구원 위임전결규정'));return {tripFootnotes:trip.rows.flatMap((x:any)=>x.footnotes??[]),related:starRow.related_regulations};});
 
 report.passed=report.tests.every((t:any)=>t.status==='passed');report.finishedAt=new Date().toISOString();writeFileSync('reports/comprehensive-regression.json',JSON.stringify(report,null,2));console.log('COMPREHENSIVE_REGRESSION_RESULT',JSON.stringify({passed:report.passed,passedCount:report.tests.filter((t:any)=>t.status==='passed').length,total:report.tests.length}));
 if(!report.passed)process.exitCode=1;
