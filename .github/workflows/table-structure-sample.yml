@@ -20,11 +20,15 @@ jobs:
           node-version: "24"
       - run: npm ci --ignore-scripts
       - run: node scripts/table-sample.mjs
-      - run: node --use-env-proxy --import ./scripts/test-loader.mjs scripts/comprehensive-regression.ts
+      - id: comprehensive
+        continue-on-error: true
+        run: node --use-env-proxy --import ./scripts/test-loader.mjs scripts/comprehensive-regression.ts
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: comprehensive-regression
           path: reports/comprehensive-regression.json
           if-no-files-found: ignore
+      - if: steps.comprehensive.outcome == 'failure'
+        run: exit 1
       - run: npx wrangler deploy --dry-run --outdir /tmp/add-regulations-mcp-dry-run
