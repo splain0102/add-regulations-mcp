@@ -1,4 +1,4 @@
-import { extractText, extractTextItems } from "unpdf";
+import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 
 const DETAIL_URL =
   "https://www.alio.go.kr/item/itemBoard21110.do?disclosureNo=&apbaId=C0345&nowcode=21110&reportFormNo=21110&table_name=COMM_RULE&idx_name=RULE_NO&idx=24523&reportGbn=N&bid_type=K1100";
@@ -162,10 +162,9 @@ const res = await fetchWithRetry(selected.url, {
 if (!res.ok) throw new Error(`pdf HTTP ${res.status}`);
 const bytes = new Uint8Array(await res.arrayBuffer());
 
-const [{ totalPages, items }, plain] = await Promise.all([
-  extractTextItems(bytes),
-  extractText(bytes, { mergePages: true }),
-]);
+const pdf = await getDocumentProxy(bytes);
+const { totalPages, items } = await extractTextItems(pdf);
+const plain = await extractText(pdf, { mergePages: true });
 
 console.log("PDF_LAYOUT_META_START");
 console.log(JSON.stringify({
