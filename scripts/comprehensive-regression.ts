@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import {writeFileSync} from 'node:fs';
+import {getLatestRegulationText,searchLatestRegulationTable} from '../src/regulation-core/regulations';
+
+const report:any={startedAt:new Date().toISOString(),baseline:[
+ {id:'P1',before:'tools selected old PDF for 위임전결규정/직제규정',expected:'single latest attachment selection'},
+ {id:'P2-pdf',before:'PDF fill-down could attach rows to previous task',expected:'merged-region/nearest-title ownership'},
+ {id:'P2-text',before:'직상위자 returned approver null',expected:'text approver'},
+ {id:'P2-multi',before:'same-row symbols returned separate rows',expected:'one row with approvers[]'},
+ {id:'P3',before:'compact general tables had null semantic fields / data-as-header',expected:'values map and header-only columns'}
+],tests:[]};
+const compact=(s:any)=>String(s??'').normalize('NFKC').replace(/\s+/g,'');
+async function test(id:number,label:string,fn:()=>Promise<any>){const e:any={id,label,status:'failed'};try{e.evidence=await fn();e.status='passed';}catch(err){e.error=String(err);}report.tests.push(e);console.log('ACCEPTANCE',id,e.status,label,e.error??'');}
+const table=(name:string,q:string)=>searchLatestRegulationTable(name,q);
+
+await test(1,'all core paths select 위임전결규정 fileNo 239154',async()=>{const [t,x]=await Promise.all([table('위임전결규정','계약 승인'),getLatestRegulationText('위임전결규정')]);assert.equal(t.fileNo,'239154');assert.equal(x.fileNo,'239154');assert.equal(x.filename,'위임전결규정 전문(2026년7월15일 개정).hwp');return {table:t.fileNo,text:x.fileNo,filename:x.filename,selection_reason:x.selection_reason};});
+await test(2,'all core paths select 직제규정 fileNo 209393',async()=>{const [t,x]=await Promise.all([table('직제규정','직종'),getLatestRegulationText('직제규정')]);assert.equal(t.fileNo,'209393');assert.equal(x.fileNo,'209393');return {table:t.fileNo,text:x.fileNo,filename:x.filename};});
+await test(3,'계약 승인 5) four approval stages and no ghost row',async()=>{const r:any=await table('위임전결규정','계약 승인');const rows=r.rows.filter((x:any)=>/^5\)/.test((x.task??'').trim()));const flat=JSON.stringify(rows);for(const v of ['부소장','★','부장(센터장)','실장','책임원','운영'])assert(flat.includes(v),v);assert(!rows.some((x:any)=>x.analysis_type==='general_table'&&compact(x.task).startsWith('5-2)')));return {count:rows.length,rows};});
+await test(4,'5-2 four approval stages',async()=>{const r:any=await table('위임전결규정','5-2 외화 계약 승인');const rows=r.rows.filter((x:any)=>compact(x.task).includes('5-2)'));const flat=JSON.stringify(rows);for(const v of ['부소장','★','부장(센터장)','실장','책임원','운영'])assert(flat.includes(v),v);return {count:rows.length};});
+await test(5,'국정감사 중요사항 ownership',async()=>{const r:any=await table('위임전결규정','국정감사 중요사항');const flat=JSON.stringify(r.rows);for(const v of ['정책기획부','기획조정','15) 국정감사','소장'])assert(flat.includes(v),v);return r.rows;});
+await test(6,'귀국보고 text approver',async()=>{const r:any=await table('위임전결규정','귀국보고');const row=r.rows.find((x:any)=>compact(x.task).includes('공무국외출장')||compact(x.condition).includes('귀국보고')||JSON.stringify(x.cells??[]).includes('귀국보고'));assert(row);assert.equal(row.approver,'직상위자');assert.equal(row.approver_type,'text');assert.equal(row.needs_review,false);return row;});
+await test(7,'병가 grouped multi approver',async()=>{const r:any=await table('위임전결규정','병가');const rows=r.rows.filter((x:any)=>JSON.stringify(x).includes('병가'));assert.equal(rows.length,1);assert.equal(rows[0].multi_approver,true);assert((rows[0].approvers??[]).length>=2);return rows[0];});
+await test(8,'계약원가계산 및 협약 threshold approvers',async()=>{const r:any=await table('위임전결규정','계약원가계산 및 협약');const flat=JSON.stringify(r.rows);for(const v of ['5억 원 이상','실장','책임원','5억 원 미만','운영'])assert(compact(flat).includes(compact(v)),v);return r.rows;});
+await test(9,'직제규정 직종 values and clean columns',async()=>{const r:any=await table('직제규정','직종');const row=r.rows.find((x:any)=>x.values?.['직종']==='연구직'||Object.values(x.values??{}).includes('연구직'));assert(row);assert.equal(row.values['직종'],'연구직');assert.equal(row.values['직명'],'연구원');const cols=JSON.stringify(row.columns??[]);for(const bad of ['100','92','위원장',':'])assert(!cols.includes(bad));return {values:row.values,columns:row.columns};});
+await test(10,'시작품 평가기준 compact values',async()=>{const r:any=await table('시작품 업무방침','평가기준가격97%');const row=r.rows.find((x:any)=>Object.values(x.values??{}).some((v:any)=>compact(v).includes('평가기준가격97%')));assert(row);assert(Object.values(row.values).some((v:any)=>compact(v).includes(compact('평가기준가격96% ＜ 제안가격 ≤ 평가기준가격97%'))));assert(Object.values(row.values).includes('84'));return {values:row.values,columns:row.columns};});
+await test(11,'nonexistent table query returns empty',async()=>{const r:any=await table('위임전결규정','존재하지않는업무xyz');assert.deepEqual(r.rows,[]);return {rows:r.rows};});
+await test(12,'domestic trip text uses HWP latest, not PDF',async()=>{const x:any=await getLatestRegulationText('위임전결규정');assert.equal(x.fileNo,'239154');assert.equal(x.extension,'hwp');assert(compact(x.text).includes(compact('국내 출장')));return {fileNo:x.fileNo,extension:x.extension};});
+await test(13,'compact contract payload <=15000 chars',async()=>{const r:any=await table('위임전결규정','계약 승인');const rows=r.rows.slice(0,30).map((row:any)=>({analysis_type:row.analysis_type,table_id:row.table_id,row:row.row,task:row.task??null,condition:row.condition??null,approver:row.approver??null,approver_type:row.approver_type??null,approvers:row.approvers??undefined,multi_approver:row.multi_approver??false,symbol:row.symbol??null,suffix:row.suffix??null,values:row.values??{},columns:row.columns??[],footnotes:row.footnotes??[],needs_review:row.needs_review}));const length=JSON.stringify({rows}).length;assert(length<=15000,'compact payload '+length);return {length,rows:rows.length};});
+
+report.passed=report.tests.every((t:any)=>t.status==='passed');report.finishedAt=new Date().toISOString();writeFileSync('reports/comprehensive-regression.json',JSON.stringify(report,null,2));console.log('COMPREHENSIVE_REGRESSION_RESULT',JSON.stringify({passed:report.passed,passedCount:report.tests.filter((t:any)=>t.status==='passed').length,total:report.tests.length}));
+if(!report.passed)process.exitCode=1;
