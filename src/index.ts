@@ -1,5 +1,4 @@
-import { tableToolResponse } from "./regulation-core/table-response";
-import { searchLatestRegulationTable } from "./regulation-core/regulations";
+import { searchLatestRegulationTable, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -3425,7 +3424,7 @@ async function getLatestRegulationByName(
   name: string
 ) {
   const items =
-    await listRegulations();
+    await coreListRegulations();
 
   const query = name
     .replace(/\s+/g, "")
@@ -3746,7 +3745,7 @@ function extractArticleSnippet(
 function createServer() {
   const server = new McpServer({
     name: "ADD Regulations MCP",
-    version: "1.9.1",
+    version: "1.9.0",
   });
 
   server.registerTool(
@@ -3757,7 +3756,7 @@ function createServer() {
       inputSchema: {},
     },
     async () => {
-      const data={status:"ready",runtime:"Cloudflare Workers",version:"1.9.1",tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
+      const data={status:"ready",runtime:"Cloudflare Workers",version:"1.9.0",tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
       return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
     }
   );
@@ -3855,7 +3854,7 @@ function createServer() {
     async () => {
       try {
         const items =
-          await listRegulations();
+          await coreListRegulations();
 
         const text =
           items.map(
@@ -3904,7 +3903,7 @@ function createServer() {
     async ({ query }) => {
       try {
         const items =
-          await listRegulations();
+          await coreListRegulations();
 
         const q = query
           .replace(/\s+/g, "")
@@ -3966,31 +3965,11 @@ function createServer() {
     },
     async ({ name }) => {
       try {
-        const { match, detail } =
-          await getLatestRegulationByName(
-            name
-          );
-
-        const latest =
-          detail.latestAttachment;
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: [
-                `규정명: ${match.title}`,
-                `제·개정일: ${detail.revisionDate ?? match.revisionDate ?? "확인 필요"}`,
-                `최종수정일: ${detail.updatedDate ?? match.updatedDate ?? "확인 필요"}`,
-                `최신파일: ${latest?.name ?? "확인 실패"}`,
-                `파일형식: ${latest?.extension || "확인 필요"}`,
-                `ALIO: ${detail.sourceUrl}`,
-                "",
-                "과거 개정본은 조회 대상에서 제외했습니다.",
-              ].join("\n"),
-            },
-          ],
-        };
+        const result = await coreGetLatestRegulationText(name);
+        const data={regulationName:result.regulationName,revisionDate:result.revisionDate,updatedDate:result.updatedDate,
+          filename:result.filename,extension:result.extension,fileNo:result.fileNo,version_check:result.version_check,
+          selection_reason:result.selection_reason,other_attachments:result.other_attachments,sourceUrl:result.sourceUrl};
+        return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
       } catch (error) {
         return {
           isError: true,
@@ -4021,7 +4000,7 @@ function createServer() {
     async ({ name }) => {
       try {
         const result =
-          await getLatestRegulationText(
+          await coreGetLatestRegulationText(
             name
           );
 
@@ -4079,6 +4058,11 @@ function createServer() {
                 `규정명: ${result.regulationName}`,
                 `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
                 `최신파일: ${result.filename}`,
+                `파일형식: ${result.extension}`,
+                `fileNo: ${result.fileNo}`,
+                `version_check: ${JSON.stringify(result.version_check)}`,
+                `selection_reason: ${result.selection_reason}`,
+                `other_attachments: ${JSON.stringify(result.other_attachments)}`,
                 `ALIO: ${result.sourceUrl}`,
                 ...tableNotice,
                 ...pdfLayoutNotice,
@@ -4125,7 +4109,7 @@ function createServer() {
     }) => {
       try {
         const result =
-          await getLatestRegulationText(
+          await coreGetLatestRegulationText(
             name
           );
 
@@ -4231,6 +4215,11 @@ function createServer() {
                 `규정명: ${result.regulationName}`,
                 `제·개정일: ${result.revisionDate ?? "확인 필요"}`,
                 `최신파일: ${result.filename}`,
+                `파일형식: ${result.extension}`,
+                `fileNo: ${result.fileNo}`,
+                `version_check: ${JSON.stringify(result.version_check)}`,
+                `selection_reason: ${result.selection_reason}`,
+                `other_attachments: ${JSON.stringify(result.other_attachments)}`,
                 `검색어: ${query}`,
                 `본문 검색결과: ${matches.length}건`,
                 `HWP/HWPX 표 구조 검색결과: ${tableMatches.length}건`,
@@ -4321,16 +4310,32 @@ function createServer() {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(100).optional(),
         includeRegion: z.boolean().optional(),
-        compact: z.boolean().default(true),
-        offset: z.number().int().min(0).optional(),
+        compact: z.boolean().optional(),
+        include_text_box: z.boolean().optional(),
       },
     },
-    async ({ name, query, limit, includeRegion, compact, offset }) => {
+    async ({ name, query, limit, includeRegion, compact, include_text_box }) => {
       try {
         const result = await searchLatestRegulationTable(name, query);
-        return tableToolResponse(result, query, {limit, includeRegion, compact, offset});
+        const { rows, ...meta } = result;
+        const requested=limit ?? 30;
+        const eligible=include_text_box?rows:rows.filter(row=>row.analysis_type!=='text_box');
+        let visible=eligible.slice(0,requested);
+        if(compact) visible=visible.map((row:any)=>({source_type:row.source_type,analysis_type:row.analysis_type,table_id:row.table_id,row:row.row,
+          task:row.task??null,condition:row.condition??null,approver:row.approver??null,approver_type:row.approver_type??null,
+          approvers:row.approvers??undefined,multi_approver:row.multi_approver??false,symbol:row.symbol??null,suffix:row.suffix??null,
+          values:row.values??{},columns:row.columns??[],footnotes:row.footnotes??[],related_regulations:row.related_regulations??[],
+          needs_review:row.needs_review,review_reasons:row.review_reasons??[]}));
+        const has_more=eligible.length>visible.length;
+        let data:any={...meta,query,totalMatches:eligible.length,totalStructuredRows:eligible.length,has_more,truncated:false,rows:visible,
+          ...(includeRegion?{regions:visible.map((row:any)=>({page:row.page,bounding_box:row.bounding_box,coordinate_space:row.coordinate_space,table_id:row.table_id,image:null}))}:{})};
+        let serialized=JSON.stringify(data,null,2);
+        if(compact&&serialized.length>14500){
+          while(data.rows.length>1&&serialized.length>14500){data.rows.pop();data.truncated=true;serialized=JSON.stringify(data,null,2);}
+        }
+        return {structuredContent:data,content:[{type:"text" as const,text:serialized}]};
       } catch (error) {
-        const code=error&&typeof error==="object"&&"code" in error?String(error.code):error instanceof Error&&error.message.startsWith("layout_error:")?"layout_error":"parse_error";
+        const code=error&&typeof error==="object"&&"code" in error?String(error.code):"parse_error";
         const data={error:{code,message:error instanceof Error?error.message:String(error)}};
         return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
