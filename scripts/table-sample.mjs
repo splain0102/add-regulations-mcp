@@ -3,6 +3,28 @@ import { HwpxReader, hwpToHwpx, parseHwp, hwpToMarkdown } from "@ssabrojs/hwpxjs
 const URL =
   "https://www.alio.go.kr/download/rulefiledown.json?fileNo=239154";
 
+const TECHNICAL_SERVICE_URL =
+  "https://www.alio.go.kr/download/rulefiledown.json?fileNo=228379";
+
+
+async function fetchWithRetry(url, init, attempts = 4) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      if (response.ok || response.status < 500) return response;
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+  throw lastError;
+}
+
+
 function paragraphText(p) {
   const runText = Array.isArray(p.runs)
     ? p.runs.map((r) => r.text ?? "").join("")
@@ -59,7 +81,7 @@ function findKeywordContexts(tables, keyword) {
   return results;
 }
 
-const response = await fetch(URL, {
+const response = await fetchWithRetry(URL, {
   headers: {
     "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-Table-Test/1.0",
   },
@@ -255,3 +277,99 @@ if (hwpxRowSpanCount === 0 || hwpxColSpanCount === 0) {
 if (!hwpxMarkdown.includes("기술용역")) {
   throw new Error("HWPX markdown lost expected table text");
 }
+
+
+async function runGeneralTableRegression() {
+  const response = await fetchWithRetry(TECHNICAL_SERVICE_URL, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-General-Table-Test/1.0",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`technical service download failed: HTTP ${response.status}`);
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const doc = parseHwp(bytes);
+  const tables = [];
+
+  for (const section of doc.sections ?? []) {
+    for (const paragraph of section.paragraphs ?? []) {
+      for (const control of paragraph.controls ?? []) {
+        if (control.kind === "table") tables.push(control);
+      }
+    }
+  }
+
+  const businessTable = tables.find((table) => {
+    const all = table.cells.map(cellText).join(" ");
+    return all.includes("사업 구분") &&
+      all.includes("사업관리부서") &&
+      all.includes("예산관리부서") &&
+      all.includes("연구용역") &&
+      all.includes("군지원 기술용역");
+  });
+
+  if (!businessTable) {
+    throw new Error("general table regression failed: 업무유형별 담당부서 표를 찾지 못함");
+  }
+
+  const rowSnapshots = [];
+  for (let row = 0; row < businessTable.rowCount; row++) {
+    const cells = rowCells(businessTable, row)
+      .filter((cell) => cellText(cell))
+      .map((cell) => ({
+        col: cell.col,
+        rowSpan: cell.rowSpan,
+        colSpan: cell.colSpan,
+        text: cellText(cell),
+      }));
+    if (cells.length) rowSnapshots.push({ row, cells });
+  }
+
+  const flat = rowSnapshots
+    .flatMap((entry) => entry.cells.map((cell) => cell.text))
+    .join(" ");
+
+  for (const expected of [
+    "사업 구분",
+    "사업관리부서",
+    "예산관리부서",
+    "연구용역",
+    "군지원 기술용역",
+    "군수용 기술용역",
+    "민수용 기술용역",
+    "민군기술협력 담당부서",
+  ]) {
+    if (!flat.includes(expected)) {
+      throw new Error(`general table regression lost expected text: ${expected}`);
+    }
+  }
+
+  const hasMergedCell = businessTable.cells.some(
+    (cell) => Number(cell.rowSpan ?? 1) > 1 || Number(cell.colSpan ?? 1) > 1
+  );
+  if (!hasMergedCell) {
+    throw new Error("general table regression failed: merged-cell evidence missing");
+  }
+
+  console.log("GENERAL_TABLE_REGRESSION_PASS", JSON.stringify({
+    fileNo: "228379",
+    tableShape: {
+      rows: businessTable.rowCount,
+      cols: businessTable.colCount,
+    },
+    headers: ["사업 구분", "사업관리부서", "예산관리부서"],
+    cases: [
+      "연구용역",
+      "군지원 기술용역",
+      "군수용 기술용역",
+      "민수용 기술용역",
+      "민군기술협력 담당부서",
+    ],
+    hasMergedCell,
+    rowSnapshots,
+  }));
+}
+
+await runGeneralTableRegression();
