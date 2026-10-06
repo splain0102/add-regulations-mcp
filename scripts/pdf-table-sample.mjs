@@ -1100,6 +1100,56 @@ async function runLivePdfRegression() {
       "page 34 ◎ coordinate regression failed"
     );
 
+    const structuredTarget = {
+      source_type: "pdf",
+      page: target.page,
+      row: target.row,
+      task: target.task,
+      condition: target.condition,
+      approver: target.approver,
+      symbol: target.symbol,
+      suffix: target.suffix,
+      coordinate: {
+        x0: target.x0,
+        x1: target.x1,
+        x_center: target.x_center,
+        y: target.y,
+        coordinate_type: target.coordinate_type,
+        precision: target.precision,
+      },
+      header_evidence: {
+        columns: header.order,
+        multiline: header.columns
+          .filter((column) => column.rowOffsets.length > 1)
+          .map((column) => column.name),
+        mapping_method: "header_midpoints",
+      },
+      needs_review:
+        !target.approver ||
+        target.precision !== "raw-item-exact",
+    };
+
+    assert(
+      structuredTarget.task === "계약 및 협약 승인" &&
+        normalize(structuredTarget.condition).includes(
+          normalize("30억 원 미만")
+        ) &&
+        structuredTarget.approver === "실장" &&
+        structuredTarget.symbol === "◎" &&
+        structuredTarget.suffix === "책임원",
+      "structured PDF schema content failed"
+    );
+
+    assert(
+      structuredTarget.needs_review === false,
+      "high-confidence live PDF result should not need review"
+    );
+
+    console.log(
+      "PDF_STRUCTURED_SCHEMA_PASS",
+      JSON.stringify(structuredTarget)
+    );
+
     const textLength = Array.isArray(plain.text)
       ? plain.text.join("\n").length
       : plain.text.length;
