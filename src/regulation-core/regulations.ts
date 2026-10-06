@@ -430,49 +430,66 @@ export function extractAttachments(
   return attachments;
 }
 
-export function selectLatestAttachment(
+export type AttachmentSelection = {
+  selected: Attachment | null;
+  other_attachments: Array<Attachment & {selection_reason:string}>;
+  selection_reason: string;
+};
+
+const attachmentProbeCache = new Map<string, Promise<string>>();
+async function attachmentBodyText(file:Attachment):Promise<string> {
+  let pending=attachmentProbeCache.get(file.fileNo);
+  if(!pending){
+    pending=(async()=>{
+      try{
+        const downloaded=await downloadLatestFile(file);
+        if(downloaded.extension==='hwp') return await hwpToText(downloaded.bytes);
+        if(downloaded.extension==='hwpx') return extractHwpxText(downloaded.bytes);
+        if(downloaded.extension==='pdf'){
+          const r=await extractText(downloaded.bytes.slice(),{mergePages:true});
+          return Array.isArray(r.text)?r.text.join('\n\n'):r.text;
+        }
+      }catch{}
+      return '';
+    })();
+    attachmentProbeCache.set(file.fileNo,pending);
+  }
+  return pending;
+}
+
+export async function selectLatestAttachment(
   attachments: Attachment[],
   revisionDate?: string
-): Attachment | null {
-  if (attachments.length === 0) {
-    return null;
-  }
-
-  const officialDate =
-    normalizeDate(revisionDate);
-  const formatRank = (f: Attachment) => f.extension === 'hwpx' ? 3 : f.extension === 'hwp' ? 2 : f.extension === 'pdf' ? 1 : 0;
-
-  /*
-   * 1순위: 공식 제·개정일과 파일명 날짜 일치
-   */
-  if (officialDate) {
-    const exact = [...attachments].sort((a,b) => formatRank(b) - formatRank(a)).find(
-      (file) =>
-        file.detectedDate === officialDate
-    );
-
-    if (exact) return exact;
-  }
-
-  /*
-   * 2순위: 파일명 날짜가 가장 최근
-   */
-  const dated = attachments
-    .filter((file) => file.detectedDate)
-    .sort((a, b) =>
-      (b.detectedDate ?? "").localeCompare(a.detectedDate ?? "") || formatRank(b) - formatRank(a)
-    );
-
-  if (dated.length) {
-    return dated[0];
-  }
-
-  /*
-   * 3순위: ALIO HTML에 가장 나중에 등장한 파일
-   */
-  return attachments[
-    attachments.length - 1
-  ];
+): Promise<AttachmentSelection> {
+  if (!attachments.length) return {selected:null,other_attachments:[],selection_reason:'no_attachment'};
+  const officialDate=normalizeDate(revisionDate);
+  const formatRank=(f:Attachment)=>f.extension==='hwpx'?3:f.extension==='hwp'?2:f.extension==='pdf'?1:0;
+  const evidence=await Promise.all(attachments.map(async file=>{
+    const text=officialDate?await attachmentBodyText(file):'';
+    const check=text?versionCheck(revisionDate,file.detectedDate,text):null;
+    const bodyDates=(check?.dates??[]).filter(d=>d.source==='body_last_revision_date'||d.source==='body_last_effective_date').map(d=>d.date);
+    return {file,bodyMatch:!!officialDate&&bodyDates.includes(officialDate),filenameMatch:!!officialDate&&file.detectedDate===officialDate};
+  }));
+  evidence.sort((a,b)=>
+    Number(b.bodyMatch)-Number(a.bodyMatch) ||
+    Number(b.filenameMatch)-Number(a.filenameMatch) ||
+    formatRank(b.file)-formatRank(a.file) ||
+    Number(b.file.fileNo)-Number(a.file.fileNo)
+  );
+  const winner=evidence[0];
+  const reason=winner.bodyMatch?'body_revision_date_matches_alio':
+    winner.filenameMatch?'filename_date_matches_alio':
+    'format_then_latest_fileNo';
+  return {
+    selected:winner.file,
+    selection_reason:reason,
+    other_attachments:evidence.slice(1).map(({file,bodyMatch,filenameMatch})=>({
+      ...file,
+      selection_reason:bodyMatch?'not_selected_tiebreak_format_or_fileNo':
+        filenameMatch?'not_selected_tiebreak_format_or_fileNo':
+        'revision_date_does_not_match_selected_version'
+    }))
+  };
 }
 
 async function getRegulationDetail(
@@ -504,11 +521,12 @@ async function getRegulationDetail(
   const attachments =
     extractAttachments(html);
 
-  const latestAttachment =
-    selectLatestAttachment(
+  const selection =
+    await selectLatestAttachment(
       attachments,
       revisionDate
     );
+  const latestAttachment = selection.selected;
 
   return {
     title,
@@ -518,6 +536,8 @@ async function getRegulationDetail(
     sourceUrl: url,
     latestAttachment,
     attachments,
+    other_attachments: selection.other_attachments,
+    selection_reason: selection.selection_reason,
     totalAttachmentCount:
       attachments.length,
   };
@@ -758,7 +778,8 @@ function documentMeta(loaded: Awaited<ReturnType<typeof loadLatestDocument>>) {
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,
  revisionDate:detail.revisionDate??match.revisionDate,updatedDate:detail.updatedDate??match.updatedDate,
  sourceUrl:detail.sourceUrl,filename:document.file.filename,extension:document.file.extension,fileNo:attachment.fileNo,
- cache,version_check:versions,version_warning:versions.warning};
+ cache,version_check:versions,version_warning:versions.warning,
+ selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
