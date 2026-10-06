@@ -400,13 +400,6 @@ const CROSS_REGULATION_CASES = [
       ["제 1 차", "제 2 차", "제 3 차"],
     ],
   },
-  {
-    name: "제수당 및 보조금 등의 지급에 관한 방침",
-    fileNo: "223860",
-    requiredGroups: [
-      ["직책수당"],
-    ],
-  },
 ];
 
 async function parseTablesFromFileNo(fileNo) {
