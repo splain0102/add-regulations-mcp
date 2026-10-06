@@ -458,11 +458,12 @@ export async function selectLatestAttachment(attachments:Attachment[],revisionDa
  const valid=evidence.filter(e=>!e.failed&&!e.excluded).sort((a,b)=>Number(b.bodyMatch)-Number(a.bodyMatch)||Number(b.filenameMatch)-Number(a.filenameMatch)||formatRank(b.file)-formatRank(a.file)||Number(b.file.fileNo)-Number(a.file.fileNo));
  const winner=valid[0];
  const reason=!winner?['all_attachments_parse_failed']:winner.matchedReasons.length?winner.matchedReasons:['fallback_format_priority','fallback_latest_file_no'];
- return {selected:winner?.file??null,selection_reason:reason,other_attachments:evidence.filter(e=>e!==winner).map(({file,failed,bodyMatch,filenameMatch})=>({...file,detectedDate:file.detectedDate??null,selection_reason:failed?'parse_failed':bodyMatch||filenameMatch?'not_selected_tiebreak_format_or_fileNo':'revision_date_does_not_match_selected_version'}))};
+ return {selected:winner?.file??null,selection_reason:reason,other_attachments:evidence.filter(e=>e!==winner).map(({file,failed,bodyMatch,filenameMatch,excluded})=>({...file,detectedDate:file.detectedDate??null,selection_reason:failed?'parse_failed':excluded?'not_probed_latest_revision_confirmed':bodyMatch||filenameMatch?'not_selected_tiebreak_format_or_fileNo':'revision_date_does_not_match_selected_version'}))};
 }
 
 async function getRegulationDetail(
-  url: string
+  url: string,
+  fallbackUpdatedDate?:string
 ) {
   const html = await fetchAlio(url);
   const plain = cleanHtml(html);
@@ -494,7 +495,7 @@ async function getRegulationDetail(
     await selectLatestAttachment(
       attachments,
       revisionDate,
-      updatedDate ?? ''
+      updatedDate ?? fallbackUpdatedDate ?? ''
     );
   const latestAttachment = selection.selected;
 
@@ -682,7 +683,8 @@ export async function getLatestRegulationByName(
 
   const detail =
     await getRegulationDetail(
-      match.detailUrl
+      match.detailUrl,
+      match.updatedDate
     );
 
   return {

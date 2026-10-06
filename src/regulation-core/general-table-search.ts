@@ -55,16 +55,22 @@ export function searchGeneralTables(tables:Table[],query:string,delegationRows:S
   const cells=tableCellsForRow(table,row),headerRows=headerRowNumbers(table);
   const headers=headerRows.map(r=>({row:r,cells:tableCellsForRow(table,r).map(cellJson)}));
   const headerCells=table.cells.filter(c=>headerRows.includes(c.row)&&c.text.trim());
-  const leafHeaders=[...Array(Math.max(0,...table.cells.map(c=>c.col+c.colSpan))).keys()].map(col=>{
-    const candidates=headerCells.filter(h=>h.col<=col&&col<h.col+h.colSpan).sort((a,b)=>b.row-a.row);
-    const h=candidates[0];return h?{name:normalizedText(h.text),source_text:h.text,col,colSpan:1}:null;
-  }).filter((x):x is {name:string;source_text:string;col:number;colSpan:number}=>!!x&&!!x.name);
+  const leafHeaders:{name:string;source_text:string;col:number;colSpan:number}[]=[];
+  let lastOwner:Cell|undefined;
+  for(let col=0;col<Math.max(0,...table.cells.map(c=>c.col+c.colSpan));col++){
+    const owner=headerCells.filter(h=>h.col<=col&&col<h.col+h.colSpan).sort((a,b)=>b.row-a.row)[0];
+    if(!owner||!normalizedText(owner.text)){lastOwner=undefined;continue;}
+    const last=leafHeaders.at(-1);
+    if(owner===lastOwner&&last&&last.col+last.colSpan===col)last.colSpan++;
+    else leafHeaders.push({name:normalizedText(owner.text),source_text:owner.text,col,colSpan:1});
+    lastOwner=owner;
+  }
   const roleColumns=headerCells.map(c=>({role:roleName(c.text),cell:c})).filter(x=>x.role).map(x=>({name:x.role,source_text:x.cell.text,col:x.cell.col,colSpan:x.cell.colSpan}));
   const columns=roleColumns.length>=2?roleColumns:leafHeaders;
   const contextualCells=cells.map(c=>({...cellJson(c),header_path:headerCells.filter(h=>h.row<c.row&&h.text.trim()&&h.col<c.col+c.colSpan&&c.col<h.col+h.colSpan).sort((a,b)=>a.row-b.row).map(cellJson)}));
   const values:Record<string,string>={};
   if(!headerRows.includes(row)) for(const c of cells){
-    const h=leafHeaders.find(x=>x.col>=c.col&&x.col<c.col+c.colSpan);
+    const h=leafHeaders.find(x=>x.col<c.col+c.colSpan&&c.col<x.col+x.colSpan);
     if(h?.name&&normalizedText(c.text)) values[h.name]=normalizedText(c.text);
   }
   const base={source_type:sourceType,analysis_type:(Math.max(0,...table.cells.map(c=>c.row+c.rowSpan))===1&&Math.max(0,...table.cells.map(c=>c.col+c.colSpan))===1)?'text_box':'general_table',coordinate_type:'logical_cell',coordinate_space:'logical-cell-address',page:null,table_id:table.id,row,match_mode:mode,matched_cell:cellJson(cell),cells:contextualCells,columns,values,header_evidence:{rows:headers},raw_cells:cells.map(cellJson),needs_review:false,bounding_box:{x0:0,y0:row,x1:Math.max(...cells.map(c=>c.col+c.colSpan)),y1:row+1}};
