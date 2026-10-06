@@ -1,4 +1,4 @@
-import { parseHwp, hwpToMarkdown } from "@ssabrojs/hwpxjs";
+import { HwpxReader, hwpToHwpx, parseHwp, hwpToMarkdown } from "@ssabrojs/hwpxjs";
 
 const URL =
   "https://www.alio.go.kr/download/rulefiledown.json?fileNo=239154";
@@ -133,4 +133,80 @@ for (const keyword of ["기술용역", "계약", "1억원", "5천만원"]) {
   console.log(`KEYWORD_CONTEXT_${keyword}_START`);
   console.log(JSON.stringify(contexts.slice(0, 5), null, 2));
   console.log(`KEYWORD_CONTEXT_${keyword}_END`);
+}
+
+
+function normalizeTableSearch(value) {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s,]+/g, "");
+}
+
+const normalizedOneHundredMillion = normalizeTableSearch("1억원");
+const normalizedMatches = tables.flatMap((item, tableIndex) =>
+  item.table.cells
+    .filter((cell) =>
+      normalizeTableSearch(cellText(cell)).includes(normalizedOneHundredMillion)
+    )
+    .map((cell) => ({
+      tableIndex,
+      row: cell.row,
+      col: cell.col,
+      text: cellText(cell),
+    }))
+);
+
+console.log("NORMALIZED_1EOK_MATCHES_START");
+console.log(JSON.stringify(normalizedMatches.slice(0, 20), null, 2));
+console.log("NORMALIZED_1EOK_MATCHES_END");
+
+if (normalizedMatches.length === 0) {
+  throw new Error("normalized search failed: 1억원 should match 1억 원");
+}
+
+const hwpxBytes = await hwpToHwpx(bytes, {
+  title: "위임전결규정 표 구조 테스트",
+  creator: "ADD Regulations MCP CI",
+});
+
+const reader = new HwpxReader();
+const hwpxArrayBuffer = hwpxBytes.buffer.slice(
+  hwpxBytes.byteOffset,
+  hwpxBytes.byteOffset + hwpxBytes.byteLength
+);
+await reader.loadFromArrayBuffer(hwpxArrayBuffer);
+
+const hwpxHtml = await reader.extractHtml({
+  renderImages: false,
+  renderTables: true,
+  renderStyles: false,
+});
+const hwpxMarkdown = await reader.extractMarkdown({
+  embedImages: false,
+});
+
+const hwpxTableCount = (hwpxHtml.match(/<table\b/gi) ?? []).length;
+const hwpxRowSpanCount = (hwpxHtml.match(/rowspan=/gi) ?? []).length;
+const hwpxColSpanCount = (hwpxHtml.match(/colspan=/gi) ?? []).length;
+
+console.log("HWPX_ROUNDTRIP_START");
+console.log(JSON.stringify({
+  bytes: hwpxBytes.byteLength,
+  tableCount: hwpxTableCount,
+  rowSpanCount: hwpxRowSpanCount,
+  colSpanCount: hwpxColSpanCount,
+  markdownHasDelegation: hwpxMarkdown.includes("위임전결"),
+  markdownHasTechnicalService: hwpxMarkdown.includes("기술용역"),
+}, null, 2));
+console.log("HWPX_ROUNDTRIP_END");
+
+if (hwpxTableCount < 3) {
+  throw new Error(`HWPX roundtrip table count too small: ${hwpxTableCount}`);
+}
+if (hwpxRowSpanCount === 0 || hwpxColSpanCount === 0) {
+  throw new Error("HWPX roundtrip lost merged-cell structure");
+}
+if (!hwpxMarkdown.includes("기술용역")) {
+  throw new Error("HWPX markdown lost expected table text");
 }
