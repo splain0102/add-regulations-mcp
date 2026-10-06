@@ -25,8 +25,8 @@ export function searchGeneralTables(tables:Table[],query:string,delegationRows:S
  for(const table of tables){
   const rowCount=Math.max(0,...table.cells.map(c=>c.row+c.rowSpan));
   const colCount=Math.max(0,...table.cells.map(c=>c.col+c.colSpan));
-  if(rowCount===1&&colCount===1) continue; // text_box: excluded from default search
-  const headerRows=headerRowNumbers(table);
+  const isTextBox=rowCount===1&&colCount===1;
+  const headerRows=isTextBox?[]:headerRowNumbers(table);
   for(const cell of table.cells){if(normalizeTableSearch(cell.text).includes(q)){
    const key=`${table.id}:${cell.row}`;if(!seen.has(key)){seen.add(key);matches.push({table,cell,row:cell.row,mode:'cell'});}
   }}
@@ -60,7 +60,7 @@ export function searchGeneralTables(tables:Table[],query:string,delegationRows:S
     const h=leafHeaders.find(x=>x.col>=c.col&&x.col<c.col+c.colSpan);
     if(h?.name&&normalizedText(c.text)) values[h.name]=normalizedText(c.text);
   }
-  const base={source_type:sourceType,analysis_type:'general_table',coordinate_type:'logical_cell',coordinate_space:'logical-cell-address',page:null,table_id:table.id,row,match_mode:mode,matched_cell:cellJson(cell),cells:contextualCells,columns,values,header_evidence:{rows:headers},raw_cells:cells.map(cellJson),needs_review:false,bounding_box:{x0:0,y0:row,x1:Math.max(...cells.map(c=>c.col+c.colSpan)),y1:row+1}};
+  const base={source_type:sourceType,analysis_type:(Math.max(0,...table.cells.map(c=>c.row+c.rowSpan))===1&&Math.max(0,...table.cells.map(c=>c.col+c.colSpan))===1)?'text_box':'general_table',coordinate_type:'logical_cell',coordinate_space:'logical-cell-address',page:null,table_id:table.id,row,match_mode:mode,matched_cell:cellJson(cell),cells:contextualCells,columns,values,header_evidence:{rows:headers},raw_cells:cells.map(cellJson),needs_review:false,bounding_box:{x0:0,y0:row,x1:Math.max(...cells.map(c=>c.col+c.colSpan)),y1:row+1}};
   const specialized=delegationRows.filter(r=>r.table_id===table.id&&r.bounding_box.y0===row);
   return specialized.length?specialized.map(r=>({...base,...r,analysis_type:'delegation_table',coordinate_type:'logical_cell',row,col:r.bounding_box.x0,coordinate:{coordinate_type:'logical_cell',row,col:r.bounding_box.x0},symbol_coordinates:{...r.symbol_coordinates,coordinate_type:'logical_cell',row,col:r.bounding_box.x0},header_evidence:{...(r.header_evidence as object??{}),rows:headers,columns},confidence_basis:['explicit_cell_span','header_detected','symbol_inside_column']})):[base];
  });
