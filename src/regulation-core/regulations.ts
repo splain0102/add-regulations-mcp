@@ -1,3 +1,4 @@
+import {extractRevisionSection} from './revision-probe';
 import { unzipSync, strFromU8 } from "fflate";
 import { hwpToText } from "@ssabrojs/hwpxjs/browser";
 import { extractText } from "unpdf";
@@ -23,7 +24,7 @@ export type Attachment = {
   url: string;
   fileNo: string;
   extension?: string;
-  detectedDate?: string;
+  detectedDate?: string | null;
 };
 
 function cleanHtml(value: string): string {
@@ -183,33 +184,18 @@ export function normalizeDate(value?: string): string {
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
-function extractDateFromFilename(name: string): string {
-  const patterns = [
-    /(20\d{2})\s*[.\-_년]\s*(\d{1,2})\s*[.\-_월]\s*(\d{1,2})/,
-    /(20\d{2})(\d{2})(\d{2})/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = name.match(pattern);
-
-    if (match) {
-      return (
-        `${match[1]}-` +
-        `${match[2].padStart(2, "0")}-` +
-        `${match[3].padStart(2, "0")}`
-      );
-    }
-  }
-
-  return "";
+export function extractDateFromFilename(name:string):string|null {
+ const full=name.match(/(20\d{2})\s*(?:년도|년|[.\-_])\s*(\d{1,2})\s*(?:월|[.\-_])\s*(\d{1,2})/)
+   ??name.match(/(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)/);
+ const month=full??name.match(/(?<!\d)(20\d{2}|\d{2})\s*(?:년도|년|[.\-_])\s*(\d{1,2})\s*월/);
+ if(!month)return null;
+ const year=month[1].length===2?'20'+month[1]:month[1],m=Number(month[2]),d=full?Number(full[3]):null;
+ if(m<1||m>12||d!==null&&(d<1||d>new Date(Date.UTC(Number(year),m,0)).getUTCDate()))return null;
+ return `${year}-${String(m).padStart(2,'0')}`+(d!==null?`-${String(d).padStart(2,'0')}`:'');
 }
 
-function getExtension(name: string): string {
-  const match = name
-    .toLowerCase()
-    .match(/\.([a-z0-9]+)$/);
-
-  return match?.[1] ?? "";
+function getExtension(name:string):string {
+ return name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1]??'';
 }
 
 export function parseRegulations(
@@ -433,67 +419,53 @@ export function extractAttachments(
 export type AttachmentSelection = {
   selected: Attachment | null;
   other_attachments: Array<Attachment & {selection_reason:string}>;
-  selection_reason: string;
+  selection_reason: string[];
 };
 
 const attachmentProbeCache = new Map<string, Promise<string>>();
-async function attachmentBodyText(file:Attachment):Promise<string> {
-  let pending=attachmentProbeCache.get(file.fileNo);
-  if(!pending){
-    pending=(async()=>{
-      try{
-        const downloaded=await downloadLatestFile(file);
-        if(downloaded.extension==='hwp') return await hwpToText(downloaded.bytes);
-        if(downloaded.extension==='hwpx') return extractHwpxText(downloaded.bytes);
-        if(downloaded.extension==='pdf'){
-          const r=await extractText(downloaded.bytes.slice(),{mergePages:true});
-          return Array.isArray(r.text)?r.text.join('\n\n'):r.text;
-        }
-      }catch{}
-      return '';
-    })();
-    attachmentProbeCache.set(file.fileNo,pending);
-  }
-  return pending;
+async function attachmentRevisionText(file:Attachment,updatedDate:string):Promise<string> {
+ const key=`${file.fileNo}:${updatedDate}`;
+ let pending=attachmentProbeCache.get(key);
+ if(!pending){
+  pending=(async()=>{const downloaded=await downloadLatestFile(file);return extractRevisionSection(downloaded.bytes,downloaded.extension);})();
+  if(attachmentProbeCache.size>=64)attachmentProbeCache.delete(attachmentProbeCache.keys().next().value!);
+  attachmentProbeCache.set(key,pending);
+ }
+ try{return await pending;}catch(error){attachmentProbeCache.delete(key);throw error;}
 }
-
-export async function selectLatestAttachment(
-  attachments: Attachment[],
-  revisionDate?: string
-): Promise<AttachmentSelection> {
-  if (!attachments.length) return {selected:null,other_attachments:[],selection_reason:'no_attachment'};
-  const officialDate=normalizeDate(revisionDate);
-  const formatRank=(f:Attachment)=>f.extension==='hwpx'?3:f.extension==='hwp'?2:f.extension==='pdf'?1:0;
-  const evidence=await Promise.all(attachments.map(async file=>{
-    const text=officialDate?await attachmentBodyText(file):'';
-    const check=text?versionCheck(revisionDate,file.detectedDate,text):null;
-    const bodyDates=(check?.dates??[]).filter(d=>d.source==='body_last_revision_date'||d.source==='body_last_effective_date').map(d=>d.date);
-    return {file,bodyMatch:!!officialDate&&bodyDates.includes(officialDate),filenameMatch:!!officialDate&&file.detectedDate===officialDate};
-  }));
-  evidence.sort((a,b)=>
-    Number(b.bodyMatch)-Number(a.bodyMatch) ||
-    Number(b.filenameMatch)-Number(a.filenameMatch) ||
-    formatRank(b.file)-formatRank(a.file) ||
-    Number(b.file.fileNo)-Number(a.file.fileNo)
-  );
-  const winner=evidence[0];
-  const reason=winner.bodyMatch?'body_revision_date_matches_alio':
-    winner.filenameMatch?'filename_date_matches_alio':
-    'format_then_latest_fileNo';
-  return {
-    selected:winner.file,
-    selection_reason:reason,
-    other_attachments:evidence.slice(1).map(({file,bodyMatch,filenameMatch})=>({
-      ...file,
-      selection_reason:bodyMatch?'not_selected_tiebreak_format_or_fileNo':
-        filenameMatch?'not_selected_tiebreak_format_or_fileNo':
-        'revision_date_does_not_match_selected_version'
-    }))
-  };
+export async function selectLatestAttachment(attachments:Attachment[],revisionDate?:string,updatedDate=''):Promise<AttachmentSelection> {
+ if(!attachments.length)return {selected:null,other_attachments:[],selection_reason:['no_attachment']};
+ const officialDate=normalizeDate(revisionDate);
+ const formatRank=(f:Attachment)=>f.extension==='hwpx'?3:f.extension==='hwp'?2:f.extension==='pdf'?1:0;
+ const evidence=[];
+ const ordered=[...attachments].sort((a,b)=>Number(b.detectedDate===officialDate)-Number(a.detectedDate===officialDate)||formatRank(b)-formatRank(a)||Number(b.fileNo)-Number(a.fileNo));
+ let confirmedLatest:Attachment|undefined;
+ // Serial probes keep large document/PDF allocations out of the same isolate at once.
+ for(const file of ordered){
+  const sameFilenamePeriod=!!officialDate&&!!file.detectedDate&&officialDate.startsWith(file.detectedDate);
+  const possiblyNewer=!!confirmedLatest&&Number(file.fileNo)>Number(confirmedLatest.fileNo);
+  if(confirmedLatest&&!sameFilenamePeriod&&!possiblyNewer&&formatRank(file)<=formatRank(confirmedLatest)){evidence.push({file,bodyMatch:false,failed:false,filenameMatch:false,excluded:true,matchedReasons:[] as string[]});continue;}
+  let bodyMatch=false,failed=false;const matchedReasons:string[]=[];
+  try{
+   const text=officialDate?await attachmentRevisionText(file,updatedDate):'';
+   const check=text?versionCheck(revisionDate,file.detectedDate??undefined,text):null;
+   for(const d of check?.dates??[]){if(d.date!==officialDate)continue;if(d.source==='body_last_revision_date')matchedReasons.push('body_revision_date_matches_alio');if(d.source==='body_last_effective_date')matchedReasons.push('body_effective_date_matches_alio');}
+   bodyMatch=matchedReasons.length>0;
+  }catch(error){failed=true;console.warn('attachment_selection_probe_failed',{fileNo:file.fileNo,code:'parse_failed',message:error instanceof Error?error.message:String(error),stack:error instanceof Error?error.stack:undefined});}
+  const filenameMatch=!!officialDate&&!!file.detectedDate&&(file.detectedDate===officialDate||file.detectedDate.length===7&&officialDate.startsWith(file.detectedDate+'-'));
+  if(filenameMatch)matchedReasons.unshift('attachment_filename_date_matches_alio');
+  if(!failed&&bodyMatch&&filenameMatch)confirmedLatest=file;
+  evidence.push({file,bodyMatch,failed,filenameMatch,excluded:false,matchedReasons});
+ }
+ const valid=evidence.filter(e=>!e.failed&&!e.excluded).sort((a,b)=>Number(b.bodyMatch)-Number(a.bodyMatch)||Number(b.filenameMatch)-Number(a.filenameMatch)||formatRank(b.file)-formatRank(a.file)||Number(b.file.fileNo)-Number(a.file.fileNo));
+ const winner=valid[0];
+ const reason=!winner?['all_attachments_parse_failed']:winner.matchedReasons.length?winner.matchedReasons:['fallback_format_priority','fallback_latest_file_no'];
+ return {selected:winner?.file??null,selection_reason:reason,other_attachments:evidence.filter(e=>e!==winner).map(({file,failed,bodyMatch,filenameMatch,excluded})=>({...file,detectedDate:file.detectedDate??null,selection_reason:failed?'parse_failed':excluded?'not_probed_latest_revision_confirmed':bodyMatch||filenameMatch?'not_selected_tiebreak_format_or_fileNo':'revision_date_does_not_match_selected_version'}))};
 }
 
 async function getRegulationDetail(
-  url: string
+  url: string,
+  fallbackUpdatedDate?:string
 ) {
   const html = await fetchAlio(url);
   const plain = cleanHtml(html);
@@ -524,7 +496,8 @@ async function getRegulationDetail(
   const selection =
     await selectLatestAttachment(
       attachments,
-      revisionDate
+      revisionDate,
+      updatedDate ?? fallbackUpdatedDate ?? ''
     );
   const latestAttachment = selection.selected;
 
@@ -712,7 +685,8 @@ export async function getLatestRegulationByName(
 
   const detail =
     await getRegulationDetail(
-      match.detailUrl
+      match.detailUrl,
+      match.updatedDate
     );
 
   return {
@@ -742,7 +716,7 @@ export function clearDocumentCache() { documentCache.clear(); latestDocumentKey.
 async function loadLatestDocument(name: string) {
  const {match,detail} = await getLatestRegulationByName(name);
  const attachment = detail.latestAttachment;
- if (!attachment) throw new DocumentError('download_error','최신 첨부파일을 찾지 못했습니다.');
+ if (!attachment) throw new DocumentError('selection_error','최신 첨부파일을 선택하지 못했습니다: '+detail.selection_reason.join(', '));
  const updatedDate = detail.updatedDate ?? match.updatedDate ?? '';
  const key = `${attachment.fileNo}:${updatedDate}`;
  const previous = latestDocumentKey.get(match.detailUrl);
@@ -774,12 +748,21 @@ async function loadLatestDocument(name: string) {
 }
 function documentMeta(loaded: Awaited<ReturnType<typeof loadLatestDocument>>) {
  const {match,detail,attachment,document,cache}=loaded;
- const versions=versionCheck(detail.revisionDate??match.revisionDate,attachment.detectedDate,document.text);
+ const versions=versionCheck(detail.revisionDate??match.revisionDate,attachment.detectedDate??undefined,document.text);
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,
  revisionDate:detail.revisionDate??match.revisionDate,updatedDate:detail.updatedDate??match.updatedDate,
  sourceUrl:detail.sourceUrl,filename:document.file.filename,extension:document.file.extension,fileNo:attachment.fileNo,
  cache,version_check:versions,version_warning:versions.warning,
  selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
+}
+export async function getRegulationMetadata(name:string) {
+ const {match,detail}=await getLatestRegulationByName(name);
+ const attachment=detail.latestAttachment;
+ const probe=attachment?await attachmentRevisionText(attachment,detail.updatedDate??match.updatedDate??''):'';
+ const versions=versionCheck(detail.revisionDate??match.revisionDate,attachment?.detectedDate??undefined,probe);
+ return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,revisionDate:detail.revisionDate??match.revisionDate,
+ updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
+ version_check:versions,version_warning:versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);

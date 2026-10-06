@@ -1,13 +1,12 @@
-# ADD Regulations MCP
+## 1.10.1 — second validation fixes (draft)
 
-국방과학연구소(ADD)의 ALIO 내부규정을 조회하고, 최신 첨부파일의 본문까지 검색할 수 있도록 만든 Remote MCP 서버입니다.
+- Metadata lookup uses a bounded, cached supplementary-provision scan instead of the full document/table parser. Cache identity includes fileNo and idate. Probe failures are isolated as `parse_failed`.
+- All table paths, including text-search table evidence, default to compact output. General rows keep values; delegation rows keep semantic/approval evidence. Columns appear once per table. Detailed cells, header paths, raw cells and bounding boxes require `compact:false`. No snake_case span keys are emitted.
+- Display text preserves word spaces and collapses only isolated single-Hangul-character spacing. Search continues to ignore whitespace.
+- Attachment selection reports each actual filename/revision/effective-date match in `selection_reason`. Historical filename dates support two-digit years and month precision; unknown dates are null.
+- The 15 second-validation acceptance cases execute the actual registered callbacks and Zod defaults in Node with real ALIO documents. A separate ten-iteration metadata/table test checks stability, attachment failure isolation and probe cache invalidation. Existing comprehensive/PDF regressions and Wrangler dry-run remain enabled.
 
-- 기관: 국방과학연구소
-- ALIO 기관 ID: `C0345`
-- MCP endpoint: `https://add-regulations-mcp.splain0102.workers.dev/mcp`
-- 실행 환경: Cloudflare Workers
-- 인증: OAuth 2.1 + Cloudflare Access
-- 기본 원칙: 같은 규정명이 여러 번 존재할 경우 최신 제·개정본을 우선
+Production exception logs and authenticated production MCP calls require separate operational verification. No production deploy or Site Publish is performed by this draft.
 
 ## 1.10.0: 종합 개선 및 버전 표시 통일
 
@@ -315,4 +314,5 @@ ALIO 목록의 제·개정일과 첨부파일명에 적힌 날짜가 서로 다�
 이 프로젝트는 ALIO 조회/문서 파싱 로직과 Cloudflare OAuth/배포 로직을 가능한 한 분리하는 방향으로 유지합니다.
 
 향후 다른 MCP 호스팅 환경이나 ChatGPT Site-hosted MCP로 이식할 때도 ALIO 및 HWP/PDF 처리 로직을 최대한 재사용하는 것이 목표입니다.
+
 
