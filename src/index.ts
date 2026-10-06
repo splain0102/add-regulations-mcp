@@ -813,7 +813,7 @@ function normalizeTableSearch(value: string): string {
   return value
     .normalize("NFKC")
     .toLowerCase()
-    .replace(/[\\s,]+/g, "");
+    .replace(/[\s,]+/g, "");
 }
 
 function paragraphPlainText(paragraph: any): string {
@@ -850,7 +850,7 @@ function paragraphPlainText(paragraph: any): string {
   return [runText || direct, ...nested]
     .filter(Boolean)
     .join(" ")
-    .replace(/\\s+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -875,7 +875,7 @@ function extractHwpTables(
               .map((p: any) => paragraphPlainText(p))
               .filter(Boolean)
               .join(" ")
-              .replace(/\\s+/g, " ")
+              .replace(/\s+/g, " ")
               .trim(),
           }));
 
@@ -905,10 +905,10 @@ function htmlEntityDecode(value: string): string {
 function htmlCellText(value: string): string {
   return htmlEntityDecode(
     value
-      .replace(/<br\\s*\\/?\\s*>/gi, "\\n")
+      .replace(/<br\s*\/?\s*>/gi, "\n")
       .replace(/<[^>]+>/g, " ")
   )
-    .replace(/\\s+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -918,7 +918,7 @@ function extractTablesFromRenderedHtml(
   const tables: StructuredTable[] = [];
 
   for (const tableMatch of html.matchAll(
-    /<table\\b[^>]*>([\\s\\S]*?)<\\/table>/gi
+    /<table\b[^>]*>([\s\S]*?)<\/table>/gi
   )) {
     const body = tableMatch[1] ?? "";
     const cells: StructuredTableCell[] = [];
@@ -927,13 +927,13 @@ function extractTablesFromRenderedHtml(
     let maxCol = 0;
 
     for (const rowMatch of body.matchAll(
-      /<tr\\b[^>]*>([\\s\\S]*?)<\\/tr>/gi
+      /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi
     )) {
       const rowHtml = rowMatch[1] ?? "";
       let colIndex = 0;
 
       for (const cellMatch of rowHtml.matchAll(
-        /<t[dh]\\b([^>]*)>([\\s\\S]*?)<\\/t[dh]>/gi
+        /<t[dh]\b([^>]*)>([\s\S]*?)<\/t[dh]>/gi
       )) {
         while (occupied.has(`${rowIndex}:${colIndex}`)) {
           colIndex++;
@@ -946,7 +946,7 @@ function extractTablesFromRenderedHtml(
             1,
             Number(
               attrs.match(
-                /rowspan=["']?(\\d+)/i
+                /rowspan=["']?(\d+)/i
               )?.[1] ?? 1
             )
           );
@@ -955,7 +955,7 @@ function extractTablesFromRenderedHtml(
             1,
             Number(
               attrs.match(
-                /colspan=["']?(\\d+)/i
+                /colspan=["']?(\d+)/i
               )?.[1] ?? 1
             )
           );
@@ -1184,7 +1184,7 @@ function renderStructuredTableMatch(
         row
       )
     ),
-  ].join("\\n");
+  ].join("\n");
 }
 
 async function getLatestRegulationByName(
@@ -1330,7 +1330,7 @@ async function getLatestRegulationText(
               : String(error)
           }`,
           `원문: ${detail.sourceUrl}`,
-        ].join("\\n")
+        ].join("\n")
       );
     }
   } else if (extension === "pdf") {
@@ -1343,7 +1343,7 @@ async function getLatestRegulationText(
 
       text =
         Array.isArray(extracted.text)
-          ? extracted.text.join("\\n\\n")
+          ? extracted.text.join("\n\n")
           : extracted.text;
 
       if (!text.trim()) {
@@ -1362,7 +1362,7 @@ async function getLatestRegulationText(
               : String(error)
           }`,
           `원문: ${detail.sourceUrl}`,
-        ].join("\\n")
+        ].join("\n")
       );
     }
   } else {
@@ -1374,7 +1374,7 @@ async function getLatestRegulationText(
         "현재 MCP는 HWP, HWPX, 텍스트형 PDF 본문을 직접 읽을 수 있습니다.",
         "스캔 PDF나 DOCX 등은 아직 직접 본문 추출 대상이 아닙니다.",
         `원문: ${detail.sourceUrl}`,
-      ].join("\\n")
+      ].join("\n")
     );
   }
 
