@@ -1,3 +1,4 @@
+import {searchRegulationText} from '../src/regulation-core/text-search';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {transformSync} from 'esbuild';
@@ -11,7 +12,7 @@ const registrations=new Map<string,{config:any;callback:Function}>();
 class Registry {constructor(_:unknown){} registerTool(name:string,config:any,callback:Function){registrations.set(name,{config,callback});}}
 const source=readFileSync('src/index.ts','utf8');
 const code=source.slice(source.indexOf('async function loadTextWithToolRetry'),source.indexOf('const MCP_RESOURCE'));
-const bindings={McpServer:Registry,z,MCP_VERSION:'1.10.1',coreListRegulations:listRegulations,coreGetLatestRegulationText:getLatestRegulationText,
+const bindings={McpServer:Registry,z,MCP_VERSION:'1.10.2',searchRegulationText,coreListRegulations:listRegulations,coreGetLatestRegulationText:getLatestRegulationText,
  getRegulationMetadata,searchLatestRegulationTable,tableToolResponse,extractArticleSnippet,sleep:(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms))};
 new Function(...Object.keys(bindings),transformSync(code,{loader:'ts',target:'es2022'}).code+';return createServer();')(...Object.values(bindings));
 export async function call(tool:string,input:Record<string,unknown>={}){
