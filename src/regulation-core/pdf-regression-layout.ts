@@ -1418,22 +1418,27 @@ function findPdfInheritedTask(
 ): string | null {
   if (!header) return null;
   const firstHeaderX=Math.min(...header.columns.map(column=>column.x));
-  const titles:{row:number;text:string}[]=[];
+  const titles:{row:number;y:number;text:string}[]=[];
   for(const candidateRow of page.rows){
     for(const item of rawPdfItemsInRow(candidateRow)){
       const center=item.x+item.width/2;
       if(center>=firstHeaderX)continue;
-      if(/^\s*\d+(?:-\d+)?\)\s*\S+/.test(item.str))titles.push({row:candidateRow.row,text:item.str});
+      if(/^\s*\d+(?:-\d+)?\)\s*\S+/.test(item.str))titles.push({row:candidateRow.row,y:item.y,text:item.str});
     }
   }
   if(!titles.length)return null;
-  // Merged task labels are often vertically centered, so they can appear after
-  // their first child row. Assign by the nearest title center, with boundaries
-  // halfway between adjacent title centers instead of previous-only fill-down.
-  titles.sort((a,b)=>a.row-b.row);
-  let best=titles[0],distance=Math.abs(rowIndex-best.row);
-  for(const title of titles){const d=Math.abs(rowIndex-title.row);if(d<distance){best=title;distance=d;}}
-  return distance<=8?best.text:null;
+  const targetRow=page.rows.find(r=>r.row===rowIndex);
+  const targetItems=targetRow?rawPdfItemsInRow(targetRow):[];
+  const targetY=targetItems.length?targetItems.reduce((sum,item)=>sum+item.y,0)/targetItems.length:null;
+  if(targetY===null)return null;
+  // PDF text order is not a reliable ownership signal for vertically merged
+  // cells. Use the physical y centre of each numbered task label instead.
+  // This deliberately allows a task label printed below its first child row
+  // to own rows above it (common when the label is vertically centred).
+  titles.sort((a,b)=>b.y-a.y);
+  let best=titles[0],distance=Math.abs(targetY-best.y);
+  for(const title of titles){const d=Math.abs(targetY-title.y);if(d<distance){best=title;distance=d;}}
+  return best.text;
 }
 export async function extractPdfRichContent(
   bytes: Uint8Array
