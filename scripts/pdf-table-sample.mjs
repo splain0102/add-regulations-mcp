@@ -524,7 +524,7 @@ if (page34Debug) {
   console.log("PDF_PAGE34_HEADER_ZONE_START");
   console.log(
     JSON.stringify(
-      page34Debug.rows.slice(0, 14).map((row) => ({
+      page34Debug.rows.slice(11, 24).map((row) => ({
         row: row.row,
         y: row.y,
         text: row.text,
