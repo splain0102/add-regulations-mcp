@@ -3,6 +3,26 @@ import { extractText, extractTextItems } from "unpdf";
 const DETAIL_URL =
   "https://www.alio.go.kr/item/itemBoard21110.do?disclosureNo=&apbaId=C0345&nowcode=21110&reportFormNo=21110&table_name=COMM_RULE&idx_name=RULE_NO&idx=24523&reportGbn=N&bid_type=K1100";
 
+
+async function fetchWithRetry(url, init = {}, attempts = 4) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      if (response.ok || (response.status < 500 && response.status !== 429)) {
+        return response;
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+    }
+  }
+  throw lastError ?? new Error("fetch failed");
+}
+
 function cleanHtml(value) {
   return value
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -119,7 +139,7 @@ function normalize(value) {
   return value.normalize("NFKC").toLowerCase().replace(/[\s,]+/g, "");
 }
 
-const detail = await fetch(DETAIL_URL, {
+const detail = await fetchWithRetry(DETAIL_URL, {
   headers: {
     "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP-PDF-Table-Test/1.0",
     "Accept-Language": "ko-KR,ko;q=0.9",
@@ -136,7 +156,7 @@ if (!pdfs.length) throw new Error("No PDF attachment found");
 const selected =
   pdfs.find((x) => /21|2021|순환보직/i.test(x.name)) ?? pdfs[0];
 
-const res = await fetch(selected.url, {
+const res = await fetchWithRetry(selected.url, {
   headers: {"User-Agent":"Mozilla/5.0 ADD-Regulations-MCP-PDF-Table-Test/1.0"},
 });
 if (!res.ok) throw new Error(`pdf HTTP ${res.status}`);
