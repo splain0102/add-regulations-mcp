@@ -815,6 +815,8 @@ export async function refreshCorpusIndex(kv:KVNamespace){
   // stDate and idate detect metadata changes. Periodic full content verification
   // is achieved by re-fetching unchanged items on a separate, slower sweep.
   try{
+   // Reuse unchanged content; perform a full hash verification at least weekly.
+   if(old&&old.updatedDate===item.updatedDate&&old.revisionDate===item.revisionDate&&Date.now()-Date.parse(old.indexedAt)<7*86400000)continue;
    const loaded=await loadLatestDocument(item.title);
    const text=loaded.document.text;
    const hash=await fingerprint(text);
@@ -828,7 +830,9 @@ export async function refreshCorpusIndex(kv:KVNamespace){
  for(const [id,shard] of shards)await kv.put(shardKey(id),JSON.stringify(shard));
  const next=start+selected.length;
  const completed=next>=items.length;
- const newState:IndexState={cursor:completed?0:next,total:items.length,lastCheckedAt:new Date().toISOString(),lastCompletedAt:completed&&!errors.length?new Date().toISOString():state.lastCompletedAt,errors:{count:errors.length,sample:errors.slice(0,3)}};
+ const errorCount=(start===0?0:state.errors.count)+errors.length;
+ const errorSample=[...(start===0?[]:state.errors.sample),...errors].slice(0,3);
+ const newState:IndexState={cursor:completed?0:next,total:items.length,lastCheckedAt:new Date().toISOString(),lastCompletedAt:completed&&errorCount===0?new Date().toISOString():state.lastCompletedAt,errors:{count:errorCount,sample:errorSample}};
  await kv.put(INDEX_PREFIX+'state',JSON.stringify(newState));
  return {processed:selected.length,updated,next_cursor:completed?null:next,...newState};
 }
