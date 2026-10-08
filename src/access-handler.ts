@@ -19,6 +19,7 @@ import {
 
 export interface Env {
   OAUTH_KV: KVNamespace;
+  REGULATION_CACHE?: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
 
   ACCESS_CLIENT_ID: string;
