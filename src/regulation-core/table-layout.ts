@@ -156,9 +156,11 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  const dates:{source:string;date:string}[]=[];const a=alio&&normalize(alio);if(a)dates.push({source:'alio_revision_date',date:a});if(filenameDate)dates.push({source:'attachment_filename_date',date:filenameDate});
  const headings=[...text.matchAll(/^[ \t]*부[ \t]*칙[^\n]*/gm)];
  const lastHeading=headings.at(-1),section=lastHeading?text.slice(lastHeading.index!,text.indexOf('[별표',lastHeading.index!)>=0?text.indexOf('[별표',lastHeading.index!):undefined):'';
- const revisions=[...(lastHeading?.[0]??'').matchAll(/20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2}/g)].map(m=>normalize(m[0])).filter(Boolean) as string[];
+ const revisionSource=(section||text).normalize('NFKC');
+  const revisions=[...(lastHeading?.[0]??'').matchAll(/20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2}/g),...revisionSource.matchAll(/(?:제정|전부\s*개정|개정)\s*[:：]?\s*(20\d{2}\s*[.년\/\-]\s*\d{1,2}\s*[.월\/\-]\s*\d{1,2})/g)].map(m=>normalize(m[1]??m[0])).filter(Boolean) as string[];
  const effective=[...section.matchAll(/(20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2})[^\n]{0,25}시행/g)].map(m=>normalize(m[1])).filter(Boolean) as string[];
- const r=revisions.sort().at(-1),e=effective.sort().at(-1);if(r)dates.push({source:'body_last_revision_date',date:r});if(e)dates.push({source:'body_last_effective_date',date:e});
+ const reverseDates=[...revisionSource.matchAll(/(20[0-9]{2}[^\n]{0,18})[ ]*개정/g)].map(m=>normalize(m[1])).filter(Boolean) as string[];
+ const r=[...revisions,...reverseDates].sort().at(-1),e=effective.sort().at(-1);if(r)dates.push({source:'body_last_revision_date',date:r});if(e)dates.push({source:'body_last_effective_date',date:e});
  const dateRange=(value:string):[number,number]=>{
   if(value.length===7){const [year,month]=value.split('-').map(Number);return [Date.UTC(year,month-1,1),Date.UTC(year,month,0)];}
   const day=Date.parse(value+'T00:00:00Z');return [day,day];
@@ -167,6 +169,10 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  // nearby effective dates against that interval and exact revision evidence.
  const dayDiff=(a:string,b:string)=>{const x=dateRange(a),y=dateRange(b);return Math.max(0,x[0]-y[1],y[0]-x[1])/86400000;};
  const mismatches=dates.flatMap((d,i)=>dates.slice(i+1).filter(o=>(o.date.length===7||d.date.length===7)?o.date.slice(0,7)!==d.date.slice(0,7):o.date!==d.date).map(o=>({left:d,right:o,kind:d.source.includes('effective')||o.source.includes('effective')?'effective_date_difference':'revision_date_mismatch'})));
- const onlyEffectiveNear=mismatches.length>0&&mismatches.every(m=>m.kind==='effective_date_difference'&&dayDiff(m.left.date,m.right.date)<=7);
- return {dates,checked:dates.length>=2,info:onlyEffectiveNear?{code:'effective_date_near_revision',mismatches}:null,warning:mismatches.length&&!onlyEffectiveNear?{code:'version_date_mismatch',mismatches,note:'시행일과 개정일 차이는 정상일 수 있으므로 원문 확인이 필요합니다.'}:null,missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s))};
+ const effectiveDifferences=mismatches.filter(m=>m.kind==='effective_date_difference');
+ const otherDifferences=mismatches.filter(m=>m.kind!=='effective_date_difference');
+ return {dates,revision_evidence:revisionSource.slice(0,900),revision_verification:dates.some(d=>d.source==='body_last_revision_date')?'verified':'unverified',checked:dates.length>=2,
+ info:effectiveDifferences.length?{code:'effective_date_difference',mismatches:effectiveDifferences}:null,
+ warning:otherDifferences.length?{code:'version_date_mismatch',mismatches:otherDifferences,note:'원문 개정일과 공시 또는 첨부파일 날짜를 확인하세요.'}:null,
+ missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s))};
 }

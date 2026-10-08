@@ -10,7 +10,7 @@ permissions:
 jobs:
   regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,5 +19,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:check
+      - run: npm run test:regulation-fixes
       - run: npm run test:tables
       - run: npm run test:delegation-response
+      - name: Real ALIO defect acceptance
+        run: node --use-env-proxy --import ./scripts/test-loader.mjs scripts/regulation-defects-acceptance.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regulation-defects-acceptance
+          path: reports/regulation-defects-acceptance.json
+          if-no-files-found: ignore

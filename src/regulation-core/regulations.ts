@@ -258,9 +258,7 @@ export function dedupeLatestRegulations(
   const map = new Map<string, RegulationItem>();
 
   for (const item of items) {
-    const key = item.title
-      .replace(/\s+/g, "")
-      .toLowerCase();
+    const key = normalizeRegulationTitle(item.title);
 
     const old = map.get(key);
 
@@ -648,41 +646,63 @@ export function extractHwpxText(
   return texts.join("\n\n");
 }
 
+const normalizeAttachmentTitle=(value:string)=>{
+ const cleaned=value.replace(/\.(?:hwp|hwpx|pdf)$/i,'').replace(/\([^)]*(?:\d{2,4}\s*년|\d{2,4}\s*[.\-]\s*\d{1,2})[^)]*\)/g,'').replace(/(?:개정\s*전문|개정본|전문)$/g,'');
+ return normalizeRegulationTitle(cleaned).replace(/민군기술협력사업/g,'민군협력사업');
+};
+const crossCanonicalTitle=(value:string)=>normalizeRegulationTitle(value).replace(/민군기술협력사업/g,'민군협력사업');
+
+let crossIndexCache:{expires:number;entries:{itemTitle:string;file:Attachment;revisionDate?:string}[]}|null=null;
+async function crossAttachmentIndex(){
+ if(crossIndexCache&&crossIndexCache.expires>Date.now())return crossIndexCache.entries;
+ const items=await listRegulations(),entries:{itemTitle:string;file:Attachment;revisionDate?:string}[]=[];
+ let next=0;
+ await Promise.all(Array.from({length:Math.min(5,items.length)},async()=>{
+  while(next<items.length){
+   const item=items[next++];
+   try{
+    const html=await fetchAlio(item.detailUrl);
+    for(const file of extractAttachments(html))entries.push({itemTitle:item.title,file,revisionDate:item.revisionDate});
+   }catch{ /* ALIO may be intermittently unavailable: never replace a selected attachment */ }
+  }
+ }));
+ crossIndexCache={entries,expires:Date.now()+600000};
+ return entries;
+}
+export async function crossEntryAttachmentWarnings(name:string,selectedFileNo?:string,selectedDate?:string){
+ const items=await listRegulations();
+ const canonical=items.find(i=>i.title===name)?.title??name;
+ const target=crossCanonicalTitle(canonical);
+ const entries=await crossAttachmentIndex(),warnings:any[]=[];
+ for(const entry of entries){
+  if(entry.itemTitle===canonical)continue;
+  const fileTitle=normalizeAttachmentTitle(entry.file.name);
+  if(!fileTitle||fileTitle!==target)continue;
+  const date=entry.file.detectedDate??entry.revisionDate??null;
+  const isNewer=!!date&&!!selectedDate&&normalizeDate(date)>normalizeDate(selectedDate);
+  warnings.push({code:isNewer?'cross_entry_newer_attachment':'cross_entry_attachment_mismatch',fileNo:entry.file.fileNo,attachmentName:entry.file.name,itemTitle:entry.itemTitle,date,selectedFileNo:selectedFileNo??null,warning:'다른 규정 항목에 첨부된 파일입니다. 자동 교체하지 않습니다.'});
+ }
+ return warnings;
+}
 export async function getLatestRegulationByName(
   name: string
 ) {
   const items =
     await listRegulations();
 
-  const query = name
-    .replace(/\s+/g, "")
-    .toLowerCase();
-
-  const exact =
-    items.find(
-      (item) =>
-        item.title
-          .replace(/\s+/g, "")
-          .toLowerCase() === query
-    );
-
-  const partial =
-    items.find(
-      (item) =>
-        item.title
-          .replace(/\s+/g, "")
-          .toLowerCase()
-          .includes(query)
-    );
-
-  const match = exact ?? partial;
-
-  if (!match) {
-    throw new Error(
-      `"${name}"에 해당하는 규정을 찾지 못했습니다.`
-    );
+  const query = normalizeRegulationTitle(name);
+  const exact = items.filter(item=>item.title===name);
+  const normalized = items.filter(item=>normalizeRegulationTitle(item.title)===query);
+  const partial = items.filter(item=>normalizeRegulationTitle(item.title).includes(query));
+  const candidates=exact.length?exact:normalized.length?normalized:partial;
+  if(!candidates.length){
+    const similar=items.filter(item=>query&&([...query].some(ch=>normalizeRegulationTitle(item.title).includes(ch)))).slice(0,5).map(item=>({title:item.title,revisionDate:item.revisionDate}));
+    throw Object.assign(new Error(`규정을 찾지 못했습니다: ${name}`),{code:'not_found',candidates:similar});
   }
-
+  if(candidates.length>1){
+    throw Object.assign(new Error(`규정명 후보가 ${candidates.length}건입니다. 정확한 규정명을 지정하세요: ${name}`),{code:'ambiguous_name',candidates:candidates.map(item=>({title:item.title,revisionDate:item.revisionDate}))});
+  }
+  const match=candidates[0];
   const detail =
     await getRegulationDetail(
       match.detailUrl,
@@ -706,6 +726,8 @@ type DocumentEntry = {
  pdfPending?: Promise<void>;
 };
 // Bounded isolate cache. Metadata is re-read before every lookup; changed fileNo/idate evicts the old entry.
+export const PARSER_VERSION = "1.10.4-parser.1";
+export const normalizeRegulationTitle = (value:string) => value.normalize("NFKC").toLowerCase().replace(/[·･‧ㆍ・\s「」｢｣()（）]/g,"");
 const documentCache = new Map<string, Promise<DocumentEntry>>();
 const latestDocumentKey = new Map<string, string>();
 const MAX_CACHE_BYTES = 24_000_000;
@@ -718,7 +740,7 @@ async function loadLatestDocument(name: string) {
  const attachment = detail.latestAttachment;
  if (!attachment) throw new DocumentError('selection_error','최신 첨부파일을 선택하지 못했습니다: '+detail.selection_reason.join(', '));
  const updatedDate = detail.updatedDate ?? match.updatedDate ?? '';
- const key = `${attachment.fileNo}:${updatedDate}`;
+ const key = `${PARSER_VERSION}:${attachment.fileNo}:${updatedDate}`;
  const previous = latestDocumentKey.get(match.detailUrl);
  if(previous && previous !== key) evictDocument(previous);
  latestDocumentKey.set(match.detailUrl,key);
@@ -752,7 +774,7 @@ function documentMeta(loaded: Awaited<ReturnType<typeof loadLatestDocument>>) {
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,
  revisionDate:detail.revisionDate??match.revisionDate,updatedDate:detail.updatedDate??match.updatedDate,
  sourceUrl:detail.sourceUrl,filename:document.file.filename,extension:document.file.extension,fileNo:attachment.fileNo,
- cache,version_check:versions,version_warning:versions.warning,
+ cache,cache_hit:cache.hit,parser_version:PARSER_VERSION,version_check:versions,version_warning:versions.warning,
  selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
 export async function getRegulationMetadata(name:string) {
@@ -760,9 +782,39 @@ export async function getRegulationMetadata(name:string) {
  const attachment=detail.latestAttachment;
  const probe=attachment?await attachmentRevisionText(attachment,detail.updatedDate??match.updatedDate??''):'';
  const versions=versionCheck(detail.revisionDate??match.revisionDate,attachment?.detectedDate??undefined,probe);
+ const crossWarnings=await crossEntryAttachmentWarnings(match.title,attachment?.fileNo,attachment?.detectedDate??detail.revisionDate??match.revisionDate);
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,revisionDate:detail.revisionDate??match.revisionDate,
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
- version_check:versions,version_warning:versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
+ version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
+}
+/** Bounded-concurrency corpus search; offset is across regulation titles. */
+export async function searchAllRegulations(query:string,limit=10,offset=0){
+ const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+ if(!terms.length)return {query,limit,offset,totalRegulations:0,results:[],errors:[]};
+ const items=await listRegulations(),selected=items.slice(offset),results:any[]=[],errors:any[]=[];
+ let cursor=0;
+ const worker=async()=>{
+  while(cursor<selected.length){
+   const item=selected[cursor++];
+   try{
+    const loaded=await loadLatestDocument(item.title),text=loaded.document.text;
+    const headings=[...text.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*)/g)].map(m=>m.index??0);
+    const bounds=[0,...headings,text.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
+    const found:any[]=[];
+    for(let i=0;i<bounds.length-1;i++){
+     const part=text.slice(bounds[i],bounds[i+1]).toLowerCase();
+     if(!terms.every(t=>part.includes(t)))continue;
+     const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
+     const snippet=extractArticleSnippet(text,at,query.length,true);
+     found.push({label:snippet.label,snippet:snippet.snippet,score:(part.includes(query.toLowerCase())?10:0)+terms.length});
+    }
+    if(found.length)results.push({regulationName:item.title,fileNo:loaded.attachment.fileNo,matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+   }catch(e){errors.push({regulationName:item.title,code:e instanceof DocumentError?e.code:'document_error',message:String(e)});}
+  }
+ };
+ await Promise.all(Array.from({length:Math.min(3,selected.length)},()=>worker()));
+ results.sort((a,b)=>b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
+ return {query,limit,offset,totalRegulations:items.length,results:results.slice(0,limit),errors,partial:errors.length>0,scanned:selected.length};
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
@@ -803,7 +855,9 @@ export async function searchLatestRegulationTable(name:string,query:string){
   const rows=matches.flatMap<SearchTableRow>(({page,row,mode})=>{
    const detected=detectKnownPdfHeader(page.rows),isDelegation=!!detected&&detected.matched>=2;
    const cells=row.segments.map(segment=>({text:segment.text,x0:segment.x,x1:segment.xEnd,y:row.y,coordinate_type:'pdf_point',source_items:segment.sourceItems}));
-   const base={source_type:'pdf',y:row.y,page:page.page,row:row.row,table_id:`pdf-${page.page}`,match_mode:mode,coordinate_type:'pdf_point',coordinate_space:'pdf-points-bottom-left',cells,raw_cells:cells,version_warning:meta.version_warning,bounding_box:{x0:Math.min(...cells.map(c=>c.x0)),x1:Math.max(...cells.map(c=>c.x1)),y0:row.y-row.fontMedian/2,y1:row.y+row.fontMedian/2}};
+   const fallbackColumns=cells.map((_,i)=>({name:`col_${i}`,col:i,colSpan:1}));
+    const fallbackValues=Object.fromEntries(cells.map((cell,i)=>[`col_${i}`,cell.text]));
+    const base={source_type:'pdf',y:row.y,page:page.page,row:row.row,table_id:`pdf-${page.page}`,match_mode:mode,coordinate_type:'pdf_point',coordinate_space:'pdf-points-bottom-left',cells,raw_cells:cells,raw_text:row.text,columns:fallbackColumns,values:fallbackValues,version_warning:meta.version_warning,bounding_box:{x0:Math.min(...cells.map(c=>c.x0)),x1:Math.max(...cells.map(c=>c.x1)),y0:row.y-row.fontMedian/2,y1:row.y+row.fontMedian/2}};
    if(!isDelegation)return [{...base,analysis_type:'general_table',header_evidence:null,needs_review:true,review_reasons:['PDF general table column boundaries are not established; positioned cells retained, no delegation inference.']}];
    const ranges=makePdfHeaderBoundaries(detected!.columns);
    return buildPdfStructuredMatches(page,row).filter(match=>terms.every(t=>normalizeTableSearch([match.task,match.condition,row.text].join(' ')).includes(t))).map(match=>{const prior=priorLayout.rows.find(r=>r.page===page.page&&r.symbol===match.symbol&&Math.abs(r.symbol_x_center-(match.coordinate?.xCenter??-999))<0.05&&normalizeTableSearch(r.task??'')===normalizeTableSearch(match.task??'')&&normalizeTableSearch(r.condition??'')===normalizeTableSearch(match.condition??''));return {...prior,...base,analysis_type:'delegation_table',task:match.task,condition:match.condition,approver:match.approver,symbol:match.symbol,suffix:match.suffix,coordinate:match.coordinate?{x0:match.coordinate.x0,x1:match.coordinate.x1,x_center:match.coordinate.xCenter,y:match.coordinate.y,coordinate_type:'pdf_point',precision:match.coordinate.precision}:null,symbol_coordinates:match.coordinate?{symbol:match.symbol,x0:match.coordinate.x0,x1:match.coordinate.x1,x_center:match.coordinate.xCenter,y:match.coordinate.y,suffix:match.suffix,coordinate_type:'pdf_point',precision:match.coordinate.precision}:null,header_evidence:{...match.headerEvidence,ranges,original_layout:prior?{coordinate_space:'pdf-points-top-left',evidence:prior.header_evidence}:null},needs_review:match.needsReview||!!prior?.needs_review,review_reasons:match.reviewReasons};});
@@ -823,104 +877,50 @@ export async function searchLatestRegulationTable(name:string,query:string){
  return {...meta,cache:layout.cache,rows:searchGeneralTables(document.tables??[],query,document.rows??[],document.file.extension).map(row=>({...row,version_warning:meta.version_warning})),layout_debug:[],limitations:layout.limitations};
 }
 
-export function extractArticleSnippet(
-  text: string,
-  matchIndex: number,
-  queryLength: number
-): {
-  label: string;
-  snippet: string;
-} {
-  const articleRegex =
-    /(?:^|\n)\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
-
-  const headings: {
-    index: number;
-    label: string;
-  }[] = [];
-
-  for (const match of text.matchAll(articleRegex)) {
-    if (
-      typeof match.index === "number" &&
-      match[1]
-    ) {
-      headings.push({
-        index: match.index,
-        label:
-          match[1]
-            .replace(/\s+/g, " ")
-            .trim(),
-      });
-    }
-  }
-
-  let current:
-    | { index: number; label: string }
-    | undefined;
-
-  let nextIndex = text.length;
-
-  for (const heading of headings) {
-    if (heading.index <= matchIndex) {
-      current = heading;
-      continue;
-    }
-
-    nextIndex = heading.index;
-    break;
-  }
-
-  let from =
-    current?.index ??
-    text.lastIndexOf("\n", matchIndex);
-
-  if (from < 0) {
-    from = Math.max(0, matchIndex - 250);
-  }
-
-  let to =
-    current
-      ? nextIndex
-      : text.indexOf("\n\n", matchIndex + queryLength);
-
-  if (to < 0) {
-    to = Math.min(
-      text.length,
-      matchIndex + queryLength + 600
-    );
-  }
-
-  const maxSnippetLength = 2200;
-
-  if (to - from > maxSnippetLength) {
-    const aroundFrom = Math.max(
-      from,
-      matchIndex - 500
-    );
-    const aroundTo = Math.min(
-      to,
-      matchIndex + queryLength + 1200
-    );
-
-    from = aroundFrom;
-    to = aroundTo;
-  }
-
-  return {
-    label:
-      current?.label ??
-      "관련 본문",
-    snippet:
-      text
-        .slice(from, to)
-        .trim(),
-  };
+export function missingAnnexes(text:string){
+ const references=[...text.matchAll(/\[?(별표|별지)\s*제\s*(\d+(?:-\d+)?)\s*호\]?/g)];
+ const names=[...new Set(references.map(m=>`[${m[1]} 제${m[2]}호]`))];
+ const headings=new Set([...text.matchAll(/(?:^|\n)\s*\[(별표|별지)\s*제\s*(\d+(?:-\d+)?)\s*호\]/g)].map(m=>`[${m[1]} 제${m[2]}호]`));
+ return names.filter(name=>!headings.has(name));
+}
+export function sectionAt(text:string, matchIndex:number) {
+ const heading = /(?:^|\n)[ \t]*(\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*|제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
+ const sections=[...text.matchAll(heading)].map(m=>({index:m.index??0,label:m[1].replace(/\s+/g,' ').trim()}));
+ let current:typeof sections[number]|undefined,next=text.length;
+ for(const section of sections){if(section.index<=matchIndex)current=section;else{next=section.index;break;}}
+ return {label:current?.label??'관련 본문',start:current?.index??Math.max(0,text.lastIndexOf('\n',matchIndex)),end:next,id:current?.index??-1};
+}
+export function extractArticleSnippet(text:string,matchIndex:number,queryLength:number,compact=false){
+ const section=sectionAt(text,matchIndex);
+ const annex=/^\[(?:별표|별지)/.test(section.label);
+ const cap=compact?850:2200;
+ let from=section.start,to=section.end;
+ if(annex||to-from>cap){
+   from=Math.max(from,matchIndex-(compact?240:500));
+   to=Math.min(to,matchIndex+queryLength+(compact?500:1200));
+ }
+ const snippet=text.slice(from,to).split('\n').filter(line=>line.trim()||!annex).join('\n').trim().slice(0,cap);
+ return {label:section.label,snippet};
 }
 
 /** Explicit opt-in only; these results never replace latest-document evidence. */
 export async function searchHistoricalPdfTables(name:string,query:string){
  const {detail}=await getLatestRegulationByName(name);
  const rows:any[]=[];
+ for(const attachment of detail.other_attachments.filter(a=>a.extension==='hwp'||a.extension==='hwpx')){
+  const file=await downloadLatestFile(attachment);
+  const text=file.extension==='hwpx'?extractHwpxText(file.bytes):await hwpToText(file.bytes);
+  const tokens=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const headings=[...text.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?|부\s*칙|\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\])/g)].map(m=>m.index??0);
+  const boundaries=[0,...headings,text.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
+  for(let i=0;i<boundaries.length-1;i++){
+   const start=boundaries[i],part=text.slice(start,boundaries[i+1]);
+   if(!tokens.every(token=>part.toLowerCase().includes(token)))continue;
+   const at=start+Math.max(0,part.toLowerCase().indexOf(tokens[0]));
+   rows.push({historical:true,fileNo:attachment.fileNo,filename:attachment.name,extension:file.extension,...extractArticleSnippet(text,at,query.length,true)});
+   if(rows.length>=10)return rows;
+  }
+ }
  for(const attachment of detail.other_attachments.filter(a=>a.extension==='pdf')){
   const file=await downloadLatestFile(attachment),parsed=await extractPdfRichContent(file.bytes);
   for(const {page,row} of searchPdfLayoutRows(parsed.pages,query,10)){

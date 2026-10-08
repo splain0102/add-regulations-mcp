@@ -1,6 +1,8 @@
 import {searchRegulationText} from "./regulation-core/text-search";
+import {PARSER_VERSION,normalizeRegulationTitle} from "./regulation-core/regulations";
+import {BUILD_VERSION} from "./build-info";
 import {tableToolResponse} from "./regulation-core/table-response";
-import { getRegulationMetadata, searchLatestRegulationTable, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
+import { getRegulationMetadata, searchLatestRegulationTable, searchAllRegulations as coreSearchAllRegulations, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -10,7 +12,7 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
-const MCP_VERSION = "1.10.3";
+const MCP_VERSION = "1.10.4";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
@@ -279,9 +281,7 @@ function dedupeLatestRegulations(
   const map = new Map<string, RegulationItem>();
 
   for (const item of items) {
-    const key = item.title
-      .replace(/\s+/g, "")
-      .toLowerCase();
+    const key = normalizeRegulationTitle(item.title);
 
     const old = map.get(key);
 
@@ -3437,17 +3437,13 @@ async function getLatestRegulationByName(
   const exact =
     items.find(
       (item) =>
-        item.title
-          .replace(/\s+/g, "")
-          .toLowerCase() === query
+        normalizeRegulationTitle(item.title) === query
     );
 
   const partial =
     items.find(
       (item) =>
-        item.title
-          .replace(/\s+/g, "")
-          .toLowerCase()
+        normalizeRegulationTitle(item.title)
           .includes(query)
     );
 
@@ -3776,7 +3772,7 @@ function createServer() {
       inputSchema: {},
     },
     async () => {
-      const data={status:"ready",runtime:"Cloudflare Workers",version: MCP_VERSION,tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
+      const data={status:"ready",runtime:"Cloudflare Workers",version: MCP_VERSION,build_version:BUILD_VERSION,tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"parser_version+fileNo+idate",parser_version:PARSER_VERSION,coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
       return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
     }
   );
@@ -3848,7 +3844,7 @@ function createServer() {
           ],
         };
       } catch (error) {
-        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
+        const data={error:{code:(error&&typeof error==="object"&&"code" in error)?String(error.code):publicErrorCode(error),message:error instanceof Error?error.message:String(error),...((error&&typeof error==="object"&&"candidates" in error)?{candidates:(error as any).candidates}:{})}};
         console.error("regulation_tool_failed",{code:data.error.code,stack:error instanceof Error?error.stack:String(error)});
         return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
@@ -3860,12 +3856,12 @@ function createServer() {
     {
       description:
         "국방과학연구소의 최신 내부규정 목록을 조회합니다.",
-      inputSchema: {},
+      inputSchema: {query:z.string().optional(),limit:z.number().int().min(1).max(500).optional(),offset:z.number().int().min(0).optional()},
     },
-    async () => {
+    async ({query,limit,offset}) => {
       try {
-        const items =
-          await coreListRegulations();
+        const allItems = await coreListRegulations();
+        const items = allItems.filter(item=>!query||normalizeRegulationTitle(item.title).includes(normalizeRegulationTitle(query))).slice(offset??0,(offset??0)+(limit??allItems.length));
 
         const text =
           items.map(
@@ -3907,15 +3903,11 @@ function createServer() {
         const items =
           await coreListRegulations();
 
-        const q = query
-          .replace(/\s+/g, "")
-          .toLowerCase();
+        const q = normalizeRegulationTitle(query);
 
         const matches =
           items.filter((item) =>
-            item.title
-              .replace(/\s+/g, "")
-              .toLowerCase()
+            normalizeRegulationTitle(item.title)
               .includes(q)
           );
 
@@ -3965,7 +3957,7 @@ function createServer() {
         return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
       } catch (error) {
         const code=publicErrorCode(error);
-        const data={error:{code,message:error instanceof Error?error.message:String(error)}};
+        const data={error:{code:(error&&typeof error==="object"&&"code" in error)?String(error.code):code,message:error instanceof Error?error.message:String(error),...((error&&typeof error==="object"&&"candidates" in error)?{candidates:(error as any).candidates}:{})}};
         console.error("get_regulation_failed",{name,code,stack:error instanceof Error?error.stack:String(error)});
         return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
@@ -4037,6 +4029,23 @@ function createServer() {
       } catch (error) {
         const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
         console.error("regulation_tool_failed",{code:data.error.code,stack:error instanceof Error?error.stack:String(error)});
+        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
+      }
+    }
+  );
+
+  server.registerTool(
+    "search_all_regulations",
+    {
+      description:"전체 최신 규정의 본문을 검색합니다. 규정별 조문 제목·위치·snippet을 관련도순으로 반환합니다. ALIO 첨부파일 다운로드가 필요하여 시간이 걸릴 수 있습니다.",
+      inputSchema:{query:z.string().min(1),limit:z.number().int().min(1).max(50).default(10),offset:z.number().int().min(0).default(0)}
+    },
+    async ({query,limit,offset})=>{
+      try{
+        const data=await coreSearchAllRegulations(query,limit,offset);
+        return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
+      }catch(error){
+        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
         return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
     }

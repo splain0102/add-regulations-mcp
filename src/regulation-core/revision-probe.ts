@@ -7,7 +7,9 @@ import {DocumentError} from './table-layout';
 // footnotes, drawing operators, Markdown, or positioned PDF layout.
 export async function extractRevisionSection(bytes:Uint8Array, extension:string):Promise<string> {
  let section='', collecting=false;
+ const revisionLines:string[]=[];
  const accept=(text:string)=>{
+  if(extension==='pdf'&&text.includes('개정')&&/20\d{2}/.test(text))revisionLines.push(text.slice(0,300));
   if(/^[ \t]*부[ \t]*칙/.test(text)){collecting=true;section+=text+'\n';}
   else if(collecting){if(/^\s*\[?별\s*(표|지)/.test(text))collecting=false;else section+=text+'\n';}
   if(section.length>64000)throw new DocumentError('parse_error','부칙 텍스트 처리 한도 초과');
@@ -49,5 +51,5 @@ export async function extractRevisionSection(bytes:Uint8Array, extension:string)
   const pdf=await getDocumentProxy(bytes.slice());
   try{for(let number=1;number<=pdf.numPages;number++){const page=await pdf.getPage(number);try{const content=await page.getTextContent();let line='';for(const item of content.items){if(!('str' in item))continue;line+=item.str+' ';if(item.hasEOL){accept(line.trim());line='';}}if(line.trim())accept(line.trim());}finally{page.cleanup();}}}finally{await pdf.loadingTask.destroy();}
  }else throw new DocumentError('parse_error','부칙 확인을 지원하지 않는 첨부 형식');
- return section;
+ return revisionLines.join('\n')+'\n'+section;
 }
