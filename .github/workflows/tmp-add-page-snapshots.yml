@@ -1,0 +1,22 @@
+name: Temporary ADD public page snapshots
+on:
+  push:
+    branches:
+      - tmp-alio-public-download-20261008
+    paths:
+      - scripts/tmp_add_page_snapshots.py
+      - .github/workflows/tmp-add-page-snapshots.yml
+  workflow_dispatch:
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install --upgrade selenium
+      - run: python scripts/tmp_add_page_snapshots.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: add-public-page-snapshots
+          path: add_page_snapshots/
+          retention-days: 7
