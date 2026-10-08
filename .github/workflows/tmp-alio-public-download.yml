@@ -1,0 +1,36 @@
+name: Temporary ALIO public attachment download
+on:
+  push:
+    branches:
+      - tmp-alio-public-download-20261008
+  workflow_dispatch:
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Environment
+        run: |
+          python --version
+          which google-chrome || true
+          which chromedriver || true
+      - name: Install Python deps
+        run: python -m pip install --upgrade requests selenium
+      - name: Download ALIO and public sources
+        run: python scripts/tmp_alio_public_download.py
+      - name: Show result
+        if: always()
+        run: |
+          find alio_public_files -maxdepth 3 -type f -printf '%p %s bytes\n' | sort || true
+          echo "---- result ----"
+          cat alio_public_files/다운로드_결과.txt || true
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alio-public-files
+          path: alio_public_files/
+          if-no-files-found: warn
+          retention-days: 7
