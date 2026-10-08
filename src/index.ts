@@ -10,7 +10,7 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
-const MCP_VERSION = "1.10.2";
+const MCP_VERSION = "1.10.3";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
