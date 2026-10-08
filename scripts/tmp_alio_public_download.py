@@ -140,6 +140,8 @@ opts.add_experimental_option("prefs",{
 driver=webdriver.Chrome(options=opts)
 driver.execute_cdp_cmd("Page.setDownloadBehavior", {"behavior":"allow","downloadPath":str(dl)})
 wait=WebDriverWait(driver,20)
+select_add_institution("https://alio.go.kr/item/itemOrganList.do?apbaId=C0215&reportFormRootNo=43005","이사회")
+select_add_institution("https://alio.go.kr/item/itemOrganList.do?apbaId=C0542&reportFormRootNo=43006","감사결과")
 
 def sync_cookies():
     sess.cookies.clear()
