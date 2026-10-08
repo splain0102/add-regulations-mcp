@@ -467,7 +467,8 @@ export async function selectLatestAttachment(
   // A matching official revision date in the filename is sufficient to shortlist
   // candidates; avoid downloading and parsing unrelated historical attachments.
   const matchingNames=officialDate?attachments.filter(file=>file.detectedDate===officialDate):[];
-  const probeCandidates=matchingNames.length?matchingNames:attachments;
+  // When filenames alone are ambiguous, preserve full body-based verification.
+  const probeCandidates=matchingNames.length===1?matchingNames:attachments;
   const probed=await Promise.all(probeCandidates.map(async file=>{
     const text=officialDate?await attachmentBodyText(file):'';
     const check=text?versionCheck(revisionDate,file.detectedDate,text):null;
