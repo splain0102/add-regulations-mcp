@@ -45,3 +45,12 @@ for title, disc in [
     rr=s.get(u,timeout=30)
     print("DETAIL",title,disc,"STATUS",rr.status_code,"LEN",len(rr.text),"URL",rr.url)
     print(rr.text[:25000])
+
+
+js=s.get(BASE+"/resources/js/page/portal/downloadUtils.js?v=202109131",timeout=30).text
+print("DOWNLOAD_JS_STATUS",len(js))
+for key in ["downReportAttachFile","downItemReport","previewAjax"]:
+    pos=js.find(key)
+    print("JSKEY",key,"POS",pos)
+    if pos>=0:
+        print(js[max(0,pos-1500):pos+5000])
