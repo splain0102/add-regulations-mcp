@@ -1,5 +1,6 @@
 import {searchRegulationText} from "./regulation-core/text-search";
 import {PARSER_VERSION,normalizeRegulationTitle} from "./regulation-core/regulations";
+import {BUILD_VERSION} from "./build-info";
 import {tableToolResponse} from "./regulation-core/table-response";
 import { getRegulationMetadata, searchLatestRegulationTable, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -3771,7 +3772,7 @@ function createServer() {
       inputSchema: {},
     },
     async () => {
-      const data={status:"ready",runtime:"Cloudflare Workers",version: MCP_VERSION,tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"parser_version+fileNo+idate",parser_version:PARSER_VERSION,coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
+      const data={status:"ready",runtime:"Cloudflare Workers",version: MCP_VERSION,build_version:BUILD_VERSION,tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"parser_version+fileNo+idate",parser_version:PARSER_VERSION,coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
       return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
     }
   );
