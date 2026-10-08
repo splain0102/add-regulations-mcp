@@ -19,5 +19,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:check
+      - run: npm run test:regulation-fixes
       - run: npm run test:tables
       - run: npm run test:delegation-response
