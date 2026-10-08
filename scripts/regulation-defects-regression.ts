@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {versionCheck} from '../src/regulation-core/table-layout';
 import {sectionAt,extractArticleSnippet,normalizeRegulationTitle,PARSER_VERSION} from '../src/regulation-core/regulations';
 const sample='제7조(사고)\\n사고 조치\\n부 칙 <방침 제919호, 2023. 9. 15.>\\n부칙 내용\\n[별표 제4호] 차량운행일지\\n사고 기록\\n\\n[별표 제6호] 사고처리\\n사고 보고';
 const a=sample.indexOf('사고 기록');
@@ -9,4 +10,5 @@ assert.equal(sectionAt(sample,sample.indexOf('부칙 내용')).label,'부 칙 <�
 assert.equal(normalizeRegulationTitle('민·군'),normalizeRegulationTitle('민군'));
 assert.equal(normalizeRegulationTitle('「민･군 (협력)」'),normalizeRegulationTitle('민군협력'));
 assert(PARSER_VERSION.length>0);
+assert(versionCheck('2021. 3. 29.',undefined,'연혁\\n개정 2021. 3. 29. 방침 제811호').dates.some(d=>d.source==='body_last_revision_date'&&d.date==='2021-03-29'));
 console.log('PASS annex section boundaries and title normalization');
