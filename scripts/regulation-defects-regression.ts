@@ -28,3 +28,8 @@ console.log('PASS token-AND, article priority and effective date classification'
 assert.deepEqual(missingAnnexes('제4조(조직) 이 규정의 조직은 [별표 제1호]에 따른다.'),['[별표 제1호]']);
 assert.deepEqual(missingAnnexes('제4조(조직) 이 규정의 조직은 [별표 제1호]에 따른다.\n[별표 제1호] 직제표\n표 본문'),[]);
 console.log('PASS missing annex diagnostics');
+
+const blankResult=await searchRegulationText('연구소차량 관리방침','   ',{compact:true},deps);
+assert.equal(blankResult.structuredContent.code,'invalid_query');
+assert.equal(blankResult.isError,true);
+console.log('PASS blank query rejected without returning unrelated sections');
