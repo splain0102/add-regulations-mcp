@@ -4037,7 +4037,7 @@ function createServer() {
   server.registerTool(
     "search_all_regulations",
     {
-      description:"전체 최신 규정의 본문을 검색합니다. 규정별 조문 제목·위치·snippet을 관련도순으로 반환합니다. ALIO 첨부파일 다운로드가 필요하여 시간이 걸릴 수 있습니다.",
+      description:"전체 규정 본문을 8건씩 분할 검색하는 임시 방식입니다. next_cursor를 offset에 전달해 이어서 조회하세요. 색인 구축 전까지 전체 213건을 1회에 검색하지 않습니다.",
       inputSchema:{query:z.string().min(1),limit:z.number().int().min(1).max(50).default(10),offset:z.number().int().min(0).default(0)}
     },
     async ({query,limit,offset})=>{
