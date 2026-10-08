@@ -33,3 +33,12 @@ const blankResult=await searchRegulationText('연구소차량 관리방침','   
 assert.equal(blankResult.structuredContent.code,'invalid_query');
 assert.equal(blankResult.isError,true);
 console.log('PASS blank query rejected without returning unrelated sections');
+
+const pagedText={...textResult,text:Array.from({length:13},(_,i)=>`제${i+1}조(시험)\n반복 검색어`).join('\n')};
+const pagedDeps={...deps,text:async()=>pagedText,metadata:async()=>pagedText};
+const firstPage=await searchRegulationText('시험규정','반복',{offset:0},pagedDeps);
+const secondPage=await searchRegulationText('시험규정','반복',{offset:10},pagedDeps);
+assert.equal(firstPage.structuredContent.matches.length,10);
+assert.equal(secondPage.structuredContent.matches.length,3);
+assert(secondPage.structuredContent.matches[0].label.startsWith('제11조'));
+console.log('PASS text search pagination offset and second page');
