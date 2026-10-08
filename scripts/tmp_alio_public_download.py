@@ -231,11 +231,11 @@ def process_item(list_url,title,outdir):
                 pass
         if not got:
             # extract any fileNo / download urls from DOM, download via requests
-            urls=set(re.findall(r'https?://[^"\\'<> ]+(?:download|filedown)[^"\\'<> ]*',html,re.I))
+            urls=set(re.findall(r"https?://[^\"'<> ]+(?:download|filedown)[^\"'<> ]*", html, re.I))
             for u in urls:
                 u=u.replace("&amp;","&")
                 if requests_download(u,outdir,None,"alio_attachment",title): got=True
-            for fno in set(re.findall(r'fileNo[=:\\'"]+\\s*(\\d+)',html,re.I)):
+            for fno in set(re.findall(r"fileNo[=:'\\\"]+\\s*(\\d+)", html, re.I)):
                 u=f"https://www.alio.go.kr/download/rulefiledown.json?fileNo={fno}"
                 if requests_download(u,outdir,None,"alio_attachment",title): got=True
         if not got:
