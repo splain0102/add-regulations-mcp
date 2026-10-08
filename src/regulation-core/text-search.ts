@@ -1,4 +1,4 @@
-import {getLatestRegulationText,searchLatestRegulationTable,searchHistoricalPdfTables,extractArticleSnippet,sectionAt,getRegulationMetadata} from './regulations';
+import {getLatestRegulationText,searchLatestRegulationTable,searchHistoricalPdfTables,extractArticleSnippet,sectionAt,missingAnnexes,getRegulationMetadata} from './regulations';
 import {tableToolResponse} from './table-response';
 type Options={compact?:boolean;offset?:number;include_history?:boolean};
 async function loadTextWithRetry(name:string){let last:unknown;for(let attempt=0;attempt<2;attempt++){try{return await getLatestRegulationText(name);}catch(error){last=error;if(attempt===0)await new Promise(resolve=>setTimeout(resolve,250));}}throw last;}
@@ -35,7 +35,7 @@ export async function searchRegulationText(name:string,query:string,options:Opti
  if(!meta){try{meta=await deps.metadata(name);}catch(error){fail('metadata',error);}}
  const fatal=errors.find(e=>e.code==='ambiguous_name'||e.code==='not_found');
  if(fatal)return {isError:true,structuredContent:{error:fatal,code:fatal.code,candidates:fatal.candidates??[]},content:[{type:'text' as const,text:JSON.stringify({error:fatal})}]};
- const data={regulationName:meta?.regulationName??name,fileNo:meta?.fileNo??null,filename:meta?.filename??null,extension:meta?.extension??null,sourceUrl:meta?.sourceUrl??null,query,matches,table,history,cache_hit:meta?.cache_hit??null,parser_version:meta?.parser_version??null,errors,partial:errors.length>0};
+ const data={missing_annexes:textResult?missingAnnexes(textResult.text):[],regulationName:meta?.regulationName??name,fileNo:meta?.fileNo??null,filename:meta?.filename??null,extension:meta?.extension??null,sourceUrl:meta?.sourceUrl??null,query,matches,table,history,cache_hit:meta?.cache_hit??null,parser_version:meta?.parser_version??null,errors,partial:errors.length>0};
  const text=[`규정명: ${data.regulationName}`,`최신파일: ${data.filename}`,`파일형식: ${data.extension}`,`fileNo: ${data.fileNo}`,`검색어: ${query}`,`본문 검색결과: ${matches.length}건`,`표 구조 검색결과: ${table?.rows?.length??0}건`,`PDF 과거첨부 좌표 결과: ${history.length}건`,`ALIO: ${data.sourceUrl}`,...(table?['===== 최신 파일 표 구조 결과 =====',JSON.stringify(table)]:[]),...matches.map((m,i)=>`----- 본문 결과 ${i+1}: ${m.label} -----\n${m.snippet}`),...(history.length?['===== 과거 첨부 (최신 답변 근거로 사용하지 않음) =====',JSON.stringify(history)]:[]),...(errors.length?['errors: '+JSON.stringify(errors)]:[])].join('\n\n');
  return {...(!meta?{isError:true}:{}),structuredContent:data,content:[{type:'text' as const,text}]};
 }
