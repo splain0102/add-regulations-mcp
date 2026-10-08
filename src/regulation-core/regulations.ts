@@ -787,11 +787,18 @@ export async function getRegulationMetadata(name:string) {
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
  version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
-/** Bounded-concurrency corpus search; offset is across regulation titles. */
+/** Temporary bounded scan until the scheduled KV/R2 corpus index is available.
+ * A cursor represents the next title offset, never the match offset.
+ * Do not silently scan the entire corpus in one Worker invocation.
+ */
 export async function searchAllRegulations(query:string,limit=10,offset=0){
  const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
- if(!terms.length)return {query,limit,offset,totalRegulations:0,results:[],errors:[]};
- const items=await listRegulations(),selected=items.slice(offset),results:any[]=[],errors:any[]=[];
+ if(!terms.length)return {query,limit,offset,totalRegulations:0,results:[],errors:{count:0,sample:[],retry_cursor:null},partial:false,scanned:0,next_cursor:null,index_status:'not_configured'};
+ const items=await listRegulations();
+ // Conservative budget: metadata/detail requests, retries and attachments may each consume subrequests.
+ // This is a stopgap, not the full-corpus single-call index requested in acceptance criterion A.
+ const PAGE_SIZE=8;
+ const selected=items.slice(offset,offset+PAGE_SIZE),results:any[]=[],failures:any[]=[];
  let cursor=0;
  const worker=async()=>{
   while(cursor<selected.length){
@@ -809,12 +816,15 @@ export async function searchAllRegulations(query:string,limit=10,offset=0){
      found.push({label:snippet.label,snippet:snippet.snippet,score:(part.includes(query.toLowerCase())?10:0)+terms.length});
     }
     if(found.length)results.push({regulationName:item.title,fileNo:loaded.attachment.fileNo,matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
-   }catch(e){errors.push({regulationName:item.title,code:e instanceof DocumentError?e.code:'document_error',message:String(e)});}
+   }catch(e){failures.push({regulationName:item.title,code:e instanceof DocumentError?e.code:'document_error',message:String(e)});}
   }
  };
- await Promise.all(Array.from({length:Math.min(3,selected.length)},()=>worker()));
+ await Promise.all(Array.from({length:Math.min(2,selected.length)},()=>worker()));
  results.sort((a,b)=>b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
- return {query,limit,offset,totalRegulations:items.length,results:results.slice(0,limit),errors,partial:errors.length>0,scanned:selected.length};
+ const next_cursor=offset+selected.length<items.length?offset+selected.length:null;
+ return {query,limit,offset,totalRegulations:items.length,results:results.slice(0,limit),
+  errors:{count:failures.length,sample:failures.slice(0,3),retry_cursor:failures.length?offset:null},
+  partial:failures.length>0||next_cursor!==null,scanned:selected.length,next_cursor,index_status:'not_configured'};
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
