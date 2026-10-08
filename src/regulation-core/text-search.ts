@@ -7,7 +7,9 @@ export function textSearchError(error:unknown){const raw=error&&typeof error==='
 /** Both tools use the identical table search and serializer. Component errors
  * cannot discard successful text or tables. No historical PDF work by default. */
 export async function searchRegulationText(name:string,query:string,options:Options={},deps=defaultDependencies){
+ if(!query?.trim())return {isError:true,structuredContent:{code:'invalid_query',error:{code:'invalid_query',message:'검색어를 입력해야 합니다.'}},content:[{type:'text' as const,text:JSON.stringify({code:'invalid_query',message:'검색어를 입력해야 합니다.'})}]};
  const errors:{stage:string;code:string;message:string;candidates?:unknown[]}[]=[],matches:{label:string;snippet:string}[]=[];
+ const offset=Number.isSafeInteger(options.offset)&&options.offset!>=0?options.offset!:0;
  const fail=(stage:string,error:unknown)=>{console.error('search_regulation_text_component_failed',{name,query,stage,stack:error instanceof Error?error.stack:String(error)});errors.push({stage,...textSearchError(error),...((error&&typeof error==='object'&&'candidates' in error)?{candidates:(error as any).candidates}:{})});};
  let textResult:Awaited<ReturnType<typeof getLatestRegulationText>>|undefined,table:any=null,meta:any=null,history:any[]=[];
  try{textResult=await deps.text(name);meta=textResult;
@@ -28,9 +30,9 @@ export async function searchRegulationText(name:string,query:string,options:Opti
     hits.push({...match,score:(requestedArticle?100:0)+(phraseAt>=0?10:0),start:from});
   }
   hits.sort((a,b)=>b.score-a.score||a.start-b.start);
-  matches.push(...hits.slice(0,10).map(({label,snippet})=>({label,snippet})));
+  matches.push(...hits.slice(offset,offset+10).map(({label,snippet})=>({label,snippet})));
  }catch(error){fail('text',error);}
- try{const result=await deps.table(name,query);meta??=result;const eligible=result.rows.filter(r=>r.analysis_type!=='text_box');table=tableToolResponse({...result,rows:eligible},query,{compact:options.compact??true,offset:options.offset??0}).structuredContent;}catch(error){fail('table',error);}
+ try{const result=await deps.table(name,query);meta??=result;const eligible=result.rows.filter(r=>r.analysis_type!=='text_box');table=tableToolResponse({...result,rows:eligible},query,{compact:options.compact??true,offset}).structuredContent;}catch(error){fail('table',error);}
  if(options.include_history){try{history=await deps.history(name,query);}catch(error){fail('history',error);}}
  if(!meta){try{meta=await deps.metadata(name);}catch(error){fail('metadata',error);}}
  const fatal=errors.find(e=>e.code==='ambiguous_name'||e.code==='not_found');
