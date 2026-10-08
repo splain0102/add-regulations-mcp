@@ -8,6 +8,7 @@
     "dev": "wrangler dev",
     "prebuild:check": "node scripts/stamp-build.mjs",
     "build:check": "wrangler deploy --dry-run --outdir .build-check",
+    "test:regulation-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/regulation-defects-regression.ts",
     "test:tables": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/structured-table-regression.ts",
     "test:delegation-response": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/delegation-response-regression.ts",
     "test:second-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/second-fixes-regression.ts",
