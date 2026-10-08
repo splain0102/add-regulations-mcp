@@ -40,10 +40,12 @@ await check('committee cross entry 140404',async()=>{
  const raw=JSON.stringify(r.structuredContent.version_check);
  assert(raw.includes('140404'));assert(raw.includes('cross_entry_newer_attachment'));return r.structuredContent.version_check;
 });
-await check('committee PDF body revision 2021-03-29',async()=>{
+await check('committee PDF effective date 2021-03-29 with unverified revision',async()=>{
  const r=await call('get_regulation',{name:'민군협력사업 전문위원회 운영방침'});
  console.log('PDF_REVISION_DIAGNOSTIC',JSON.stringify({fileNo:r.structuredContent.fileNo,dates:r.structuredContent.version_check.dates,missing:r.structuredContent.version_check.missing,revision_evidence:r.structuredContent.version_check.revision_evidence,selection_reason:r.structuredContent.selection_reason}));
- assert(r.structuredContent.version_check.dates.some(x=>x.source==='body_last_revision_date'&&x.date==='2021-03-29'));
+ assert(r.structuredContent.version_check.dates.some(x=>x.source==='body_last_effective_date'&&x.date==='2021-03-29'));
+ assert(r.structuredContent.version_check.dates.some(x=>x.source==='alio_revision_date'&&x.date==='2021-03-29'));
+ assert(r.structuredContent.version_check.missing.includes('body_last_revision_date'));
  return r.structuredContent.version_check.dates;
 });
 await check('PDF technical exchange raw row',async()=>{
