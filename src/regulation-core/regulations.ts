@@ -833,6 +833,20 @@ export function extractArticleSnippet(text:string,matchIndex:number,queryLength:
 export async function searchHistoricalPdfTables(name:string,query:string){
  const {detail}=await getLatestRegulationByName(name);
  const rows:any[]=[];
+ for(const attachment of detail.other_attachments.filter(a=>a.extension==='hwp'||a.extension==='hwpx')){
+  const file=await downloadLatestFile(attachment);
+  const text=file.extension==='hwpx'?extractHwpxText(file.bytes):await hwpToText(file.bytes);
+  const tokens=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const headings=[...text.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?|부\s*칙|\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\])/g)].map(m=>m.index??0);
+  const boundaries=[0,...headings,text.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
+  for(let i=0;i<boundaries.length-1;i++){
+   const start=boundaries[i],part=text.slice(start,boundaries[i+1]);
+   if(!tokens.every(token=>part.toLowerCase().includes(token)))continue;
+   const at=start+Math.max(0,part.toLowerCase().indexOf(tokens[0]));
+   rows.push({historical:true,fileNo:attachment.fileNo,filename:attachment.name,extension:file.extension,...extractArticleSnippet(text,at,query.length,true)});
+   if(rows.length>=10)return rows;
+  }
+ }
  for(const attachment of detail.other_attachments.filter(a=>a.extension==='pdf')){
   const file=await downloadLatestFile(attachment),parsed=await extractPdfRichContent(file.bytes);
   for(const {page,row} of searchPdfLayoutRows(parsed.pages,query,10)){
