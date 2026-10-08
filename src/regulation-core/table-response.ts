@@ -10,7 +10,7 @@ function compactRow(row:SearchTableRow){
   for(const key of delegationKeys)value[key]=row[key]??(key==='footnotes'||key==='approvers'?[]:key==='multi_approver'?false:null);
   if(Array.isArray(row.related_regulations)&&row.related_regulations.length)value.related_regulations=row.related_regulations;
  }else value.values=row.values??{};
- if(row.coordinate_type==='pdf_point')Object.assign(value,{coordinate_type:'pdf_point',page:row.page,y:row.y,coordinate:row.coordinate,symbol_coordinates:row.symbol_coordinates});
+ if(row.coordinate_type==='pdf_point')Object.assign(value,{coordinate_type:'pdf_point',page:row.page,y:row.y,coordinate:row.coordinate,symbol_coordinates:row.symbol_coordinates,raw_text:row.raw_text??(Array.isArray(row.cells)?row.cells.map((c:any)=>c.text).join(' '):''),columns:row.columns??[]});
  return value;
 }
 function clean(value:unknown):unknown {
