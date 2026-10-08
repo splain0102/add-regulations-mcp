@@ -42,3 +42,7 @@ assert.equal(firstPage.structuredContent.matches.length,10);
 assert.equal(secondPage.structuredContent.matches.length,3);
 assert(secondPage.structuredContent.matches[0].label.startsWith('제11조'));
 console.log('PASS text search pagination offset and second page');
+
+assert.deepEqual(missingAnnexes('제4조(조직) 조직은 [별표 제1호]에 따른다.\n별표 제1호 조직도\n세부 조직'),[]);
+assert.deepEqual(missingAnnexes('제4조(조직) 조직은 [별표 제1호]에 따른다.\n별표 제2호 다른 별표'),['[별표 제1호]']);
+console.log('PASS unbracketed annex heading recognition');
