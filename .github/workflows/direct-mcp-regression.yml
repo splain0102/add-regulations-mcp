@@ -1,0 +1,23 @@
+name: Direct MCP regression
+on:
+  push:
+    branches: [direct-mcp-ci-validation]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build:check
+      - run: npm run test:tables
+      - run: npm run test:delegation-response
