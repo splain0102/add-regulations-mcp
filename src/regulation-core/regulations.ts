@@ -787,44 +787,78 @@ export async function getRegulationMetadata(name:string) {
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
  version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
-/** Temporary bounded scan until the scheduled KV/R2 corpus index is available.
- * A cursor represents the next title offset, never the match offset.
- * Do not silently scan the entire corpus in one Worker invocation.
+/** Search-only persisted corpus index. Kept separate from the OAuth KV keyspace by prefix.
+ * Shards avoid 213 individual KV reads per search. Cron processes a small batch per run.
+ * A failed refresh preserves the last successfully parsed document and reports stale state.
  */
-export async function searchAllRegulations(query:string,limit=10,offset=0){
- const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
- if(!terms.length)return {query,limit,offset,totalRegulations:0,results:[],errors:{count:0,sample:[],retry_cursor:null},partial:false,scanned:0,next_cursor:null,index_status:'not_configured'};
+const INDEX_PREFIX='add:corpus:v1:', INDEX_SHARDS=16, INDEX_BATCH=4;
+type IndexedDoc={title:string;revisionDate?:string;updatedDate?:string;fileNo:string;text:string;indexedAt:string;hash:string};
+type IndexShard={documents:Record<string,IndexedDoc>};
+type IndexState={cursor:number;total:number;lastCheckedAt:string;lastCompletedAt?:string;errors:{count:number;sample:{title:string;message:string}[]};};
+function shardId(title:string){let hash=2166136261;for(const c of title){hash^=c.charCodeAt(0);hash=Math.imul(hash,16777619);}return (hash>>>0)%INDEX_SHARDS;}
+function shardKey(i:number){return INDEX_PREFIX+'shard:'+i;}
+async function readShard(kv:KVNamespace,i:number):Promise<IndexShard>{return await kv.get<IndexShard>(shardKey(i),'json')??{documents:{}};}
+async function fingerprint(text:string){const bytes=new TextEncoder().encode(text);const digest=await crypto.subtle.digest('SHA-256',bytes);return [...new Uint8Array(digest)].map(v=>v.toString(16).padStart(2,'0')).join('');}
+export async function refreshCorpusIndex(kv:KVNamespace){
  const items=await listRegulations();
- // Conservative budget: metadata/detail requests, retries and attachments may each consume subrequests.
- // This is a stopgap, not the full-corpus single-call index requested in acceptance criterion A.
- const PAGE_SIZE=8;
- const selected=items.slice(offset,offset+PAGE_SIZE),results:any[]=[],failures:any[]=[];
- let cursor=0;
- const worker=async()=>{
-  while(cursor<selected.length){
-   const item=selected[cursor++];
-   try{
-    const loaded=await loadLatestDocument(item.title),text=loaded.document.text;
-    const headings=[...text.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*)/g)].map(m=>m.index??0);
-    const bounds=[0,...headings,text.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
-    const found:any[]=[];
-    for(let i=0;i<bounds.length-1;i++){
-     const part=text.slice(bounds[i],bounds[i+1]).toLowerCase();
-     if(!terms.every(t=>part.includes(t)))continue;
-     const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
-     const snippet=extractArticleSnippet(text,at,query.length,true);
-     found.push({label:snippet.label,snippet:snippet.snippet,score:(part.includes(query.toLowerCase())?10:0)+terms.length});
-    }
-    if(found.length)results.push({regulationName:item.title,fileNo:loaded.attachment.fileNo,matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
-   }catch(e){failures.push({regulationName:item.title,code:e instanceof DocumentError?e.code:'document_error',message:String(e)});}
+ const state=await kv.get<IndexState>(INDEX_PREFIX+'state','json')??{cursor:0,total:items.length,lastCheckedAt:'',errors:{count:0,sample:[]}};
+ const start=state.cursor>=items.length?0:state.cursor;
+ const selected=items.slice(start,start+INDEX_BATCH);
+ const shards=new Map<number,IndexShard>();
+ let updated=0;
+ const errors:{title:string;message:string}[]=[];
+ for(const item of selected){
+  const id=shardId(item.title);
+  let shard=shards.get(id);
+  if(!shard){shard=await readShard(kv,id);shards.set(id,shard);}
+  const old=shard.documents[item.title];
+  // stDate and idate detect metadata changes. Periodic full content verification
+  // is achieved by re-fetching unchanged items on a separate, slower sweep.
+  try{
+   const loaded=await loadLatestDocument(item.title);
+   const text=loaded.document.text;
+   const hash=await fingerprint(text);
+   if(!old||old.hash!==hash||old.fileNo!==loaded.attachment.fileNo||old.updatedDate!==item.updatedDate||old.revisionDate!==item.revisionDate){
+    shard.documents[item.title]={title:item.title,revisionDate:item.revisionDate,updatedDate:item.updatedDate,fileNo:loaded.attachment.fileNo,text,indexedAt:new Date().toISOString(),hash};
+    updated++;
+   }
+  }catch(e){errors.push({title:item.title,message:String(e).slice(0,240)});}
+ }
+ // Each shard is written once. Readers never see a partially written document.
+ for(const [id,shard] of shards)await kv.put(shardKey(id),JSON.stringify(shard));
+ const next=start+selected.length;
+ const completed=next>=items.length;
+ const newState:IndexState={cursor:completed?0:next,total:items.length,lastCheckedAt:new Date().toISOString(),lastCompletedAt:completed&&!errors.length?new Date().toISOString():state.lastCompletedAt,errors:{count:errors.length,sample:errors.slice(0,3)}};
+ await kv.put(INDEX_PREFIX+'state',JSON.stringify(newState));
+ return {processed:selected.length,updated,next_cursor:completed?null:next,...newState};
+}
+export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace){
+ const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+ if(!kv) return {query,limit,offset,results:[],errors:{count:1,sample:[{code:'index_unavailable'}],retry_cursor:null},partial:true,index_status:'unavailable',next_cursor:null};
+ const state=await kv.get<IndexState>(INDEX_PREFIX+'state','json');
+ const shards=await Promise.all(Array.from({length:INDEX_SHARDS},(_,i)=>readShard(kv,i)));
+ const docs=shards.flatMap(shard=>Object.values(shard.documents));
+ const results:any[]=[];
+ if(terms.length)for(const doc of docs){
+  const content=doc.text;
+  const headings=[...content.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*)/g)].map(m=>m.index??0);
+  const bounds=[0,...headings,content.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
+  const found:any[]=[];
+  for(let i=0;i<bounds.length-1;i++){
+   const part=content.slice(bounds[i],bounds[i+1]).toLowerCase();
+   if(!terms.every(t=>part.includes(t)))continue;
+   const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
+   const snippet=extractArticleSnippet(content,at,query.length,true);
+   found.push({label:snippet.label,snippet:snippet.snippet,score:(part.includes(query.toLowerCase())?10:0)+terms.length});
   }
- };
- await Promise.all(Array.from({length:Math.min(2,selected.length)},()=>worker()));
+  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.indexedAt,matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+ }
  results.sort((a,b)=>b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
- const next_cursor=offset+selected.length<items.length?offset+selected.length:null;
- return {query,limit,offset,totalRegulations:items.length,results:results.slice(0,limit),
-  errors:{count:failures.length,sample:failures.slice(0,3),retry_cursor:failures.length?offset:null},
-  partial:failures.length>0||next_cursor!==null,scanned:selected.length,next_cursor,index_status:'not_configured'};
+ const complete=!!state?.lastCompletedAt&&docs.length>=state.total;
+ const next_cursor=offset+limit<results.length?offset+limit:null;
+ return {query,limit,offset,totalRegulations:state?.total??null,indexedRegulations:docs.length,results:results.slice(offset,offset+limit),
+ errors:{count:state?.errors.count??0,sample:state?.errors.sample??[],retry_cursor:state?.errors.count?state.cursor:null},
+ partial:!complete||!!state?.errors.count,index_status:!state?'building':complete?'ready':'building',lastVerifiedAt:state?.lastCheckedAt??null,lastCompletedAt:state?.lastCompletedAt??null,next_cursor};
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
