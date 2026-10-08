@@ -25,6 +25,6 @@ const effective=versionCheck('2021. 3. 29.',undefined,'부 칙 <방침 제811호
 assert(!effective.warning||effective.warning.mismatches.every((m:any)=>m.kind!=='effective_date_difference'));
 console.log('PASS token-AND, article priority and effective date classification');
 
-assert.deepEqual(missingAnnexes('제4조(조직)\n[별표 제1호]에 따른다.'),['[별표 제1호]']);
-assert.deepEqual(missingAnnexes('제4조(조직)\n[별표 제1호]에 따른다.\n[별표 제1호] 직제표\n표 본문'),[]);
+assert.deepEqual(missingAnnexes('제4조(조직) 이 규정의 조직은 [별표 제1호]에 따른다.'),['[별표 제1호]']);
+assert.deepEqual(missingAnnexes('제4조(조직) 이 규정의 조직은 [별표 제1호]에 따른다.\n[별표 제1호] 직제표\n표 본문'),[]);
 console.log('PASS missing annex diagnostics');
