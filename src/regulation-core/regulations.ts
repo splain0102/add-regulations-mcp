@@ -872,7 +872,7 @@ export async function searchLatestRegulationTable(name:string,query:string){
 }
 
 export function missingAnnexes(text:string){
- const references=[...text.matchAll(/\[(별표|별지)\s*제\s*(\d+(?:-\d+)?)\s*호\]/g)];
+ const references=[...text.matchAll(/\[?(별표|별지)\s*제\s*(\d+(?:-\d+)?)\s*호\]?/g)];
  const names=[...new Set(references.map(m=>`[${m[1]} 제${m[2]}호]`))];
  const headings=new Set([...text.matchAll(/(?:^|\n)\s*\[(별표|별지)\s*제\s*(\d+(?:-\d+)?)\s*호\]/g)].map(m=>`[${m[1]} 제${m[2]}호]`));
  return names.filter(name=>!headings.has(name));
