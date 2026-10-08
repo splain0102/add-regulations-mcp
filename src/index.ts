@@ -1,4 +1,5 @@
 import {searchRegulationText} from "./regulation-core/text-search";
+import {PARSER_VERSION,normalizeRegulationTitle} from "./regulation-core/regulations";
 import {tableToolResponse} from "./regulation-core/table-response";
 import { getRegulationMetadata, searchLatestRegulationTable, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -279,9 +280,7 @@ function dedupeLatestRegulations(
   const map = new Map<string, RegulationItem>();
 
   for (const item of items) {
-    const key = item.title
-      .replace(/\s+/g, "")
-      .toLowerCase();
+    const key = normalizeRegulationTitle(item.title);
 
     const old = map.get(key);
 
@@ -3437,17 +3436,13 @@ async function getLatestRegulationByName(
   const exact =
     items.find(
       (item) =>
-        item.title
-          .replace(/\s+/g, "")
-          .toLowerCase() === query
+        normalizeRegulationTitle(item.title) === query
     );
 
   const partial =
     items.find(
       (item) =>
-        item.title
-          .replace(/\s+/g, "")
-          .toLowerCase()
+        normalizeRegulationTitle(item.title)
           .includes(query)
     );
 
@@ -3776,7 +3771,7 @@ function createServer() {
       inputSchema: {},
     },
     async () => {
-      const data={status:"ready",runtime:"Cloudflare Workers",version: MCP_VERSION,tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"fileNo+idate",coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
+      const data={status:"ready",runtime:"Cloudflare Workers",version: MCP_VERSION,tableStructure:true,pdfLayout:true,symbolCoordinates:true,columnMapping:true,fillDown:true,versionCheck:true,generalTables:true,documentCache:"parser_version+fileNo+idate",parser_version:PARSER_VERSION,coordinateLimits:{hwp:"logical-cell-address",hwpx:"logical-cell-address",pdf:"pdf-points-bottom-left"}};
       return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
     }
   );
@@ -3860,12 +3855,12 @@ function createServer() {
     {
       description:
         "국방과학연구소의 최신 내부규정 목록을 조회합니다.",
-      inputSchema: {},
+      inputSchema: {query:z.string().optional(),limit:z.number().int().min(1).max(500).optional(),offset:z.number().int().min(0).optional()},
     },
-    async () => {
+    async ({query,limit,offset}) => {
       try {
-        const items =
-          await coreListRegulations();
+        const allItems = await coreListRegulations();
+        const items = allItems.filter(item=>!query||normalizeRegulationTitle(item.title).includes(normalizeRegulationTitle(query))).slice(offset??0,(offset??0)+(limit??allItems.length));
 
         const text =
           items.map(
@@ -3907,15 +3902,11 @@ function createServer() {
         const items =
           await coreListRegulations();
 
-        const q = query
-          .replace(/\s+/g, "")
-          .toLowerCase();
+        const q = normalizeRegulationTitle(query);
 
         const matches =
           items.filter((item) =>
-            item.title
-              .replace(/\s+/g, "")
-              .toLowerCase()
+            normalizeRegulationTitle(item.title)
               .includes(q)
           );
 
