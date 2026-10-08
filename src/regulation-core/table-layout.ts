@@ -171,7 +171,7 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  const mismatches=dates.flatMap((d,i)=>dates.slice(i+1).filter(o=>(o.date.length===7||d.date.length===7)?o.date.slice(0,7)!==d.date.slice(0,7):o.date!==d.date).map(o=>({left:d,right:o,kind:d.source.includes('effective')||o.source.includes('effective')?'effective_date_difference':'revision_date_mismatch'})));
  const effectiveDifferences=mismatches.filter(m=>m.kind==='effective_date_difference');
  const otherDifferences=mismatches.filter(m=>m.kind!=='effective_date_difference');
- return {dates,checked:dates.length>=2,
+ return {dates,revision_evidence:revisionSource.slice(0,900),checked:dates.length>=2,
  info:effectiveDifferences.length?{code:'effective_date_difference',mismatches:effectiveDifferences}:null,
  warning:otherDifferences.length?{code:'version_date_mismatch',mismatches:otherDifferences,note:'원문 개정일과 공시 또는 첨부파일 날짜를 확인하세요.'}:null,
  missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s))};
