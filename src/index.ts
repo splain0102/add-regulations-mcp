@@ -3844,7 +3844,7 @@ function createServer() {
           ],
         };
       } catch (error) {
-        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
+        const data={error:{code:(error&&typeof error==="object"&&"code" in error)?String(error.code):publicErrorCode(error),message:error instanceof Error?error.message:String(error),...((error&&typeof error==="object"&&"candidates" in error)?{candidates:(error as any).candidates}:{})}};
         console.error("regulation_tool_failed",{code:data.error.code,stack:error instanceof Error?error.stack:String(error)});
         return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
@@ -3957,7 +3957,7 @@ function createServer() {
         return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data,null,2)}]};
       } catch (error) {
         const code=publicErrorCode(error);
-        const data={error:{code,message:error instanceof Error?error.message:String(error)}};
+        const data={error:{code:(error&&typeof error==="object"&&"code" in error)?String(error.code):code,message:error instanceof Error?error.message:String(error),...((error&&typeof error==="object"&&"candidates" in error)?{candidates:(error as any).candidates}:{})}};
         console.error("get_regulation_failed",{name,code,stack:error instanceof Error?error.stack:String(error)});
         return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
