@@ -763,7 +763,7 @@ async function loadLatestDocument(name: string) {
  let document:DocumentEntry;try{document=await promise;}catch(e){evictDocument(key);throw e;}
  return {match,detail,attachment,document,cache:{key,hit,scope:'worker-isolate',metadataRevalidated:true}};
 }
-function documentMeta(loaded: Awaited<ReturnType<typeof loadLatestDocument>>) {
+async function documentMeta(loaded: Awaited<ReturnType<typeof loadLatestDocument>>) {
  const {match,detail,attachment,document,cache}=loaded;
  const versions=versionCheck(detail.revisionDate??match.revisionDate,attachment.detectedDate??undefined,document.text);
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,
@@ -779,7 +779,7 @@ export async function getRegulationMetadata(name:string) {
  const versions=versionCheck(detail.revisionDate??match.revisionDate,attachment?.detectedDate??undefined,probe);
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,revisionDate:detail.revisionDate??match.revisionDate,
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
- version_check:versions,version_warning:versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
+ version_check:{...versions,cross_entry_warnings:crossWarnings},version_warning:versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
 /** Bounded-concurrency corpus search; offset is across regulation titles. */
 export async function searchAllRegulations(query:string,limit=10,offset=0){
@@ -812,7 +812,7 @@ export async function searchAllRegulations(query:string,limit=10,offset=0){
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
- return {...documentMeta(loaded),text:loaded.document.text};
+ return {...await documentMeta(loaded),text:loaded.document.text};
 }
 async function layoutFromLoaded(loaded:Awaited<ReturnType<typeof loadLatestDocument>>) {
  const {document}=loaded;
@@ -826,7 +826,7 @@ async function layoutFromLoaded(loaded:Awaited<ReturnType<typeof loadLatestDocum
  })();
  try{document.rows=await document.layoutPending;}finally{document.layoutPending=undefined;}
  }
- const meta=documentMeta(loaded);
+ const meta=await documentMeta(loaded);
  return {...meta,layout_debug:document.layoutDebug??null,rows:document.rows.map(row=>({...row,version_warning:meta.version_warning,...(document.file.extension!=='pdf'?{coordinate_type:'logical_cell' as const,row:row.bounding_box.y0,col:row.bounding_box.x0,symbol_coordinates:{...row.symbol_coordinates,coordinate_type:'logical_cell',row:row.bounding_box.y0,col:row.bounding_box.x0},confidence_basis:['explicit_cell_span','header_detected','symbol_inside_column']}:{} )})),
  limitations:document.file.extension==='pdf'?['기호 좌표는 PDF 글리프 이동량으로 계산합니다. 회전 또는 복합 글리프는 layout_error 디버그 근거를 남깁니다.','원문에서 헤더·기호가 비어 있거나 업무 조건이 불명확한 행은 needs_review로 표시합니다.']:
  ['HWP/HWPX 좌표는 실제 셀 주소 기준입니다. PDF 페이지 좌표가 아니며 페이지 번호는 null입니다.']};
