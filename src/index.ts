@@ -2,7 +2,7 @@ import {searchRegulationText} from "./regulation-core/text-search";
 import {PARSER_VERSION,normalizeRegulationTitle} from "./regulation-core/regulations";
 import {BUILD_VERSION} from "./build-info";
 import {tableToolResponse} from "./regulation-core/table-response";
-import { getRegulationMetadata, searchLatestRegulationTable, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
+import { getRegulationMetadata, searchLatestRegulationTable, searchAllRegulations as coreSearchAllRegulations, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -4029,6 +4029,23 @@ function createServer() {
       } catch (error) {
         const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
         console.error("regulation_tool_failed",{code:data.error.code,stack:error instanceof Error?error.stack:String(error)});
+        return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
+      }
+    }
+  );
+
+  server.registerTool(
+    "search_all_regulations",
+    {
+      description:"전체 최신 규정의 본문을 검색합니다. 규정별 조문 제목·위치·snippet을 관련도순으로 반환합니다. ALIO 첨부파일 다운로드가 필요하여 시간이 걸릴 수 있습니다.",
+      inputSchema:{query:z.string().min(1),limit:z.number().int().min(1).max(50).default(10),offset:z.number().int().min(0).default(0)}
+    },
+    async ({query,limit,offset})=>{
+      try{
+        const data=await coreSearchAllRegulations(query,limit,offset);
+        return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
+      }catch(error){
+        const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
         return {isError:true,structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }
     }
