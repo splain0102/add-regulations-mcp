@@ -2,7 +2,7 @@ import {searchRegulationText} from "./regulation-core/text-search";
 import {PARSER_VERSION,normalizeRegulationTitle} from "./regulation-core/regulations";
 import {BUILD_VERSION} from "./build-info";
 import {tableToolResponse} from "./regulation-core/table-response";
-import { getRegulationMetadata, searchLatestRegulationTable, searchAllRegulations as coreSearchAllRegulations, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
+import { getRegulationMetadata, searchLatestRegulationTable, searchAllRegulations as coreSearchAllRegulations, refreshCorpusIndex, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -12,7 +12,7 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
-const MCP_VERSION = "1.10.4";
+const MCP_VERSION = "1.10.5";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
@@ -3758,7 +3758,7 @@ function publicErrorCode(error:unknown):'timeout'|'parse_error'|'selection_error
   return 'upstream_error';
 }
 
-function createServer() {
+function createServer(env: Env) {
   const server = new McpServer({
     name: "ADD Regulations MCP",
     version: MCP_VERSION,
@@ -4037,12 +4037,12 @@ function createServer() {
   server.registerTool(
     "search_all_regulations",
     {
-      description:"전체 최신 규정의 본문을 검색합니다. 규정별 조문 제목·위치·snippet을 관련도순으로 반환합니다. ALIO 첨부파일 다운로드가 필요하여 시간이 걸릴 수 있습니다.",
+      description:"Cron으로 사전 구축한 최신 규정 본문 색인만 검색합니다. 요청 시 ALIO 파일을 다운로드하지 않습니다. partial과 index_status로 색인 완전성·갱신 오류를 확인하고, next_cursor를 offset에 전달해 검색 결과를 이어서 조회하세요.",
       inputSchema:{query:z.string().min(1),limit:z.number().int().min(1).max(50).default(10),offset:z.number().int().min(0).default(0)}
     },
     async ({query,limit,offset})=>{
       try{
-        const data=await coreSearchAllRegulations(query,limit,offset);
+        const data=await coreSearchAllRegulations(query,limit,offset,env.OAUTH_KV);
         return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }catch(error){
         const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
@@ -4109,7 +4109,7 @@ const MCP_RESOURCE =
 const AUTHORIZATION_SERVER =
   "https://add-regulations-mcp.splain0102.workers.dev";
 
-const mcpHandler = createMcpHandler(createServer);
+
 
 const protectedMcpHandler = {
   async fetch(
@@ -4153,7 +4153,7 @@ const protectedMcpHandler = {
 
     try {
       const response =
-        await mcpHandler(request, env, ctx);
+        await createMcpHandler(() => createServer(env))(request, env, ctx);
 
       const responseText =
         await response.clone().text();
@@ -4185,7 +4185,7 @@ const protectedMcpHandler = {
   },
 };
 
-export default new OAuthProvider<Env>({
+const oauthProvider = new OAuthProvider<Env>({
   apiRoute: "/mcp",
   apiHandler: protectedMcpHandler,
 
@@ -4210,4 +4210,13 @@ export default new OAuthProvider<Env>({
   },
 });
 
+
+
+// OAuth routes remain unchanged; scheduled events update the persisted corpus index.
+export default {
+ fetch(request:Request,env:Env,ctx:ExecutionContext){return oauthProvider.fetch(request,env,ctx);},
+ async scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext){
+  ctx.waitUntil(refreshCorpusIndex(env.OAUTH_KV).then(result=>console.log('corpus_index_refresh',JSON.stringify(result))).catch(error=>console.error('corpus_index_refresh_failed',String(error))));
+ }
+};
 

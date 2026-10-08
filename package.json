@@ -1,6 +1,6 @@
 {
   "name": "add-regulations-mcp",
-  "version": "1.10.4",
+  "version": "1.10.5",
   "private": true,
   "scripts": {
     "predeploy": "node scripts/stamp-build.mjs",
@@ -13,20 +13,26 @@
     "test:delegation-response": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/delegation-response-regression.ts",
     "test:second-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/second-fixes-regression.ts",
     "test:second-acceptance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/second-validation-acceptance.ts",
-    "test:third-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/third-fixes-regression.ts"
+    "test:third-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/third-fixes-regression.ts",
+    "typecheck:corpus-index": "tsc -p tsconfig.corpus-index.json",
+    "test:corpus-index": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-regression.ts",
+    "test:corpus-workers": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-workers.ts",
+    "test:corpus-acceptance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-acceptance.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "agents": "0.25.0",
-    "fflate": "^0.8.2",
-    "zod": "^4.5.4",
     "@ssabrojs/hwpxjs": "0.4.0",
+    "agents": "0.25.0",
+    "cfb": "1.2.2",
+    "fflate": "^0.8.2",
     "unpdf": "1.8.1",
-    "cfb": "1.2.2"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0",
-    "esbuild": "0.28.2"
+    "@cloudflare/workers-types": "5.20261008.1",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "wrangler": "^4.0.0"
   }
 }

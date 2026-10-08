@@ -1,3 +1,4 @@
+import {refreshIndex,readIndex,type CorpusItem} from './corpus-index';
 import {extractRevisionSection} from './revision-probe';
 import { unzipSync, strFromU8 } from "fflate";
 import { hwpToText } from "@ssabrojs/hwpxjs/browser";
@@ -284,8 +285,8 @@ export function dedupeLatestRegulations(
 }
 
 type AlioRow = {title:string;apbaId:string;idx:string;reportFormNo:string;tableName:string;idxName:string;disclosureNo?:string;reportGbn:string;bidType:string;stDate?:string;idate?:string;regdate?:string};
-async function fetchListPage(pageNo:number):Promise<{result:AlioRow[];page:{totalPage:number;totalCount:number}}> {
-  const response=await fetchWithRetry(`${ALIO_BASE}/item/itemReportListSusi.json`, {
+async function fetchListPage(pageNo:number,request:typeof fetchWithRetry=fetchWithRetry):Promise<{result:AlioRow[];page:{totalPage:number;totalCount:number}}> {
+  const response=await request(`${ALIO_BASE}/item/itemReportListSusi.json`, {
     method:'POST',
     headers:{'Content-Type':'application/json','User-Agent':'Mozilla/5.0 ADD-Regulations-Site/2.0','Accept':'application/json', 'X-Requested-With':'XMLHttpRequest', Referer:REGULATION_LIST_URL, Origin:ALIO_BASE, 'Accept-Language':'ko-KR,ko;q=0.9'},
     body:JSON.stringify({pageNo,apbaId:ADD_APBA_ID,apbaType:'A2005',reportFormRootNo:'21110',search_word:'',search_flag:'title',bid_type:'',enfc_istt:''})
@@ -297,27 +298,35 @@ async function fetchListPage(pageNo:number):Promise<{result:AlioRow[];page:{tota
 }
 let cachedList:{items:RegulationItem[];expires:number}|null=null;
 let pendingList:Promise<RegulationItem[]>|null=null;
-export async function listRegulations():Promise<RegulationItem[]> {
+export async function listRegulations(options?:{fresh:boolean;request:typeof fetchWithRetry}):Promise<RegulationItem[]> {
+  if(options?.fresh)return fetchFreshRegulations(options.request);
   if(cachedList&&cachedList.expires>Date.now())return cachedList.items;
   if(pendingList)return pendingList;
-  pendingList=(async()=>{
-    const first=await fetchListPage(1);
+  pendingList=fetchFreshRegulations(fetchWithRetry).then(items=>{cachedList={items,expires:Date.now()+60000};return items;});
+  try{return await pendingList;}finally{pendingList=null;}
+}
+
+async function fetchFreshRegulations(request:typeof fetchWithRetry):Promise<RegulationItem[]> {
+    const first=await fetchListPage(1,request);
     const total=first.page.totalPage;
     if(!Number.isInteger(total)||total<1||total>100)throw new Error('ALIO 목록 페이지 수를 확인할 수 없습니다.');
     const rows=[...first.result];
     // Fetch every page, with bounded concurrency. A first page is not the full latest list.
     for(let page=2;page<=total;page+=6){
-      const pages=await Promise.all(Array.from({length:Math.min(6,total-page+1)},(_,i)=>fetchListPage(page+i)));
+      const pages=await Promise.all(Array.from({length:Math.min(6,total-page+1)},(_,i)=>fetchListPage(page+i,request)));
       rows.push(...pages.flatMap(p=>p.result));
     }
-    const items=dedupeLatestRegulations(rows.filter(r=>r.apbaId===ADD_APBA_ID).map(r=>{
+    const items=itemsFromRows(rows);
+    if(!items.length)throw new Error('ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다.');
+    return items;
+
+}
+
+function itemsFromRows(rows:AlioRow[]):RegulationItem[] {
+  return dedupeLatestRegulations(rows.filter(r=>r.apbaId===ADD_APBA_ID).map(r=>{
       const params=new URLSearchParams({disclosureNo:'',apbaId:ADD_APBA_ID,nowcode:r.reportFormNo,reportFormNo:r.reportFormNo,table_name:r.tableName,idx_name:r.idxName,idx:r.idx,reportGbn:r.reportGbn,bid_type:r.bidType});
       return {title:r.title,detailUrl:`${ALIO_BASE}/item/itemBoard21110.do?${params}`,revisionDate:r.stDate,updatedDate:r.idate};
     })).sort((a,b)=>(normalizeDate(b.revisionDate)||normalizeDate(b.updatedDate)).localeCompare(normalizeDate(a.revisionDate)||normalizeDate(a.updatedDate)));
-    if(!items.length)throw new Error('ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다.');
-    cachedList={items,expires:Date.now()+60000};return items;
-  })();
-  try{return await pendingList;}finally{pendingList=null;}
 }
 
 export function extractAttachments(
@@ -431,7 +440,7 @@ async function attachmentRevisionText(file:Attachment,updatedDate:string):Promis
  }
  try{return await pending;}catch(error){attachmentProbeCache.delete(key);throw error;}
 }
-export async function selectLatestAttachment(attachments:Attachment[],revisionDate?:string,updatedDate=''):Promise<AttachmentSelection> {
+export async function selectLatestAttachment(attachments:Attachment[],revisionDate?:string,updatedDate='',probe:typeof attachmentRevisionText=attachmentRevisionText):Promise<AttachmentSelection> {
  if(!attachments.length)return {selected:null,other_attachments:[],selection_reason:['no_attachment']};
  const officialDate=normalizeDate(revisionDate);
  const formatRank=(f:Attachment)=>f.extension==='hwpx'?3:f.extension==='hwp'?2:f.extension==='pdf'?1:0;
@@ -445,7 +454,7 @@ export async function selectLatestAttachment(attachments:Attachment[],revisionDa
   if(confirmedLatest&&!sameFilenamePeriod&&!possiblyNewer&&formatRank(file)<=formatRank(confirmedLatest)){evidence.push({file,bodyMatch:false,failed:false,filenameMatch:false,excluded:true,matchedReasons:[] as string[]});continue;}
   let bodyMatch=false,failed=false;const matchedReasons:string[]=[];
   try{
-   const text=officialDate?await attachmentRevisionText(file,updatedDate):'';
+   const text=officialDate?await probe(file,updatedDate):'';
    const check=text?versionCheck(revisionDate,file.detectedDate??undefined,text):null;
    for(const d of check?.dates??[]){if(d.date!==officialDate)continue;if(d.source==='body_last_revision_date')matchedReasons.push('body_revision_date_matches_alio');if(d.source==='body_last_effective_date')matchedReasons.push('body_effective_date_matches_alio');}
    bodyMatch=matchedReasons.length>0;
@@ -515,9 +524,10 @@ async function getRegulationDetail(
 }
 
 export async function downloadLatestFile(
-  attachment: Attachment
+  attachment: Attachment,
+  request:typeof fetchWithRetry=fetchWithRetry
 ) {
-  const response = await fetchWithRetry(
+  const response = await request(
     attachment.url,
     {
       headers: {
@@ -787,34 +797,100 @@ export async function getRegulationMetadata(name:string) {
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
  version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
-/** Bounded-concurrency corpus search; offset is across regulation titles. */
-export async function searchAllRegulations(query:string,limit=10,offset=0){
- const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
- if(!terms.length)return {query,limit,offset,totalRegulations:0,results:[],errors:[]};
- const items=await listRegulations(),selected=items.slice(offset),results:any[]=[],errors:any[]=[];
- let cursor=0;
- const worker=async()=>{
-  while(cursor<selected.length){
-   const item=selected[cursor++];
+/** A-only source: fresh list, fresh attachment selection and raw-file SHA-256. */
+export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Date.now):typeof fetchWithRetry {
+ let requests=0;const deadline=now()+240_000;
+ return async (url,init,maxAttempts=3)=>{
+  let last:unknown;
+  for(let attempt=0;attempt<maxAttempts;attempt++){
+   let target=url;
    try{
-    const loaded=await loadLatestDocument(item.title),text=loaded.document.text;
-    const headings=[...text.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*)/g)].map(m=>m.index??0);
-    const bounds=[0,...headings,text.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
-    const found:any[]=[];
-    for(let i=0;i<bounds.length-1;i++){
-     const part=text.slice(bounds[i],bounds[i+1]).toLowerCase();
-     if(!terms.every(t=>part.includes(t)))continue;
-     const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
-     const snippet=extractArticleSnippet(text,at,query.length,true);
-     found.push({label:snippet.label,snippet:snippet.snippet,score:(part.includes(query.toLowerCase())?10:0)+terms.length});
+    for(let redirect=0;redirect<6;redirect++){
+     if(requests>=40||now()>=deadline)throw Error('index_request_budget_exhausted');
+     if(new URL(target).origin!==ALIO_BASE)throw Error('index_redirect_origin_rejected');
+     requests++;
+     const response=await rawFetch(target,{...init,redirect:'manual',signal:AbortSignal.timeout(Math.min(25000,Math.max(1,deadline-now())))});
+     if(response.status>=300&&response.status<400&&response.headers.has('location')){
+      target=new URL(response.headers.get('location')!,target).href;await response.body?.cancel();continue;
+     }
+     if(response.status===429||response.status>=500){await response.body?.cancel();throw Error('ALIO HTTP '+response.status);}
+     return response;
     }
-    if(found.length)results.push({regulationName:item.title,fileNo:loaded.attachment.fileNo,matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
-   }catch(e){errors.push({regulationName:item.title,code:e instanceof DocumentError?e.code:'document_error',message:String(e)});}
+    throw Error('index_redirect_limit');
+   }catch(error){last=error;if(/budget_exhausted|origin_rejected|redirect_limit/.test(String(error)))throw error;if(attempt+1<maxAttempts)await sleep(400*(attempt+1));}
+  }
+  throw last;
+ };
+}
+type IndexListWork={rows:AlioRow[];nextPage:number;totalPage:number;totalCount:number;startedAt:number};
+async function collectIndexList(request:typeof fetchWithRetry,work?:unknown){
+ let stage=work as IndexListWork|undefined;
+ // Persist at most four pages/event. A partial list never replaces the corpus.
+ if(!stage||Date.now()-stage.startedAt>2*60*60*1000){const first=await fetchListPage(1,request);stage={rows:first.result,nextPage:2,totalPage:first.page.totalPage,totalCount:first.page.totalCount,startedAt:Date.now()};}
+ if(!Number.isInteger(stage.totalPage)||stage.totalPage<1||stage.totalPage>100)throw Error('invalid_index_list_pages');
+ const remaining=Math.min(3,stage.totalPage-stage.nextPage+1);
+ for(let n=0;n<remaining;n++){
+  const page=await fetchListPage(stage.nextPage,request);
+  if(page.page.totalPage!==stage.totalPage||page.page.totalCount!==stage.totalCount)throw Error('index_list_changed_during_collection');
+  stage.rows.push(...page.result);stage.nextPage++;
+ }
+ if(stage.nextPage<=stage.totalPage)return {work:stage};
+ if(stage.rows.length!==stage.totalCount)throw Error('incomplete_index_list');
+ const first=await fetchListPage(1,request);if(JSON.stringify(first.result)!==JSON.stringify(stage.rows.slice(0,first.result.length)))throw Error('index_list_changed_during_collection');
+ const items=itemsFromRows(stage.rows);if(items.length!==stage.totalCount)throw Error('incomplete_index_list');
+ return {items,work:undefined};
+}
+export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequest()){
+ return {
+  list:()=>listRegulations({fresh:true,request}),
+  listBatch:(work?:unknown)=>collectIndexList(request,work),
+  async load(item:CorpusItem){
+   const response=await request(item.detailUrl);if(!response.ok)throw Error('ALIO detail HTTP '+response.status);
+   const attachments=extractAttachments(await response.text());
+   // One invocation-local byte cache: selection and SHA use the same fresh file.
+   let lastFile:{fileNo:string;value:Awaited<ReturnType<typeof downloadLatestFile>>}|undefined;
+   async function download(file:Attachment){if(lastFile?.fileNo===file.fileNo)return lastFile.value;const value=await downloadLatestFile(file,request);if(value.bytes.byteLength>4_000_000)throw Error("index_attachment_size_limit");lastFile={fileNo:file.fileNo,value};return value;}
+   const selection=await selectLatestAttachment(attachments,item.revisionDate,item.updatedDate??'',async file=>{
+    const loaded=await download(file);return extractRevisionSection(loaded.bytes,loaded.extension);
+   });
+   if(!selection.selected)throw Error('selection_error:'+selection.selection_reason.join(','));
+   const file=await download(selection.selected);let text:string;
+   if(file.extension==='hwpx')text=extractHwpxText(file.bytes);
+   else if(file.extension==='hwp')text=await hwpToText(file.bytes);
+   else if(file.extension==='pdf'){const result=await extractText(file.bytes.slice(),{mergePages:true});text=Array.isArray(result.text)?result.text.join('\n\n'):result.text;}
+   else throw Error('unsupported_index_format:'+file.extension);
+   return {fileNo:selection.selected.fileNo,text,bytes:file.bytes,parserVersion:PARSER_VERSION};
   }
  };
- await Promise.all(Array.from({length:Math.min(3,selected.length)},()=>worker()));
- results.sort((a,b)=>b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
- return {query,limit,offset,totalRegulations:items.length,results:results.slice(0,limit),errors,partial:errors.length>0,scanned:selected.length};
+}
+export async function refreshCorpusIndex(kv:KVNamespace){const source=createCorpusSource();return refreshIndex(kv,{list:source.listBatch,load:source.load});}
+export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace){
+ const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+ if(!kv) return {query,limit,offset,results:[],errors:{count:1,sample:[{code:'index_unavailable'}],retry_cursor:null},partial:true,index_status:'unavailable',next_cursor:null};
+ const index=await readIndex(kv);const docs=index.documents;
+ const results:any[]=[];
+ if(terms.length)for(const doc of docs){
+  const content=doc.text;
+  const headings=[...content.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*(?:제\s*)?\d+(?:-\d+)?\s*(?:호)?[^\]\n]*\][^\n]*)/g)].map(m=>m.index??0);
+  const bounds=[0,...headings,content.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
+  const found:any[]=[];
+  for(let i=0;i<bounds.length-1;i++){
+   const part=content.slice(bounds[i],bounds[i+1]).toLowerCase();
+   if(!terms.every(t=>part.includes(t)))continue;
+   const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
+   const article=content.slice(bounds[i],bounds[i+1]);
+   const snippet=extractArticleSnippet(article,at-bounds[i],query.length,true);
+   const label=article.match(/^\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)[^\]\n]*\])/)?.[1]??snippet.label;
+   const frequency=terms.reduce((sum,term)=>sum+part.split(term).length-1,0);
+   const score=(part.includes(query.toLowerCase())?10:0)+terms.length+Math.min(12,frequency)*2+(terms.every(t=>label.toLowerCase().includes(t))?8:0)-(label.startsWith('[')?10:0);
+   found.push({label,snippet:snippet.snippet,score});
+  }
+  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.verifiedAt,sha256:doc.sha256,score:found.reduce((sum,m)=>sum+m.score,0),matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+ }
+ results.sort((a,b)=>b.score-a.score||b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
+ const next_cursor=offset+limit<results.length?offset+limit:null;
+ return {query,limit,offset,totalRegulations:index.total,indexedRegulations:docs.length,totalMatches:results.length,results:results.slice(offset,offset+limit),
+ errors:index.errors,partial:index.partial,index_status:index.index_status,lastVerifiedAt:index.lastCheckedAt,lastCompletedAt:index.lastCompletedAt,next_cursor};
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
@@ -930,3 +1006,4 @@ export async function searchHistoricalPdfTables(name:string,query:string){
  }
  return rows.slice(0,10);
 }
+
