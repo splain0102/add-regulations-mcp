@@ -319,6 +319,8 @@ const LIST_CACHE_KEY = 'regulations:list:v1';
 let cachedList:{items:RegulationItem[];expires:number}|null=null;
 let pendingList:Promise<RegulationItem[]>|null=null;
 export async function listRegulations():Promise<RegulationItem[]> {
+  // KV configuration is per request; never let a shared isolate reuse a previous
+  // request's cache binding when the current environment has no cache.
   if(cachedList&&cachedList.expires>Date.now())return cachedList.items;
   if(pendingList)return pendingList;
   pendingList=(async()=>{
