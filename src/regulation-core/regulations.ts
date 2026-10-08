@@ -746,7 +746,7 @@ function documentMeta(loaded: Awaited<ReturnType<typeof loadLatestDocument>>) {
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,
  revisionDate:detail.revisionDate??match.revisionDate,updatedDate:detail.updatedDate??match.updatedDate,
  sourceUrl:detail.sourceUrl,filename:document.file.filename,extension:document.file.extension,fileNo:attachment.fileNo,
- cache,version_check:versions,version_warning:versions.warning,
+ cache,cache_hit:cache.hit,parser_version:PARSER_VERSION,version_check:versions,version_warning:versions.warning,
  selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
 export async function getRegulationMetadata(name:string) {
