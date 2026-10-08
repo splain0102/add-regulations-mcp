@@ -26,7 +26,7 @@ async function check(name:string,query:string,extra?:(r:any)=>void){
    for(const cell of row.cells){const source:Cell|undefined=table!.cells.find(c=>c.row===cell.row&&c.col===cell.col);assert(source);for(const key of ['row','col','rowSpan','colSpan','text'])assert.equal(cell[key],(source as any)[key],`source cell ${key} mismatch`);}
    const active=table!.cells.filter(c=>c.row<=row.row&&row.row<c.row+c.rowSpan);assert.equal(row.cells.length,active.length,'merged active cells lost');
    for(const band of row.header_evidence.rows)for(const cell of band.cells){assert(table!.cells.some(c=>c.row===cell.row&&c.col===cell.col&&c.text===cell.text&&c.rowSpan===cell.rowSpan&&c.colSpan===cell.colSpan),'header evidence differs');}
-   if(name!=='위임전결규정'){assert.equal(row.analysis_type,'general_table');assert.equal(row.approver,undefined,'general table forced into approver mapping');}
+   if(name!=='위임전결규정'){const isSingleCellBox=table!.cells.length===1&&table!.cells[0].rowSpan===1&&table!.cells[0].colSpan===1;assert.equal(row.analysis_type,isSingleCellBox?'text_box':'general_table','table type must match original HWP cell structure');assert.equal(row.approver,undefined,'non-delegation table forced into approver mapping');}
   }
   extra?.(r);entry.status='passed';entry.structureAccurate=true;entry.needs_review=[...new Set(r.rows.map((row:any)=>row.needs_review))];
  }catch(e){entry.error=String(e);}report.tests.push(entry);writeFileSync(path,JSON.stringify(report,null,2));console.log(JSON.stringify({name,query,status:entry.status,error:entry.error,matches:entry.result?.rows?.length,fileNo:entry.result?.fileNo}));
