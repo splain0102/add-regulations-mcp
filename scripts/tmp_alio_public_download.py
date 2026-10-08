@@ -124,7 +124,7 @@ def sync_cookies():
 def files_snapshot():
     return {p.name for p in dl.iterdir() if p.is_file() and not p.name.endswith(".crdownload")}
 
-def wait_download(before, timeout=15):
+def wait_download(before, timeout=6):
     end=time.time()+timeout
     while time.time()<end:
         partial=list(dl.glob("*.crdownload"))
@@ -162,7 +162,7 @@ def likely_download(el):
 def process_item(list_url,title,outdir):
     outdir=Path(outdir); outdir.mkdir(parents=True,exist_ok=True)
     try:
-        driver.get(list_url); time.sleep(3)
+        driver.get(list_url); time.sleep(2)
         # save rendered DOM for diagnostics
         (ROOT/"_diagnostics").mkdir(exist_ok=True)
         # find exact or contains text
@@ -184,7 +184,7 @@ def process_item(list_url,title,outdir):
             driver.execute_script("arguments[0].click();", clickable)
         except Exception:
             clickable.click()
-        time.sleep(3)
+        time.sleep(2)
         # Switch popup if opened
         new_handles=set(driver.window_handles)-old_handles
         if new_handles:
@@ -219,12 +219,12 @@ def process_item(list_url,title,outdir):
                     got=True
         # click candidate elements, letting browser catch downloads
         elems=driver.find_elements(By.CSS_SELECTOR,"a,button,input")
-        for e in elems:
+        for e in elems[:3]:
             if not likely_download(e): continue
             try:
                 before=files_snapshot()
                 driver.execute_script("arguments[0].click();",e)
-                new=wait_download(before,5)
+                new=wait_download(before,2)
                 if new:
                     move_new(new,outdir,title); got=True
             except Exception:
@@ -284,12 +284,12 @@ try:
                 seen.add(href)
                 if requests_download(href,out,None,"alio_external_audit","외부회계감사보고서"): got=True
     elems=driver.find_elements(By.CSS_SELECTOR,"a,button,input")
-    for e in elems:
+    for e in elems[:3]:
         if not likely_download(e): continue
         try:
             before=files_snapshot()
             driver.execute_script("arguments[0].click();",e)
-            new=wait_download(before,5)
+            new=wait_download(before,2)
             if new: move_new(new,out,"외부회계감사보고서"); got=True
         except: pass
     if not got:
@@ -305,7 +305,7 @@ for title,url in [
  ("ADD_경영공시","https://www.add.re.kr/board?menuId=MENU02537&siteId=SITE00002"),
 ]:
     try:
-        driver.get(url); time.sleep(3)
+        driver.get(url); time.sleep(2)
         pdf=driver.execute_cdp_cmd("Page.printToPDF", {"printBackground":True,"preferCSSPageSize":True})
         import base64
         p=ROOT/"06_ADD_공개페이지_PDF"/(safe(title)+".pdf"); p.parent.mkdir(exist_ok=True)
