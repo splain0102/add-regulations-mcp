@@ -4037,7 +4037,7 @@ function createServer(env: Env) {
   server.registerTool(
     "search_all_regulations",
     {
-      description:"전체 규정 본문을 8건씩 분할 검색하는 임시 방식입니다. next_cursor를 offset에 전달해 이어서 조회하세요. 색인 구축 전까지 전체 213건을 1회에 검색하지 않습니다.",
+      description:"Cron으로 사전 구축한 최신 규정 본문 색인만 검색합니다. 요청 시 ALIO 파일을 다운로드하지 않습니다. partial과 index_status로 색인 완전성·갱신 오류를 확인하고, next_cursor를 offset에 전달해 검색 결과를 이어서 조회하세요.",
       inputSchema:{query:z.string().min(1),limit:z.number().int().min(1).max(50).default(10),offset:z.number().int().min(0).default(0)}
     },
     async ({query,limit,offset})=>{
@@ -4219,3 +4219,4 @@ export default {
   ctx.waitUntil(refreshCorpusIndex(env.OAUTH_KV).then(result=>console.log('corpus_index_refresh',JSON.stringify(result))).catch(error=>console.error('corpus_index_refresh_failed',String(error))));
  }
 };
+

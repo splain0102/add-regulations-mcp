@@ -1,3 +1,4 @@
+import {refreshIndex,readIndex,type CorpusItem} from './corpus-index';
 import {extractRevisionSection} from './revision-probe';
 import { unzipSync, strFromU8 } from "fflate";
 import { hwpToText } from "@ssabrojs/hwpxjs/browser";
@@ -284,8 +285,8 @@ export function dedupeLatestRegulations(
 }
 
 type AlioRow = {title:string;apbaId:string;idx:string;reportFormNo:string;tableName:string;idxName:string;disclosureNo?:string;reportGbn:string;bidType:string;stDate?:string;idate?:string;regdate?:string};
-async function fetchListPage(pageNo:number):Promise<{result:AlioRow[];page:{totalPage:number;totalCount:number}}> {
-  const response=await fetchWithRetry(`${ALIO_BASE}/item/itemReportListSusi.json`, {
+async function fetchListPage(pageNo:number,request:typeof fetchWithRetry=fetchWithRetry):Promise<{result:AlioRow[];page:{totalPage:number;totalCount:number}}> {
+  const response=await request(`${ALIO_BASE}/item/itemReportListSusi.json`, {
     method:'POST',
     headers:{'Content-Type':'application/json','User-Agent':'Mozilla/5.0 ADD-Regulations-Site/2.0','Accept':'application/json', 'X-Requested-With':'XMLHttpRequest', Referer:REGULATION_LIST_URL, Origin:ALIO_BASE, 'Accept-Language':'ko-KR,ko;q=0.9'},
     body:JSON.stringify({pageNo,apbaId:ADD_APBA_ID,apbaType:'A2005',reportFormRootNo:'21110',search_word:'',search_flag:'title',bid_type:'',enfc_istt:''})
@@ -297,27 +298,35 @@ async function fetchListPage(pageNo:number):Promise<{result:AlioRow[];page:{tota
 }
 let cachedList:{items:RegulationItem[];expires:number}|null=null;
 let pendingList:Promise<RegulationItem[]>|null=null;
-export async function listRegulations():Promise<RegulationItem[]> {
+export async function listRegulations(options?:{fresh:boolean;request:typeof fetchWithRetry}):Promise<RegulationItem[]> {
+  if(options?.fresh)return fetchFreshRegulations(options.request);
   if(cachedList&&cachedList.expires>Date.now())return cachedList.items;
   if(pendingList)return pendingList;
-  pendingList=(async()=>{
-    const first=await fetchListPage(1);
+  pendingList=fetchFreshRegulations(fetchWithRetry).then(items=>{cachedList={items,expires:Date.now()+60000};return items;});
+  try{return await pendingList;}finally{pendingList=null;}
+}
+
+async function fetchFreshRegulations(request:typeof fetchWithRetry):Promise<RegulationItem[]> {
+    const first=await fetchListPage(1,request);
     const total=first.page.totalPage;
     if(!Number.isInteger(total)||total<1||total>100)throw new Error('ALIO 목록 페이지 수를 확인할 수 없습니다.');
     const rows=[...first.result];
     // Fetch every page, with bounded concurrency. A first page is not the full latest list.
     for(let page=2;page<=total;page+=6){
-      const pages=await Promise.all(Array.from({length:Math.min(6,total-page+1)},(_,i)=>fetchListPage(page+i)));
+      const pages=await Promise.all(Array.from({length:Math.min(6,total-page+1)},(_,i)=>fetchListPage(page+i,request)));
       rows.push(...pages.flatMap(p=>p.result));
     }
-    const items=dedupeLatestRegulations(rows.filter(r=>r.apbaId===ADD_APBA_ID).map(r=>{
+    const items=itemsFromRows(rows);
+    if(!items.length)throw new Error('ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다.');
+    return items;
+
+}
+
+function itemsFromRows(rows:AlioRow[]):RegulationItem[] {
+  return dedupeLatestRegulations(rows.filter(r=>r.apbaId===ADD_APBA_ID).map(r=>{
       const params=new URLSearchParams({disclosureNo:'',apbaId:ADD_APBA_ID,nowcode:r.reportFormNo,reportFormNo:r.reportFormNo,table_name:r.tableName,idx_name:r.idxName,idx:r.idx,reportGbn:r.reportGbn,bid_type:r.bidType});
       return {title:r.title,detailUrl:`${ALIO_BASE}/item/itemBoard21110.do?${params}`,revisionDate:r.stDate,updatedDate:r.idate};
     })).sort((a,b)=>(normalizeDate(b.revisionDate)||normalizeDate(b.updatedDate)).localeCompare(normalizeDate(a.revisionDate)||normalizeDate(a.updatedDate)));
-    if(!items.length)throw new Error('ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다.');
-    cachedList={items,expires:Date.now()+60000};return items;
-  })();
-  try{return await pendingList;}finally{pendingList=null;}
 }
 
 export function extractAttachments(
@@ -431,7 +440,7 @@ async function attachmentRevisionText(file:Attachment,updatedDate:string):Promis
  }
  try{return await pending;}catch(error){attachmentProbeCache.delete(key);throw error;}
 }
-export async function selectLatestAttachment(attachments:Attachment[],revisionDate?:string,updatedDate=''):Promise<AttachmentSelection> {
+export async function selectLatestAttachment(attachments:Attachment[],revisionDate?:string,updatedDate='',probe:typeof attachmentRevisionText=attachmentRevisionText):Promise<AttachmentSelection> {
  if(!attachments.length)return {selected:null,other_attachments:[],selection_reason:['no_attachment']};
  const officialDate=normalizeDate(revisionDate);
  const formatRank=(f:Attachment)=>f.extension==='hwpx'?3:f.extension==='hwp'?2:f.extension==='pdf'?1:0;
@@ -445,7 +454,7 @@ export async function selectLatestAttachment(attachments:Attachment[],revisionDa
   if(confirmedLatest&&!sameFilenamePeriod&&!possiblyNewer&&formatRank(file)<=formatRank(confirmedLatest)){evidence.push({file,bodyMatch:false,failed:false,filenameMatch:false,excluded:true,matchedReasons:[] as string[]});continue;}
   let bodyMatch=false,failed=false;const matchedReasons:string[]=[];
   try{
-   const text=officialDate?await attachmentRevisionText(file,updatedDate):'';
+   const text=officialDate?await probe(file,updatedDate):'';
    const check=text?versionCheck(revisionDate,file.detectedDate??undefined,text):null;
    for(const d of check?.dates??[]){if(d.date!==officialDate)continue;if(d.source==='body_last_revision_date')matchedReasons.push('body_revision_date_matches_alio');if(d.source==='body_last_effective_date')matchedReasons.push('body_effective_date_matches_alio');}
    bodyMatch=matchedReasons.length>0;
@@ -515,9 +524,10 @@ async function getRegulationDetail(
 }
 
 export async function downloadLatestFile(
-  attachment: Attachment
+  attachment: Attachment,
+  request:typeof fetchWithRetry=fetchWithRetry
 ) {
-  const response = await fetchWithRetry(
+  const response = await request(
     attachment.url,
     {
       headers: {
@@ -787,61 +797,77 @@ export async function getRegulationMetadata(name:string) {
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
  version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
-/** Search-only persisted corpus index. Kept separate from the OAuth KV keyspace by prefix.
- * Shards avoid 213 individual KV reads per search. Cron processes a small batch per run.
- * A failed refresh preserves the last successfully parsed document and reports stale state.
- */
-const INDEX_PREFIX='add:corpus:v1:', INDEX_SHARDS=16, INDEX_BATCH=4;
-type IndexedDoc={title:string;revisionDate?:string;updatedDate?:string;fileNo:string;text:string;indexedAt:string;hash:string};
-type IndexShard={documents:Record<string,IndexedDoc>};
-type IndexState={cursor:number;total:number;lastCheckedAt:string;lastCompletedAt?:string;errors:{count:number;sample:{title:string;message:string}[]};};
-function shardId(title:string){let hash=2166136261;for(const c of title){hash^=c.charCodeAt(0);hash=Math.imul(hash,16777619);}return (hash>>>0)%INDEX_SHARDS;}
-function shardKey(i:number){return INDEX_PREFIX+'shard:'+i;}
-async function readShard(kv:KVNamespace,i:number):Promise<IndexShard>{return await kv.get<IndexShard>(shardKey(i),'json')??{documents:{}};}
-async function fingerprint(text:string){const bytes=new TextEncoder().encode(text);const digest=await crypto.subtle.digest('SHA-256',bytes);return [...new Uint8Array(digest)].map(v=>v.toString(16).padStart(2,'0')).join('');}
-export async function refreshCorpusIndex(kv:KVNamespace){
- const items=await listRegulations();
- const state=await kv.get<IndexState>(INDEX_PREFIX+'state','json')??{cursor:0,total:items.length,lastCheckedAt:'',errors:{count:0,sample:[]}};
- const start=state.cursor>=items.length?0:state.cursor;
- const selected=items.slice(start,start+INDEX_BATCH);
- const shards=new Map<number,IndexShard>();
- let updated=0;
- const errors:{title:string;message:string}[]=[];
- for(const item of selected){
-  const id=shardId(item.title);
-  let shard=shards.get(id);
-  if(!shard){shard=await readShard(kv,id);shards.set(id,shard);}
-  const old=shard.documents[item.title];
-  // stDate and idate detect metadata changes. Periodic full content verification
-  // is achieved by re-fetching unchanged items on a separate, slower sweep.
-  try{
-   // Reuse unchanged content; perform a full hash verification at least weekly.
-   if(old&&old.updatedDate===item.updatedDate&&old.revisionDate===item.revisionDate&&Date.now()-Date.parse(old.indexedAt)<7*86400000)continue;
-   const loaded=await loadLatestDocument(item.title);
-   const text=loaded.document.text;
-   const hash=await fingerprint(text);
-   if(!old||old.hash!==hash||old.fileNo!==loaded.attachment.fileNo||old.updatedDate!==item.updatedDate||old.revisionDate!==item.revisionDate){
-    shard.documents[item.title]={title:item.title,revisionDate:item.revisionDate,updatedDate:item.updatedDate,fileNo:loaded.attachment.fileNo,text,indexedAt:new Date().toISOString(),hash};
-    updated++;
-   }
-  }catch(e){errors.push({title:item.title,message:String(e).slice(0,240)});}
- }
- // Each shard is written once. Readers never see a partially written document.
- for(const [id,shard] of shards)await kv.put(shardKey(id),JSON.stringify(shard));
- const next=start+selected.length;
- const completed=next>=items.length;
- const errorCount=(start===0?0:state.errors.count)+errors.length;
- const errorSample=[...(start===0?[]:state.errors.sample),...errors].slice(0,3);
- const newState:IndexState={cursor:completed?0:next,total:items.length,lastCheckedAt:new Date().toISOString(),lastCompletedAt:completed&&errorCount===0?new Date().toISOString():state.lastCompletedAt,errors:{count:errorCount,sample:errorSample}};
- await kv.put(INDEX_PREFIX+'state',JSON.stringify(newState));
- return {processed:selected.length,updated,next_cursor:completed?null:next,...newState};
+/** A-only source: fresh list, fresh attachment selection and raw-file SHA-256. */
+export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Date.now):typeof fetchWithRetry {
+ let requests=0;const deadline=now()+240_000;
+ return async (url,init,maxAttempts=3)=>{
+  let last:unknown;
+  for(let attempt=0;attempt<maxAttempts;attempt++){
+   let target=url;
+   try{
+    for(let redirect=0;redirect<6;redirect++){
+     if(requests>=40||now()>=deadline)throw Error('index_request_budget_exhausted');
+     if(new URL(target).origin!==ALIO_BASE)throw Error('index_redirect_origin_rejected');
+     requests++;
+     const response=await rawFetch(target,{...init,redirect:'manual',signal:AbortSignal.timeout(Math.min(8000,Math.max(1,deadline-now())))});
+     if(response.status>=300&&response.status<400&&response.headers.has('location')){
+      target=new URL(response.headers.get('location')!,target).href;await response.body?.cancel();continue;
+     }
+     if(response.status===429||response.status>=500){await response.body?.cancel();throw Error('ALIO HTTP '+response.status);}
+     return response;
+    }
+    throw Error('index_redirect_limit');
+   }catch(error){last=error;if(/budget_exhausted|origin_rejected|redirect_limit/.test(String(error)))throw error;}
+  }
+  throw last;
+ };
 }
+type IndexListWork={rows:AlioRow[];nextPage:number;totalPage:number;totalCount:number;startedAt:number};
+async function collectIndexList(request:typeof fetchWithRetry,work?:unknown){
+ let stage=work as IndexListWork|undefined;
+ // Persist at most four pages/event. A partial list never replaces the corpus.
+ if(!stage||Date.now()-stage.startedAt>2*60*60*1000){const first=await fetchListPage(1,request);stage={rows:first.result,nextPage:2,totalPage:first.page.totalPage,totalCount:first.page.totalCount,startedAt:Date.now()};}
+ if(!Number.isInteger(stage.totalPage)||stage.totalPage<1||stage.totalPage>100)throw Error('invalid_index_list_pages');
+ const remaining=Math.min(3,stage.totalPage-stage.nextPage+1);
+ for(let n=0;n<remaining;n++){
+  const page=await fetchListPage(stage.nextPage,request);
+  if(page.page.totalPage!==stage.totalPage||page.page.totalCount!==stage.totalCount)throw Error('index_list_changed_during_collection');
+  stage.rows.push(...page.result);stage.nextPage++;
+ }
+ if(stage.nextPage<=stage.totalPage)return {work:stage};
+ if(stage.rows.length!==stage.totalCount)throw Error('incomplete_index_list');
+ const first=await fetchListPage(1,request);if(JSON.stringify(first.result)!==JSON.stringify(stage.rows.slice(0,first.result.length)))throw Error('index_list_changed_during_collection');
+ const items=itemsFromRows(stage.rows);if(items.length!==stage.totalCount)throw Error('incomplete_index_list');
+ return {items,work:undefined};
+}
+export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequest()){
+ return {
+  list:()=>listRegulations({fresh:true,request}),
+  listBatch:(work?:unknown)=>collectIndexList(request,work),
+  async load(item:CorpusItem){
+   const response=await request(item.detailUrl);if(!response.ok)throw Error('ALIO detail HTTP '+response.status);
+   const attachments=extractAttachments(await response.text());
+   // One invocation-local byte cache: selection and SHA use the same fresh file.
+   let lastFile:{fileNo:string;value:Awaited<ReturnType<typeof downloadLatestFile>>}|undefined;
+   async function download(file:Attachment){if(lastFile?.fileNo===file.fileNo)return lastFile.value;const value=await downloadLatestFile(file,request);if(value.bytes.byteLength>4_000_000)throw Error("index_attachment_size_limit");lastFile={fileNo:file.fileNo,value};return value;}
+   const selection=await selectLatestAttachment(attachments,item.revisionDate,item.updatedDate??'',async file=>{
+    const loaded=await download(file);return extractRevisionSection(loaded.bytes,loaded.extension);
+   });
+   if(!selection.selected)throw Error('selection_error:'+selection.selection_reason.join(','));
+   const file=await download(selection.selected);let text:string;
+   if(file.extension==='hwpx')text=extractHwpxText(file.bytes);
+   else if(file.extension==='hwp')text=await hwpToText(file.bytes);
+   else if(file.extension==='pdf'){const result=await extractText(file.bytes.slice(),{mergePages:true});text=Array.isArray(result.text)?result.text.join('\n\n'):result.text;}
+   else throw Error('unsupported_index_format:'+file.extension);
+   return {fileNo:selection.selected.fileNo,text,bytes:file.bytes,parserVersion:PARSER_VERSION};
+  }
+ };
+}
+export async function refreshCorpusIndex(kv:KVNamespace){const source=createCorpusSource();return refreshIndex(kv,{list:source.listBatch,load:source.load});}
 export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace){
  const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
  if(!kv) return {query,limit,offset,results:[],errors:{count:1,sample:[{code:'index_unavailable'}],retry_cursor:null},partial:true,index_status:'unavailable',next_cursor:null};
- const state=await kv.get<IndexState>(INDEX_PREFIX+'state','json');
- const shards=await Promise.all(Array.from({length:INDEX_SHARDS},(_,i)=>readShard(kv,i)));
- const docs=shards.flatMap(shard=>Object.values(shard.documents));
+ const index=await readIndex(kv);const docs=index.documents;
  const results:any[]=[];
  if(terms.length)for(const doc of docs){
   const content=doc.text;
@@ -855,14 +881,12 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
    const snippet=extractArticleSnippet(content,at,query.length,true);
    found.push({label:snippet.label,snippet:snippet.snippet,score:(part.includes(query.toLowerCase())?10:0)+terms.length});
   }
-  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.indexedAt,matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.verifiedAt,sha256:doc.sha256,matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
  }
  results.sort((a,b)=>b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
- const complete=!!state?.lastCompletedAt&&docs.length>=state.total;
  const next_cursor=offset+limit<results.length?offset+limit:null;
- return {query,limit,offset,totalRegulations:state?.total??null,indexedRegulations:docs.length,results:results.slice(offset,offset+limit),
- errors:{count:state?.errors.count??0,sample:state?.errors.sample??[],retry_cursor:state?.errors.count?state.cursor:null},
- partial:!complete||!!state?.errors.count,index_status:!state?'building':complete?'ready':'building',lastVerifiedAt:state?.lastCheckedAt??null,lastCompletedAt:state?.lastCompletedAt??null,next_cursor};
+ return {query,limit,offset,totalRegulations:index.total,indexedRegulations:docs.length,totalMatches:results.length,results:results.slice(offset,offset+limit),
+ errors:index.errors,partial:index.partial,index_status:index.index_status,lastVerifiedAt:index.lastCheckedAt,lastCompletedAt:index.lastCompletedAt,next_cursor};
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
@@ -978,3 +1002,4 @@ export async function searchHistoricalPdfTables(name:string,query:string){
  }
  return rows.slice(0,10);
 }
+
