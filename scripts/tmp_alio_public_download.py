@@ -61,6 +61,32 @@ def requests_download(url, outdir, suggested=None, kind="web", title=""):
         record(kind,title,url,status="fail",note=repr(e))
         return None
 
+
+# ---- ADD institution selector probe for board/audit pages ----
+def select_add_institution(url, label):
+    driver.get(url); time.sleep(3)
+    try:
+        # Open institution selector when available
+        btns = driver.find_elements(By.XPATH, "//*[contains(normalize-space(.),'기관변경')]")
+        if btns:
+            driver.execute_script("arguments[0].click();", btns[0]); time.sleep(1)
+        links = driver.find_elements(By.XPATH, "//a[normalize-space(text())='국방과학연구소']")
+        if not links:
+            record("probe", label, driver.current_url, status="fail", note="국방과학연구소 기관 선택 링크 미발견")
+            return False
+        driver.execute_script("arguments[0].click();", links[0]); time.sleep(4)
+        body = driver.find_element(By.TAG_NAME,"body").text
+        (ROOT/"_diagnostics").mkdir(exist_ok=True)
+        (ROOT/"_diagnostics"/f"{safe(label)}_ADD_selected.txt").write_text(body,encoding="utf-8")
+        (ROOT/"_diagnostics"/f"{safe(label)}_ADD_selected.html").write_text(driver.page_source,encoding="utf-8")
+        ok = "국방과학연구소" in body
+        record("probe", label, driver.current_url, status="ok" if ok else "fail",
+               note=("ADD selected; "+body[:600].replace("\\n"," | ")) if ok else "ADD name not visible")
+        return ok
+    except Exception as e:
+        record("probe", label, driver.current_url, status="fail", note=repr(e))
+        return False
+
 # 1) Exact ALIO regulation attachments (original binary)
 regulations = [
  ("이사회운영규정","164732","이사회운영규정(2022년도 12월 개정).pdf"),
