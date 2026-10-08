@@ -1,34 +1,20 @@
-name: Temporary ADD C0345 attachment download
+name: Temporary ADD C0345 API probe
 on:
   push:
     branches:
       - tmp-alio-public-download-20261008
     paths:
-      - scripts/tmp_alio_c0345_download.py
+      - scripts/tmp_alio_c0345_api_probe.py
       - .github/workflows/tmp-alio-c0345-download.yml
   workflow_dispatch:
 
 jobs:
-  download:
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install deps
-        run: python -m pip install --upgrade requests selenium
-      - name: Download verified ADD attachments
-        run: python scripts/tmp_alio_c0345_download.py
-      - name: Show result
-        if: always()
-        run: |
-          find alio_c0345 -maxdepth 3 -type f -printf '%p %s bytes\n' | sort || true
-          echo "---- result ----"
-          cat alio_c0345/다운로드_결과.txt || true
-      - name: Upload artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: add-c0345-public-files
-          path: alio_c0345/
-          if-no-files-found: warn
-          retention-days: 7
+        run: python -m pip install --upgrade requests beautifulsoup4
+      - name: Probe ALIO C0345 JSON API
+        run: python scripts/tmp_alio_c0345_api_probe.py
