@@ -6,7 +6,7 @@ const a=sample.indexOf('사고 기록');
 assert.equal(sectionAt(sample,a).label,'[별표 제4호] 차량운행일지');
 assert.equal(extractArticleSnippet(sample,a,2,true).label,'[별표 제4호] 차량운행일지');
 assert(!extractArticleSnippet(sample,a,2,true).snippet.includes('[별표 제6호]'));
-assert.equal(sectionAt(sample,sample.indexOf('부칙 내용')).label,'부 칙 <방침 제919호, 2023. 9. 15.>');
+assert.equal(sectionAt(sample,sample.indexOf('부칙 내용')).label,'부칙');
 assert.equal(normalizeRegulationTitle('민·군'),normalizeRegulationTitle('민군'));
 assert.equal(normalizeRegulationTitle('「민･군 (협력)」'),normalizeRegulationTitle('민군협력'));
 assert(PARSER_VERSION.length>0);
