@@ -1,4 +1,4 @@
-import { searchLatestRegulationTable, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
+import { configureRegulationCache, searchLatestRegulationTable, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -4332,6 +4332,7 @@ const protectedMcpHandler = {
     env: Env,
     ctx: ExecutionContext,
   ) {
+    configureRegulationCache(env.REGULATION_CACHE);
     let rpcMethod = "unknown";
     let rpcId: string | number | null = null;
     let protocolVersion: string | undefined;
