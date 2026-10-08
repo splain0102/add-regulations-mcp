@@ -784,7 +784,7 @@ export async function getRegulationMetadata(name:string) {
  const versions=versionCheck(detail.revisionDate??match.revisionDate,attachment?.detectedDate??undefined,probe);
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,revisionDate:detail.revisionDate??match.revisionDate,
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
- version_check:{...versions,cross_entry_warnings:crossWarnings},version_warning:versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
+ version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
 /** Bounded-concurrency corpus search; offset is across regulation titles. */
 export async function searchAllRegulations(query:string,limit=10,offset=0){
