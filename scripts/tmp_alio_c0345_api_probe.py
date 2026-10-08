@@ -19,7 +19,7 @@ def fetch(root,page=1):
         "bid_type":"",
         "enfc_istt":"",
     }
-    r=s.post(BASE+"/item/itemReportListSusi.json",data=data,timeout=30)
+    r=s.post(BASE+"/item/itemReportListSusi.json",json=data,timeout=30)
     print("ROOT",root,"PAGE",page,"STATUS",r.status_code,"CT",r.headers.get("content-type"))
     print(r.text[:12000])
     if r.ok:
