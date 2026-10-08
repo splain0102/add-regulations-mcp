@@ -10,7 +10,7 @@ export type CorpusDocument = CorpusItem & {fileNo:string;text:string;sha256:stri
 type ErrorEntry = {title:string;message:string;checkedAt:string};
 type Shard = {documents:Record<string,CorpusDocument>};
 export type IndexState = {
-  schema:2;cursor:number;items:CorpusItem[];refs:Record<string,string>;sizes:Record<string,number>;
+  schema:2;cursor:number;pending?:string[];fallbackRefs?:Record<string,string>;items:CorpusItem[];refs:Record<string,string>;sizes:Record<string,number>;
   listWork?:unknown;checked:Record<string,string>;errors:Record<string,ErrorEntry>;lastCheckedAt:string;
   lastCompletedAt?:string;sourceError?:string;garbage:{key:string;after:number}[];
 };
@@ -45,8 +45,9 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
     for(const title of Object.keys(state.errors))if(!titles.has(title))delete state.errors[title];
     for(const title of Object.keys(state.checked))if(!titles.has(title))delete state.checked[title];
     const oldItems=new Map(previous.items.map(i=>[i.title,i]));
+    state.pending=[...new Set([...(state.pending??[]),...items.filter(i=>!oldItems.has(i.title)||!sameMetadata(i,oldItems.get(i.title)!)).map(i=>i.title)])].filter(title=>titles.has(title));
     const selected=[...items].sort((a,b)=>{
-      const priority=(item:CorpusItem)=>!oldItems.has(item.title)||!sameMetadata(item,oldItems.get(item.title)!)?0:1;
+      const priority=(item:CorpusItem)=>state.pending!.includes(item.title)?0:1;
       // Failed entries rotate with the sweep instead of starving other entries.
       return (state.errors[a.title]?1:priority(a))-(state.errors[b.title]?1:priority(b))||
         (state.checked[a.title]??'').localeCompare(state.checked[b.title]??'')||a.title.localeCompare(b.title);
@@ -69,20 +70,21 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
         if(total>MAX_CORPUS_BYTES)throw Error('index_corpus_size_limit');
         state.sizes[id]=size;shard.documents=candidate.documents;
         if(!old||old.sha256!==hash||old.fileNo!==doc.fileNo||old.parserVersion!==doc.parserVersion||!sameMetadata(old,doc))updated++;
-        delete state.errors[item.title];
+        delete state.errors[item.title];state.pending=state.pending.filter(title=>title!==item.title);
       }catch(error){state.errors[item.title]={title:item.title,message:String(error).slice(0,240),checkedAt:timestamp};}
     }
     // New keys are written first; referenced old keys stay intact on any failure.
     for(const [id,shard] of changed){
       const key=INDEX_PREFIX+'shard:'+id+':'+crypto.randomUUID();
       await kv.put(key,JSON.stringify(shard));writtenKeys.push(key);
-      if(state.refs[id])state.garbage.push({key:state.refs[id],after:now+15*60*1000});
+      if(state.refs[id]){(state.fallbackRefs??={})[id]=state.refs[id];state.garbage.push({key:state.refs[id],after:now+15*60*1000});}
       state.refs[id]=key;
     }
-    state.cursor=items.filter(i=>!state.checked[i.title]).length;
+    state.cursor=new Set([...state.pending,...items.filter(i=>!state.checked[i.title]).map(i=>i.title)]).size;
     if(!state.cursor&&!Object.keys(state.errors).length)state.lastCompletedAt=timestamp;
     // GC waits beyond KV propagation, runs only in Cron, and never deletes refs.
-    const due=state.garbage.filter(g=>g.after<=now).slice(0,INDEX_BATCH);
+    const protectedKeys=[...Object.values(state.refs),...Object.values(state.fallbackRefs??{})];
+    const due=state.garbage.filter(g=>g.after<=now&&!protectedKeys.includes(g.key)).slice(0,INDEX_BATCH);
     for(const g of due)if(!Object.values(state.refs).includes(g.key))await kv.delete(g.key);
     state.garbage=state.garbage.filter(g=>!due.includes(g));
     await kv.put(INDEX_PREFIX+'state',JSON.stringify(state));
@@ -102,7 +104,9 @@ export async function readIndex(kv:KVNamespace,now=Date.now()){
   // Serial reads keep peak memory bounded; no ALIO fetch is performed here.
   for(let id=0;id<INDEX_SHARDS;id++){
     try{const shard=await readShard(kv,state,id);documents.push(...Object.values(shard.documents));}
-    catch(error){failures.push({title:'KV shard '+id,message:String(error),checkedAt:''});}
+    catch(error){failures.push({title:'KV shard '+id,message:String(error),checkedAt:''});
+      if(state.fallbackRefs?.[id]){try{const old=await kv.get<Shard>(state.fallbackRefs[id],'json');if(old?.documents)documents.push(...Object.values(old.documents));}catch{ /* Error remains visible; no false ready state. */ }}
+    }
   }
   const wanted=new Map(state.items.map(i=>[i.title,i]));
   const active=documents.filter(d=>wanted.has(d.title));

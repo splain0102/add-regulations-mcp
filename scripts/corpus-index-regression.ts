@@ -68,4 +68,10 @@ await test('incremental 22-page list stays staged until complete; changed count 
  const staged=new TestKV();let listCalls=0;const stagedSource={...source,list:async()=>++listCalls===1?items:{work:{nextPage:4}}};await refreshIndex(staged.binding(),stagedSource,base);await refreshIndex(staged.binding(),stagedSource,base+1000);assert.equal((await readIndex(staged.binding(),base+1000)).total,213);
  const first=await createCorpusSource(request).listBatch();changed=true;await assert.rejects(()=>createCorpusSource(request).listBatch(first.work),/index_list_changed/);
 });
+await test('rank relevant multi-article matches ahead of alphabetical single-hit decoys; appendix label isolated',async()=>{
+ const all=[...items.slice(0,20).map(i=>({...i,title:'가'+i.title})),items[212]], ranked=new TestKV();
+ const rankedSource={list:async()=>all,load:async(item:CorpusItem)=>({...await source.load(item),text:item.title==='보안과제 관리요령'?'제6조(보고)\n외국인 접촉 결과와 외국인 참여 현황\n제8조(자료 취급 의무)\n외국인 접촉을 보고한다.\n[별지 제2호 서식] 외국인 접촉 결과 보고서\n외국인 정보': '제1조(정의)\n외국인도 포함한다.'})};
+ for(let i=0;i<11;i++)await refreshIndex(ranked.binding(),rankedSource,base+i*1000);
+ const r=await searchAllRegulations('외국인',10,0,ranked.binding());assert.equal(r.partial,false);assert.equal(r.results[0].regulationName,'보안과제 관리요령');assert(r.results[0].matches.some(m=>m.label.includes('제8조')));assert(r.results[0].matches.some(m=>m.label==='[별지 제2호 서식]'));
+});
 writeFileSync('reports/corpus-index-regression.json',JSON.stringify({passed:true,tests:results,scope:'A only; synthetic failure injection; not live ALIO or deployed Workers'},null,2));

@@ -809,7 +809,7 @@ export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Da
      if(requests>=40||now()>=deadline)throw Error('index_request_budget_exhausted');
      if(new URL(target).origin!==ALIO_BASE)throw Error('index_redirect_origin_rejected');
      requests++;
-     const response=await rawFetch(target,{...init,redirect:'manual',signal:AbortSignal.timeout(Math.min(8000,Math.max(1,deadline-now())))});
+     const response=await rawFetch(target,{...init,redirect:'manual',signal:AbortSignal.timeout(Math.min(25000,Math.max(1,deadline-now())))});
      if(response.status>=300&&response.status<400&&response.headers.has('location')){
       target=new URL(response.headers.get('location')!,target).href;await response.body?.cancel();continue;
      }
@@ -817,7 +817,7 @@ export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Da
      return response;
     }
     throw Error('index_redirect_limit');
-   }catch(error){last=error;if(/budget_exhausted|origin_rejected|redirect_limit/.test(String(error)))throw error;}
+   }catch(error){last=error;if(/budget_exhausted|origin_rejected|redirect_limit/.test(String(error)))throw error;if(attempt+1<maxAttempts)await sleep(400*(attempt+1));}
   }
   throw last;
  };
@@ -871,7 +871,7 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
  const results:any[]=[];
  if(terms.length)for(const doc of docs){
   const content=doc.text;
-  const headings=[...content.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*)/g)].map(m=>m.index??0);
+  const headings=[...content.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*(?:제\s*)?\d+(?:-\d+)?\s*(?:호)?[^\]\n]*\][^\n]*)/g)].map(m=>m.index??0);
   const bounds=[0,...headings,content.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
   const found:any[]=[];
   for(let i=0;i<bounds.length-1;i++){
@@ -879,11 +879,15 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
    if(!terms.every(t=>part.includes(t)))continue;
    const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
    const snippet=extractArticleSnippet(content,at,query.length,true);
-   found.push({label:snippet.label,snippet:snippet.snippet,score:(part.includes(query.toLowerCase())?10:0)+terms.length});
+   const article=content.slice(bounds[i],bounds[i+1]);
+   const label=article.match(/^\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)[^\]\n]*\])/)?.[1]??snippet.label;
+   const frequency=terms.reduce((sum,term)=>sum+part.split(term).length-1,0);
+   const score=(part.includes(query.toLowerCase())?10:0)+terms.length+Math.min(12,frequency)*2+(terms.every(t=>label.toLowerCase().includes(t))?8:0)-(label.startsWith('[')?10:0);
+   found.push({label,snippet:snippet.snippet,score});
   }
-  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.verifiedAt,sha256:doc.sha256,matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.verifiedAt,sha256:doc.sha256,score:found.reduce((sum,m)=>sum+m.score,0),matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
  }
- results.sort((a,b)=>b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
+ results.sort((a,b)=>b.score-a.score||b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
  const next_cursor=offset+limit<results.length?offset+limit:null;
  return {query,limit,offset,totalRegulations:index.total,indexedRegulations:docs.length,totalMatches:results.length,results:results.slice(offset,offset+limit),
  errors:index.errors,partial:index.partial,index_status:index.index_status,lastVerifiedAt:index.lastCheckedAt,lastCompletedAt:index.lastCompletedAt,next_cursor};
@@ -956,7 +960,7 @@ export function missingAnnexes(text:string){
  return names.filter(name=>!headings.has(name));
 }
 export function sectionAt(text:string, matchIndex:number) {
- const heading = /(?:^|\n)[ \t]*(\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*|제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
+ const heading = /(?:^|\n)[ \t]*(\[(?:별표|별지)\s*(?:제\s*)?\d+(?:-\d+)?\s*(?:호)?[^\]\n]*\][^\n]*|제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
  const sections=[...text.matchAll(heading)].map(m=>({index:m.index??0,label:m[1].replace(/\s+/g,' ').trim()}));
  let current:typeof sections[number]|undefined,next=text.length;
  for(const section of sections){if(section.index<=matchIndex)current=section;else{next=section.index;break;}}
