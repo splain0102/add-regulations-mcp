@@ -837,7 +837,7 @@ export async function getLatestRegulationLayout(name:string){return layoutFromLo
 
 /** Same cached download and latest-file selection as all original tools. */
 export async function searchLatestRegulationTable(name:string,query:string){
- const loaded=await loadLatestDocument(name),{document}=loaded,meta=documentMeta(loaded);
+ const loaded=await loadLatestDocument(name),{document}=loaded,meta=await documentMeta(loaded);
  if(document.file.extension==='pdf'){
   if(!document.pdfPages){
    if(!document.pdfPending)document.pdfPending=(async()=>{const parsed=await extractPdfRichContent(document.file.bytes);if(parsed.layoutSkippedReason)throw new DocumentError('layout_error',parsed.layoutSkippedReason);document.pdfPages=parsed.pages;})();
