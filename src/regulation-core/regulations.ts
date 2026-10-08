@@ -258,9 +258,7 @@ export function dedupeLatestRegulations(
   const map = new Map<string, RegulationItem>();
 
   for (const item of items) {
-    const key = item.title
-      .replace(/\s+/g, "")
-      .toLowerCase();
+    const key = normalizeRegulationTitle(item.title);
 
     const old = map.get(key);
 
@@ -654,24 +652,18 @@ export async function getLatestRegulationByName(
   const items =
     await listRegulations();
 
-  const query = name
-    .replace(/\s+/g, "")
-    .toLowerCase();
+  const query = normalizeRegulationTitle(name);
 
   const exact =
     items.find(
       (item) =>
-        item.title
-          .replace(/\s+/g, "")
-          .toLowerCase() === query
+        normalizeRegulationTitle(item.title) === query
     );
 
   const partial =
     items.find(
       (item) =>
-        item.title
-          .replace(/\s+/g, "")
-          .toLowerCase()
+        normalizeRegulationTitle(item.title)
           .includes(query)
     );
 
@@ -706,6 +698,8 @@ type DocumentEntry = {
  pdfPending?: Promise<void>;
 };
 // Bounded isolate cache. Metadata is re-read before every lookup; changed fileNo/idate evicts the old entry.
+export const PARSER_VERSION = "1.10.4-parser.1";
+export const normalizeRegulationTitle = (value:string) => value.normalize("NFKC").toLowerCase().replace(/[·･‧ㆍ・\s「」｢｣()（）]/g,"");
 const documentCache = new Map<string, Promise<DocumentEntry>>();
 const latestDocumentKey = new Map<string, string>();
 const MAX_CACHE_BYTES = 24_000_000;
@@ -718,7 +712,7 @@ async function loadLatestDocument(name: string) {
  const attachment = detail.latestAttachment;
  if (!attachment) throw new DocumentError('selection_error','최신 첨부파일을 선택하지 못했습니다: '+detail.selection_reason.join(', '));
  const updatedDate = detail.updatedDate ?? match.updatedDate ?? '';
- const key = `${attachment.fileNo}:${updatedDate}`;
+ const key = `${PARSER_VERSION}:${attachment.fileNo}:${updatedDate}`;
  const previous = latestDocumentKey.get(match.detailUrl);
  if(previous && previous !== key) evictDocument(previous);
  latestDocumentKey.set(match.detailUrl,key);
@@ -823,98 +817,24 @@ export async function searchLatestRegulationTable(name:string,query:string){
  return {...meta,cache:layout.cache,rows:searchGeneralTables(document.tables??[],query,document.rows??[],document.file.extension).map(row=>({...row,version_warning:meta.version_warning})),layout_debug:[],limitations:layout.limitations};
 }
 
-export function extractArticleSnippet(
-  text: string,
-  matchIndex: number,
-  queryLength: number
-): {
-  label: string;
-  snippet: string;
-} {
-  const articleRegex =
-    /(?:^|\n)\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
-
-  const headings: {
-    index: number;
-    label: string;
-  }[] = [];
-
-  for (const match of text.matchAll(articleRegex)) {
-    if (
-      typeof match.index === "number" &&
-      match[1]
-    ) {
-      headings.push({
-        index: match.index,
-        label:
-          match[1]
-            .replace(/\s+/g, " ")
-            .trim(),
-      });
-    }
-  }
-
-  let current:
-    | { index: number; label: string }
-    | undefined;
-
-  let nextIndex = text.length;
-
-  for (const heading of headings) {
-    if (heading.index <= matchIndex) {
-      current = heading;
-      continue;
-    }
-
-    nextIndex = heading.index;
-    break;
-  }
-
-  let from =
-    current?.index ??
-    text.lastIndexOf("\n", matchIndex);
-
-  if (from < 0) {
-    from = Math.max(0, matchIndex - 250);
-  }
-
-  let to =
-    current
-      ? nextIndex
-      : text.indexOf("\n\n", matchIndex + queryLength);
-
-  if (to < 0) {
-    to = Math.min(
-      text.length,
-      matchIndex + queryLength + 600
-    );
-  }
-
-  const maxSnippetLength = 2200;
-
-  if (to - from > maxSnippetLength) {
-    const aroundFrom = Math.max(
-      from,
-      matchIndex - 500
-    );
-    const aroundTo = Math.min(
-      to,
-      matchIndex + queryLength + 1200
-    );
-
-    from = aroundFrom;
-    to = aroundTo;
-  }
-
-  return {
-    label:
-      current?.label ??
-      "관련 본문",
-    snippet:
-      text
-        .slice(from, to)
-        .trim(),
-  };
+export function sectionAt(text:string, matchIndex:number) {
+ const heading = /(?:^|\n)[ \t]*(\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*|제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
+ const sections=[...text.matchAll(heading)].map(m=>({index:m.index??0,label:m[1].replace(/\s+/g,' ').trim()}));
+ let current:typeof sections[number]|undefined,next=text.length;
+ for(const section of sections){if(section.index<=matchIndex)current=section;else{next=section.index;break;}}
+ return {label:current?.label??'관련 본문',start:current?.index??Math.max(0,text.lastIndexOf('\n',matchIndex)),end:next,id:current?.index??-1};
+}
+export function extractArticleSnippet(text:string,matchIndex:number,queryLength:number,compact=false){
+ const section=sectionAt(text,matchIndex);
+ const annex=/^\[(?:별표|별지)/.test(section.label);
+ const cap=compact?850:2200;
+ let from=section.start,to=section.end;
+ if(annex||to-from>cap){
+   from=Math.max(from,matchIndex-(compact?240:500));
+   to=Math.min(to,matchIndex+queryLength+(compact?500:1200));
+ }
+ const snippet=text.slice(from,to).split('\n').filter(line=>line.trim()||!annex).join('\n').trim().slice(0,cap);
+ return {label:section.label,snippet};
 }
 
 /** Explicit opt-in only; these results never replace latest-document evidence. */
