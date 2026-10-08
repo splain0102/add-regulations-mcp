@@ -9,7 +9,7 @@ export function normalizedText(s:string):string {
  const text=s.replace(/\s+/g,' ').trim();
  return text.replace(/(?<!\S)[가-힣](?: +[가-힣])+(?!\S)/g,run=>run.replace(/ /g,''));
 }
-const cellJson=(c:Cell)=>({row:c.row,col:c.col,rowSpan:c.rowSpan,colSpan:c.colSpan,text:normalizedText(c.text),raw_text:c.text,runs:c.runs??[]});
+const cellJson=(c:Cell)=>({row:c.row,col:c.col,rowSpan:c.rowSpan,colSpan:c.colSpan,text:c.text,raw_text:c.text,runs:c.runs??[]});
 const headerLabels=new Set(['구분','관리등급','공개대상','사업구분','사업관리부서','예산관리부서','순번','장비명','제작사','모델명','취득연도','취득금액','보유기관명','지역중복여부','공동활용여부','장비등록번호','자체검토의견','기존장비명','용도','구축가격','활용상태','처분계획','상호']);
 function headerRowNumbers(table:Table){
  const directRows=[...new Set(table.cells.map(c=>c.row))].sort((a,b)=>a-b);
