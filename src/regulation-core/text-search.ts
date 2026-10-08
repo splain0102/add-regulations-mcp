@@ -7,6 +7,7 @@ export function textSearchError(error:unknown){const raw=error&&typeof error==='
 /** Both tools use the identical table search and serializer. Component errors
  * cannot discard successful text or tables. No historical PDF work by default. */
 export async function searchRegulationText(name:string,query:string,options:Options={},deps=defaultDependencies){
+ if(!query?.trim())return {isError:true,structuredContent:{code:'invalid_query',error:{code:'invalid_query',message:'검색어를 입력해야 합니다.'}},content:[{type:'text' as const,text:JSON.stringify({code:'invalid_query',message:'검색어를 입력해야 합니다.'})}]};
  const errors:{stage:string;code:string;message:string;candidates?:unknown[]}[]=[],matches:{label:string;snippet:string}[]=[];
  const fail=(stage:string,error:unknown)=>{console.error('search_regulation_text_component_failed',{name,query,stage,stack:error instanceof Error?error.stack:String(error)});errors.push({stage,...textSearchError(error),...((error&&typeof error==='object'&&'candidates' in error)?{candidates:(error as any).candidates}:{})});};
  let textResult:Awaited<ReturnType<typeof getLatestRegulationText>>|undefined,table:any=null,meta:any=null,history:any[]=[];
