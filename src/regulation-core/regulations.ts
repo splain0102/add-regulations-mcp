@@ -646,6 +646,39 @@ export function extractHwpxText(
   return texts.join("\n\n");
 }
 
+const normalizeAttachmentTitle=(value:string)=>normalizeRegulationTitle(value.replace(/(?:개정\s*전문|전문|개정본|\d{2,4}\s*년?\s*\d{1,2}\s*월?(?:\s*\d{1,2}\s*일?)?)/g,'').replace(/\.(?:hwp|hwpx|pdf)$/i,''));
+let crossIndexCache:{expires:number;entries:{itemTitle:string;file:Attachment;revisionDate?:string}[]}|null=null;
+async function crossAttachmentIndex(){
+ if(crossIndexCache&&crossIndexCache.expires>Date.now())return crossIndexCache.entries;
+ const items=await listRegulations(),entries:{itemTitle:string;file:Attachment;revisionDate?:string}[]=[];
+ let next=0;
+ await Promise.all(Array.from({length:Math.min(5,items.length)},async()=>{
+  while(next<items.length){
+   const item=items[next++];
+   try{
+    const html=await fetchAlio(item.detailUrl);
+    for(const file of extractAttachments(html))entries.push({itemTitle:item.title,file,revisionDate:item.revisionDate});
+   }catch{ /* ALIO may be intermittently unavailable: never replace a selected attachment */ }
+  }
+ }));
+ crossIndexCache={entries,expires:Date.now()+600000};
+ return entries;
+}
+export async function crossEntryAttachmentWarnings(name:string,selectedFileNo?:string,selectedDate?:string){
+ const items=await listRegulations();
+ const canonical=items.find(i=>i.title===name)?.title??name;
+ const target=normalizeRegulationTitle(canonical);
+ const entries=await crossAttachmentIndex(),warnings:any[]=[];
+ for(const entry of entries){
+  if(entry.itemTitle===canonical)continue;
+  const fileTitle=normalizeAttachmentTitle(entry.file.name);
+  if(!fileTitle||fileTitle!==target)continue;
+  const date=entry.file.detectedDate??entry.revisionDate??null;
+  const isNewer=!!date&&!!selectedDate&&normalizeDate(date)>normalizeDate(selectedDate);
+  warnings.push({code:isNewer?'cross_entry_newer_attachment':'cross_entry_attachment_mismatch',fileNo:entry.file.fileNo,attachmentName:entry.file.name,itemTitle:entry.itemTitle,date,selectedFileNo:selectedFileNo??null,warning:'다른 규정 항목에 첨부된 파일입니다. 자동 교체하지 않습니다.'});
+ }
+ return warnings;
+}
 export async function getLatestRegulationByName(
   name: string
 ) {
