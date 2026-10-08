@@ -311,12 +311,26 @@ async function fetchListPage(pageNo:number):Promise<{result:AlioRow[];page:{tota
   if(!Array.isArray(envelope.data?.result)||!envelope.data?.page)throw new Error('ALIO 목록 응답 형식을 확인할 수 없습니다.');
   return envelope.data;
 }
+// Optional persistent cache; when unbound, the existing isolate cache remains active.
+type RegulationCacheKV = Pick<KVNamespace, 'get' | 'put'>;
+let regulationCacheKV: RegulationCacheKV | undefined;
+export function configureRegulationCache(kv?: RegulationCacheKV) { regulationCacheKV = kv; }
+const LIST_CACHE_KEY = 'regulations:list:v1';
 let cachedList:{items:RegulationItem[];expires:number}|null=null;
 let pendingList:Promise<RegulationItem[]>|null=null;
 export async function listRegulations():Promise<RegulationItem[]> {
   if(cachedList&&cachedList.expires>Date.now())return cachedList.items;
   if(pendingList)return pendingList;
   pendingList=(async()=>{
+    if(regulationCacheKV){
+      try {
+        const saved=await regulationCacheKV.get(LIST_CACHE_KEY,'json') as {items?:RegulationItem[]}|null;
+        if(saved?.items?.length){
+          cachedList={items:saved.items,expires:Date.now()+60000};
+          return saved.items;
+        }
+      } catch(error) { console.warn('Regulation KV cache read failed',String(error)); }
+    }
     const first=await fetchListPage(1);
     const total=first.page.totalPage;
     if(!Number.isInteger(total)||total<1||total>100)throw new Error('ALIO 목록 페이지 수를 확인할 수 없습니다.');
@@ -331,7 +345,12 @@ export async function listRegulations():Promise<RegulationItem[]> {
       return {title:r.title,detailUrl:`${ALIO_BASE}/item/itemBoard21110.do?${params}`,revisionDate:r.stDate,updatedDate:r.idate};
     })).sort((a,b)=>(normalizeDate(b.revisionDate)||normalizeDate(b.updatedDate)).localeCompare(normalizeDate(a.revisionDate)||normalizeDate(a.updatedDate)));
     if(!items.length)throw new Error('ALIO에서 국방과학연구소 규정 목록을 찾지 못했습니다.');
-    cachedList={items,expires:Date.now()+60000};return items;
+    cachedList={items,expires:Date.now()+60000};
+    if(regulationCacheKV){
+      try { await regulationCacheKV.put(LIST_CACHE_KEY,JSON.stringify({items}),{expirationTtl:300}); }
+      catch(error){ console.warn('Regulation KV cache write failed',String(error)); }
+    }
+    return items;
   })();
   try{return await pendingList;}finally{pendingList=null;}
 }
