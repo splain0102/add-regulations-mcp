@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {versionCheck} from '../src/regulation-core/table-layout';
 import {searchRegulationText} from '../src/regulation-core/text-search';
-import {sectionAt,extractArticleSnippet,normalizeRegulationTitle,PARSER_VERSION} from '../src/regulation-core/regulations';
+import {sectionAt,extractArticleSnippet,missingAnnexes,normalizeRegulationTitle,PARSER_VERSION} from '../src/regulation-core/regulations';
 const sample='제7조(사고)\n사고 조치\n부 칙 <방침 제919호, 2023. 9. 15.>\n이 규정은 공포한 날부터 시행한다\n[별표 제4호] 차량운행일지\n사고 기록\n\n[별표 제6호] 사고처리\n사고 보고';
 const a=sample.indexOf('사고 기록');
 assert.equal(sectionAt(sample,a).label,'[별표 제4호] 차량운행일지');
@@ -24,3 +24,7 @@ assert(numberResult.structuredContent.matches[0].label.startsWith('제15조'));
 const effective=versionCheck('2021. 3. 29.',undefined,'부 칙 <방침 제811호, 2021. 3. 29.>\n2021. 4. 1. 시행');
 assert(!effective.warning||effective.warning.mismatches.every((m:any)=>m.kind!=='effective_date_difference'));
 console.log('PASS token-AND, article priority and effective date classification');
+
+assert.deepEqual(missingAnnexes('제4조(조직)\\n[별표 제1호]에 따른다.'),['[별표 제1호]']);
+assert.deepEqual(missingAnnexes('제4조(조직)\\n[별표 제1호]에 따른다.\\n[별표 제1호] 직제표\\n표 본문'),[]);
+console.log('PASS missing annex diagnostics');
