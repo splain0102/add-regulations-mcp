@@ -748,6 +748,35 @@ export async function getRegulationMetadata(name:string) {
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
  version_check:versions,version_warning:versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
+/** Bounded-concurrency corpus search; offset is across regulation titles. */
+export async function searchAllRegulations(query:string,limit=10,offset=0){
+ const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+ if(!terms.length)return {query,limit,offset,totalRegulations:0,results:[],errors:[]};
+ const items=await listRegulations(),selected=items.slice(offset),results:any[]=[],errors:any[]=[];
+ let cursor=0;
+ const worker=async()=>{
+  while(cursor<selected.length){
+   const item=selected[cursor++];
+   try{
+    const loaded=await loadLatestDocument(item.title),text=loaded.document.text;
+    const headings=[...text.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*)/g)].map(m=>m.index??0);
+    const bounds=[0,...headings,text.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
+    const found:any[]=[];
+    for(let i=0;i<bounds.length-1;i++){
+     const part=text.slice(bounds[i],bounds[i+1]).toLowerCase();
+     if(!terms.every(t=>part.includes(t)))continue;
+     const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
+     const snippet=extractArticleSnippet(text,at,query.length,true);
+     found.push({label:snippet.label,snippet:snippet.snippet,score:(part.includes(query.toLowerCase())?10:0)+terms.length});
+    }
+    if(found.length)results.push({regulationName:item.title,fileNo:loaded.attachment.fileNo,matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+   }catch(e){errors.push({regulationName:item.title,code:e instanceof DocumentError?e.code:'document_error',message:String(e)});}
+  }
+ };
+ await Promise.all(Array.from({length:Math.min(3,selected.length)},()=>worker()));
+ results.sort((a,b)=>b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
+ return {query,limit,offset,totalRegulations:items.length,results:results.slice(0,limit),errors,partial:errors.length>0,scanned:selected.length};
+}
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
  return {...documentMeta(loaded),text:loaded.document.text};
