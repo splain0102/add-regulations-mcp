@@ -877,11 +877,6 @@ export function missingAnnexes(text:string){
  const headings=new Set([...text.matchAll(/(?:^|\n)\s*\[(별표|별지)\s*제\s*(\d+(?:-\d+)?)\s*호\]/g)].map(m=>`[${m[1]} 제${m[2]}호]`));
  return names.filter(name=>!headings.has(name));
 }
-export function sectionAt(text:string, matchIndex:number) {');
-  const heading=new RegExp('(?:^|\\n)\\s*'+escaped+'(?:\\s|$)','m');
-  return !heading.test(text);
- });
-}
 export function sectionAt(text:string, matchIndex:number) {
  const heading = /(?:^|\n)[ \t]*(\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*|제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
  const sections=[...text.matchAll(heading)].map(m=>({index:m.index??0,label:m[1].replace(/\s+/g,' ').trim()}));
