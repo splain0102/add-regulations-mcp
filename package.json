@@ -1,6 +1,6 @@
 {
   "name": "add-regulations-mcp",
-  "version": "1.10.3",
+  "version": "1.10.4",
   "private": true,
   "scripts": {
     "predeploy": "node scripts/stamp-build.mjs",
