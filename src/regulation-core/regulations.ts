@@ -878,8 +878,8 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
    const part=content.slice(bounds[i],bounds[i+1]).toLowerCase();
    if(!terms.every(t=>part.includes(t)))continue;
    const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
-   const snippet=extractArticleSnippet(content,at,query.length,true);
    const article=content.slice(bounds[i],bounds[i+1]);
+   const snippet=extractArticleSnippet(article,at-bounds[i],query.length,true);
    const label=article.match(/^\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)[^\]\n]*\])/)?.[1]??snippet.label;
    const frequency=terms.reduce((sum,term)=>sum+part.split(term).length-1,0);
    const score=(part.includes(query.toLowerCase())?10:0)+terms.length+Math.min(12,frequency)*2+(terms.every(t=>label.toLowerCase().includes(t))?8:0)-(label.startsWith('[')?10:0);
@@ -960,7 +960,7 @@ export function missingAnnexes(text:string){
  return names.filter(name=>!headings.has(name));
 }
 export function sectionAt(text:string, matchIndex:number) {
- const heading = /(?:^|\n)[ \t]*(\[(?:별표|별지)\s*(?:제\s*)?\d+(?:-\d+)?\s*(?:호)?[^\]\n]*\][^\n]*|제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
+ const heading = /(?:^|\n)[ \t]*(\[(?:별표|별지)\s*제\s*\d+(?:-\d+)?\s*호\][^\n]*|제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?)/g;
  const sections=[...text.matchAll(heading)].map(m=>({index:m.index??0,label:m[1].replace(/\s+/g,' ').trim()}));
  let current:typeof sections[number]|undefined,next=text.length;
  for(const section of sections){if(section.index<=matchIndex)current=section;else{next=section.index;break;}}

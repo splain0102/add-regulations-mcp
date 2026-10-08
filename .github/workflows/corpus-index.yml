@@ -22,6 +22,10 @@ jobs:
       - run: npm run test:corpus-workers
       - name: Actual ALIO whole-corpus acceptance
         run: npm run test:corpus-acceptance
+      - name: Authenticated search of actual ALIO corpus in workerd KV
+        run: npm run test:corpus-workers
+        env:
+          CORPUS_LIVE_CHECKPOINT: reports/corpus-index-live-checkpoint.json
       - if: always()
         uses: actions/upload-artifact@v4
         with:

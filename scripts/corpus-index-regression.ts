@@ -42,7 +42,7 @@ await test('list outage and empty list preserve snapshot; missing KV shard canno
  const before=(await readIndex(small.binding(),now)).documents;
  await refreshIndex(small.binding(),{...smallSource,list:async()=>{throw Error('ALIO 522');}},++now);assert.deepEqual((await readIndex(small.binding(),now)).documents,before);assert.equal((await readIndex(small.binding(),now)).partial,true);
  await refreshIndex(small.binding(),{...smallSource,list:async()=>[]},++now);assert.deepEqual((await readIndex(small.binding(),now)).documents,before);
- await refreshIndex(small.binding(),smallSource,++now);const state=await small.get<any>(INDEX_PREFIX+'state');const key=Object.values(state.refs)[0] as string;const saved=small.values.get(key)!;small.values.delete(key);assert.equal((await readIndex(small.binding(),now)).partial,true);small.values.set(key,saved);
+ await refreshIndex(small.binding(),smallSource,++now);const state=await small.get<any>(INDEX_PREFIX+'state');const key=Object.values(state.refs)[0] as string;const saved=small.values.get(key)!;small.values.delete(key);const missing=await readIndex(small.binding(),now);assert.equal(missing.partial,true);assert(missing.errors.count>0);assert(missing.documents.length>0,'fallback keeps preceding committed data');small.values.set(key,saved);
 });
 await test('removed titles excluded; new title never hidden by prior completion',async()=>{
  const fewer={...smallSource,list:async()=>[two[0]]};await refreshIndex(small.binding(),fewer,++now);assert.equal((await readIndex(small.binding(),now)).documents.length,1);

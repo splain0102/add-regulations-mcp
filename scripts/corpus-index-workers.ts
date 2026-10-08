@@ -42,6 +42,11 @@ try{
  const shard=await kv.get<any>(Object.values(state.refs)[0] as string,'json');assert.equal(shard.documents['보안과제 관리요령'].fileNo,'100');assert.match(shard.documents['보안과제 관리요령'].sha256,/^[a-f0-9]{64}$/);
  for(const name of oauthBefore)assert(await kv.get(name));
  const after=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(after.status,401);
+ if(process.env.CORPUS_LIVE_CHECKPOINT){
+  const entries=JSON.parse(readFileSync(process.env.CORPUS_LIVE_CHECKPOINT,'utf8')) as [string,string][];
+  await new Promise(resolve=>setTimeout(resolve,1100));
+  for(const [key,value] of entries)if(key.startsWith('add:corpus:v2:'))await kv.put(key,value);
+ }
  const verifier='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~';
  const challenge=createHash('sha256').update(verifier).digest('base64url');
  const params=new URLSearchParams({response_type:'code',client_id:client.client_id,redirect_uri:'https://example.com/callback',scope:'mcp:read',state:'test',code_challenge:challenge,code_challenge_method:'S256',resource:'https://add-regulations-mcp.splain0102.workers.dev/mcp'});
@@ -51,5 +56,5 @@ try{
  const initialize=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'A-test',version:'1'}}})});assert.equal(initialize.status,200);await initialize.text();
  const beforeSearch=outbound;
  const search=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'search_all_regulations',arguments:{query:'외국인'}}})});assert.equal(search.status,200);const response=await search.text();assert(response.includes('"partial":false'));assert(response.includes('제8조'));assert.equal(outbound,beforeSearch);
- writeFileSync('reports/corpus-index-workers.json',JSON.stringify({passed:true,runtime:'workerd + Miniflare actual Worker bundle, local KV, mocked ALIO',oauthDiscovery:discovery.status,dynamicRegistration:register.status,unauthenticatedMcpBefore:protectedResponse.status,unauthenticatedMcpAfter:after.status,cron:state,outbound,pkceTokenExchange:tokenResponse.status,authenticatedSearchStatus:search.status,searchResponse:response},null,2));console.log('CORPUS_WORKERS_PASS',JSON.stringify({outbound,oauthKeysPreserved:oauthBefore.length}));
+ writeFileSync('reports/corpus-index-workers.json',JSON.stringify({passed:true,runtime:'workerd + Miniflare actual Worker bundle, local KV, mocked ALIO',oauthDiscovery:discovery.status,dynamicRegistration:register.status,unauthenticatedMcpBefore:protectedResponse.status,unauthenticatedMcpAfter:after.status,cron:state,outbound,pkceTokenExchange:tokenResponse.status,authenticatedSearchStatus:search.status,searchResponse:response,liveSnapshot:process.env.CORPUS_LIVE_CHECKPOINT??null},null,2));console.log('CORPUS_WORKERS_PASS',JSON.stringify({outbound,oauthKeysPreserved:oauthBefore.length}));
 }finally{await mf.dispose();}
