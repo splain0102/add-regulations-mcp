@@ -653,28 +653,18 @@ export async function getLatestRegulationByName(
     await listRegulations();
 
   const query = normalizeRegulationTitle(name);
-
-  const exact =
-    items.find(
-      (item) =>
-        normalizeRegulationTitle(item.title) === query
-    );
-
-  const partial =
-    items.find(
-      (item) =>
-        normalizeRegulationTitle(item.title)
-          .includes(query)
-    );
-
-  const match = exact ?? partial;
-
-  if (!match) {
-    throw new Error(
-      `"${name}"에 해당하는 규정을 찾지 못했습니다.`
-    );
+  const exact = items.filter(item=>item.title===name);
+  const normalized = items.filter(item=>normalizeRegulationTitle(item.title)===query);
+  const partial = items.filter(item=>normalizeRegulationTitle(item.title).includes(query));
+  const candidates=exact.length?exact:normalized.length?normalized:partial;
+  if(!candidates.length){
+    const similar=items.filter(item=>query&&([...query].some(ch=>normalizeRegulationTitle(item.title).includes(ch)))).slice(0,5).map(item=>({title:item.title,revisionDate:item.revisionDate}));
+    throw Object.assign(new Error(`규정을 찾지 못했습니다: ${name}`),{code:'not_found',candidates:similar});
   }
-
+  if(candidates.length>1){
+    throw Object.assign(new Error(`규정명 후보가 ${candidates.length}건입니다. 정확한 규정명을 지정하세요: ${name}`),{code:'ambiguous_name',candidates:candidates.map(item=>({title:item.title,revisionDate:item.revisionDate}))});
+  }
+  const match=candidates[0];
   const detail =
     await getRegulationDetail(
       match.detailUrl,
