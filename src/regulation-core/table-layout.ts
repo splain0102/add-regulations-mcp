@@ -156,7 +156,8 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  const dates:{source:string;date:string}[]=[];const a=alio&&normalize(alio);if(a)dates.push({source:'alio_revision_date',date:a});if(filenameDate)dates.push({source:'attachment_filename_date',date:filenameDate});
  const headings=[...text.matchAll(/^[ \t]*부[ \t]*칙[^\n]*/gm)];
  const lastHeading=headings.at(-1),section=lastHeading?text.slice(lastHeading.index!,text.indexOf('[별표',lastHeading.index!)>=0?text.indexOf('[별표',lastHeading.index!):undefined):'';
- const revisions=[...(lastHeading?.[0]??'').matchAll(/20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2}/g)].map(m=>normalize(m[0])).filter(Boolean) as string[];
+ const revisionSource=(section||text).normalize('NFKC');
+  const revisions=[...(lastHeading?.[0]??'').matchAll(/20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2}/g),...revisionSource.matchAll(/(?:제정|전부\s*개정|개정)\s*[:：]?\s*(20\d{2}\s*[.년\/\-]\s*\d{1,2}\s*[.월\/\-]\s*\d{1,2})/g)].map(m=>normalize(m[1]??m[0])).filter(Boolean) as string[];
  const effective=[...section.matchAll(/(20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2})[^\n]{0,25}시행/g)].map(m=>normalize(m[1])).filter(Boolean) as string[];
  const r=revisions.sort().at(-1),e=effective.sort().at(-1);if(r)dates.push({source:'body_last_revision_date',date:r});if(e)dates.push({source:'body_last_effective_date',date:e});
  const dateRange=(value:string):[number,number]=>{
