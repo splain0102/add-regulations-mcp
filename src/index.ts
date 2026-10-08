@@ -2,7 +2,7 @@ import {searchRegulationText} from "./regulation-core/text-search";
 import {PARSER_VERSION,normalizeRegulationTitle} from "./regulation-core/regulations";
 import {BUILD_VERSION} from "./build-info";
 import {tableToolResponse} from "./regulation-core/table-response";
-import { getRegulationMetadata, searchLatestRegulationTable, searchAllRegulations as coreSearchAllRegulations, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
+import { getRegulationMetadata, searchLatestRegulationTable, searchAllRegulations as coreSearchAllRegulations, refreshCorpusIndex, listRegulations as coreListRegulations, getLatestRegulationText as coreGetLatestRegulationText } from "./regulation-core/regulations";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -3758,7 +3758,7 @@ function publicErrorCode(error:unknown):'timeout'|'parse_error'|'selection_error
   return 'upstream_error';
 }
 
-function createServer() {
+function createServer(env: Env) {
   const server = new McpServer({
     name: "ADD Regulations MCP",
     version: MCP_VERSION,
@@ -4042,7 +4042,7 @@ function createServer() {
     },
     async ({query,limit,offset})=>{
       try{
-        const data=await coreSearchAllRegulations(query,limit,offset);
+        const data=await coreSearchAllRegulations(query,limit,offset,env.OAUTH_KV);
         return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }catch(error){
         const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
@@ -4109,7 +4109,7 @@ const MCP_RESOURCE =
 const AUTHORIZATION_SERVER =
   "https://add-regulations-mcp.splain0102.workers.dev";
 
-const mcpHandler = createMcpHandler(createServer);
+
 
 const protectedMcpHandler = {
   async fetch(
@@ -4153,7 +4153,7 @@ const protectedMcpHandler = {
 
     try {
       const response =
-        await mcpHandler(request, env, ctx);
+        await createMcpHandler(() => createServer(env))(request, env, ctx);
 
       const responseText =
         await response.clone().text();
@@ -4185,7 +4185,7 @@ const protectedMcpHandler = {
   },
 };
 
-export default new OAuthProvider<Env>({
+const oauthProvider = new OAuthProvider<Env>({
   apiRoute: "/mcp",
   apiHandler: protectedMcpHandler,
 
@@ -4211,3 +4211,11 @@ export default new OAuthProvider<Env>({
 });
 
 
+
+// OAuth routes remain unchanged; scheduled events update the persisted corpus index.
+export default {
+ fetch(request:Request,env:Env,ctx:ExecutionContext){return oauthProvider.fetch(request,env,ctx);},
+ async scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext){
+  ctx.waitUntil(refreshCorpusIndex(env.OAUTH_KV).then(result=>console.log('corpus_index_refresh',JSON.stringify(result))).catch(error=>console.error('corpus_index_refresh_failed',String(error))));
+ }
+};
