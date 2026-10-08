@@ -646,7 +646,12 @@ export function extractHwpxText(
   return texts.join("\n\n");
 }
 
-const normalizeAttachmentTitle=(value:string)=>normalizeRegulationTitle(value.replace(/(?:개정\s*전문|전문|개정본|\d{2,4}\s*년?\s*\d{1,2}\s*월?(?:\s*\d{1,2}\s*일?)?)/g,'').replace(/\.(?:hwp|hwpx|pdf)$/i,''));
+const normalizeAttachmentTitle=(value:string)=>{
+ const cleaned=value.replace(/\.(?:hwp|hwpx|pdf)$/i,'').replace(/\([^)]*(?:\d{2,4}\s*년|\d{2,4}\s*[.\-]\s*\d{1,2})[^)]*\)/g,'').replace(/(?:개정\s*전문|개정본|전문)$/g,'');
+ return normalizeRegulationTitle(cleaned).replace(/민군기술협력사업/g,'민군협력사업');
+};
+const crossCanonicalTitle=(value:string)=>normalizeRegulationTitle(value).replace(/민군기술협력사업/g,'민군협력사업');
+
 let crossIndexCache:{expires:number;entries:{itemTitle:string;file:Attachment;revisionDate?:string}[]}|null=null;
 async function crossAttachmentIndex(){
  if(crossIndexCache&&crossIndexCache.expires>Date.now())return crossIndexCache.entries;
@@ -667,7 +672,7 @@ async function crossAttachmentIndex(){
 export async function crossEntryAttachmentWarnings(name:string,selectedFileNo?:string,selectedDate?:string){
  const items=await listRegulations();
  const canonical=items.find(i=>i.title===name)?.title??name;
- const target=normalizeRegulationTitle(canonical);
+ const target=crossCanonicalTitle(canonical);
  const entries=await crossAttachmentIndex(),warnings:any[]=[];
  for(const entry of entries){
   if(entry.itemTitle===canonical)continue;
