@@ -111,26 +111,34 @@ for p in range(2,bpg["totalPage"]+1):
     xs,_=list_page("43005",p); board.extend(xs)
 (ROOT/"board_index.json").write_text(json.dumps({"page":bpg,"items":board},ensure_ascii=False,indent=2),encoding="utf-8")
 
-# Latest 10 audit
-audit,apg=list_page("43006",1)
-(ROOT/"audit_latest10_index.json").write_text(json.dumps({"page":apg,"items":audit},ensure_ascii=False,indent=2),encoding="utf-8")
+# All audit pages
+a1,apg=list_page("43006",1); audit=list(a1)
+for p in range(2,apg["totalPage"]+1):
+    xs,_=list_page("43006",p); audit.extend(xs)
+(ROOT/"audit_all_index.json").write_text(json.dumps({"page":apg,"items":audit},ensure_ascii=False,indent=2),encoding="utf-8")
 
 tasks=[]
 with ThreadPoolExecutor(max_workers=4) as ex:
     for it in board: tasks.append(ex.submit(download_item,it,ROOT/"01_이사회_회의록_원본"))
-    for it in audit: tasks.append(ex.submit(download_item,it,ROOT/"02_감사결과_최신10건_원본"))
+    for it in audit: tasks.append(ex.submit(download_item,it,ROOT/"02_감사결과_전체_원본"))
     for fut in as_completed(tasks):
         try:fut.result()
         except Exception as e: log({"kind":"worker","status":"fail","note":repr(e)})
 
-# External accounting audit root: latest up to 3, if exposed through same API.
+# External accounting audit attachments from verified 2026 Q1 ADD detail page
+# disclosureNo verified from page source; options 101..105 are 2025..2021 ZIP attachments.
 try:
-    ext,epg=list_page("32301",1)
-    ext=ext[:3]
-    (ROOT/"external_audit_index.json").write_text(json.dumps({"page":epg,"items":ext},ensure_ascii=False,indent=2),encoding="utf-8")
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        fs=[ex.submit(download_item,it,ROOT/"03_외부회계감사_최근자료") for it in ext]
-        for f in as_completed(fs): f.result()
+    ext_dir=ROOT/"03_외부회계감사_원본ZIP"; ext_dir.mkdir(parents=True,exist_ok=True)
+    disclosure="2026041303151943"
+    for fno,year in [("101","2025"),("102","2024"),("103","2023"),("104","2022"),("105","2021")]:
+        s=session()
+        r=s.get(BASE+"/download/file.json",params={"f":fno,"d":disclosure},timeout=(8,90),allow_redirects=True)
+        if r.status_code!=200 or len(r.content)<500 or b"<html" in r.content[:150].lower():
+            raise RuntimeError(f"external audit {year}: HTTP {r.status_code}, {len(r.content)} bytes")
+        fn=response_filename(r,f"회계감사보고서({year}).zip")
+        dst=ext_dir/fn; dst.write_bytes(r.content)
+        log({"kind":"external_audit_attachment","title":f"회계감사보고서({year})","disclosureNo":disclosure,
+             "fileNo":fno,"status":"ok","path":str(dst),"size":dst.stat().st_size,"sha256":hashf(dst),"url":r.url})
 except Exception as e:
     log({"kind":"external_audit","status":"fail","note":repr(e)})
 
@@ -140,7 +148,7 @@ fails=[x for x in LOG if x.get("status")=="fail"]
 summary=[
     "국방과학연구소 C0345 ALIO 원본첨부 직접 다운로드 결과",
     f"이사회 공개총계: {bpg.get('totalCount')}건 / 다운로드 대상: {len(board)}건",
-    f"감사결과 공개총계: {apg.get('totalCount')}건 / 다운로드 대상: 최신 {len(audit)}건",
+    f"감사결과 공개총계: {apg.get('totalCount')}건 / 다운로드 대상: 전체 {len(audit)}건",
     f"원본 첨부파일 성공: {len(oks)}개 / 실패 기록: {len(fails)}건",
     "",
     "다운로드 성공 원본:",
