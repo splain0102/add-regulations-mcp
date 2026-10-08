@@ -874,8 +874,10 @@ export async function searchLatestRegulationTable(name:string,query:string){
 export function missingAnnexes(text:string){
  const references=[...text.matchAll(/\[(별표|별지)\s*제\s*(\d+(?:-\d+)?)\s*호\]/g)];
  const names=[...new Set(references.map(m=>`[${m[1]} 제${m[2]}호]`))];
- return names.filter(name=>{
-  const escaped=name.replace(/[.*+?^\u0024{}()|[\]\\]/g,'\\export function sectionAt(text:string, matchIndex:number) {');
+ const headings=new Set([...text.matchAll(/(?:^|\n)\s*\[(별표|별지)\s*제\s*(\d+(?:-\d+)?)\s*호\]/g)].map(m=>`[${m[1]} 제${m[2]}호]`));
+ return names.filter(name=>!headings.has(name));
+}
+export function sectionAt(text:string, matchIndex:number) {');
   const heading=new RegExp('(?:^|\\n)\\s*'+escaped+'(?:\\s|$)','m');
   return !heading.test(text);
  });
