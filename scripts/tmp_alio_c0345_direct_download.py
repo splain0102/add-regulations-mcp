@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import requests, json, re, hashlib, zipfile, os
+import requests, json, re, hashlib, zipfile, os, time
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -9,7 +9,12 @@ ROOT=Path("alio_c0345_direct")
 ROOT.mkdir(exist_ok=True)
 LOG=[]
 
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 s=requests.Session()
+retry=Retry(total=7, connect=7, read=7, status=5, backoff_factor=1.2,
+            status_forcelist=[429,500,502,503,504,522], allowed_methods=frozenset(["GET","POST"]))
+s.mount("https://", HTTPAdapter(max_retries=retry))
 s.headers.update({
     "User-Agent":UA,
     "Accept":"*/*",
@@ -34,8 +39,18 @@ def record(kind,title,status,note="",path=None,url=""):
 
 def init_root(root):
     url=f"{BASE}/item/itemOrganList.do?apbaId=C0345&reportFormRootNo={root}"
-    r=s.get(url,timeout=30)
-    r.raise_for_status()
+    last=None
+    for attempt in range(1,7):
+        try:
+            r=s.get(url,timeout=(10,25))
+            if r.ok and "국방과학연구소" in r.text:
+                return url
+            last=RuntimeError(f"HTTP {r.status_code}, len={len(r.text)}")
+        except Exception as e:
+            last=e
+        time.sleep(min(8, attempt*1.5))
+    # The list API itself validates organInfo=C0345, so do not abort solely on landing-page failure.
+    record("connection",f"root {root}","warn",f"landing page unavailable after retries: {last}",url=url)
     return url
 
 def list_reports(root,page=1):
@@ -50,9 +65,20 @@ def list_reports(root,page=1):
         "bid_type":"",
         "enfc_istt":"",
     }
-    r=s.post(BASE+"/item/itemReportListSusi.json",json=payload,timeout=30)
-    r.raise_for_status()
-    obj=r.json()
+    last=None
+    for attempt in range(1,8):
+        try:
+            r=s.post(BASE+"/item/itemReportListSusi.json",json=payload,timeout=(10,30))
+            r.raise_for_status()
+            obj=r.json()
+            if obj.get("status")=="success":
+                break
+            last=RuntimeError(str(obj))
+        except Exception as e:
+            last=e
+        time.sleep(min(10, attempt*1.5))
+    else:
+        raise RuntimeError(f"list API failed after retries root={root} page={page}: {last}")
     if obj.get("status")!="success":
         raise RuntimeError(f"list API error {root} p{page}: {obj}")
     data=obj["data"]
@@ -61,7 +87,7 @@ def list_reports(root,page=1):
     return data["result"],data["page"]
 
 def get_files(disclosure):
-    r=s.get(BASE+"/item/itemReportFiles.json",params={"disclosureNo":disclosure},timeout=30)
+    r=s.get(BASE+"/item/itemReportFiles.json",params={"disclosureNo":disclosure},timeout=(10,30))
     r.raise_for_status()
     obj=r.json()
     # This endpoint may return a bare array or {data:[...]}
@@ -89,7 +115,7 @@ def download_file(item,finfo,outdir):
     if not fileNo:
         record("attachment",item["title"],"fail","fileNo missing: "+json.dumps(finfo,ensure_ascii=False)); return None
     url=BASE+"/download/file.json"
-    r=s.get(url,params={"f":fileNo,"d":disclosure},timeout=60,allow_redirects=True)
+    r=s.get(url,params={"f":fileNo,"d":disclosure},timeout=(10,60),allow_redirects=True)
     if r.status_code!=200 or len(r.content)<500:
         record("attachment",item["title"],"fail",f"HTTP {r.status_code}, bytes={len(r.content)}",url=r.url); return None
     head=r.content[:120].lower()
@@ -104,7 +130,7 @@ def download_file(item,finfo,outdir):
 
 def download_report_pdf(item,outdir):
     # Supplemental ALIO-generated report PDF, not a replacement for original attachment.
-    r=s.get(BASE+"/download/pdf.json",params={"disclosureNo":item["disclosureNo"]},timeout=60,allow_redirects=True)
+    r=s.get(BASE+"/download/pdf.json",params={"disclosureNo":item["disclosureNo"]},timeout=(10,60),allow_redirects=True)
     if r.status_code==200 and len(r.content)>1000 and r.content[:4]==b"%PDF":
         outdir=Path(outdir); outdir.mkdir(parents=True,exist_ok=True)
         p=outdir/(safe(item["title"])+"__ALIO_보고서.pdf")
@@ -117,7 +143,7 @@ def download_report_pdf(item,outdir):
 def handle_items(items,outdir,include_pdf=True):
     for item in items:
         # Detail page institution/title validation.
-        detail=s.get(BASE+"/item/itemReport.do",params={"seq":item["disclosureNo"],"disclosureNo":item["disclosureNo"]},timeout=30)
+        detail=s.get(BASE+"/item/itemReport.do",params={"seq":item["disclosureNo"],"disclosureNo":item["disclosureNo"]},timeout=(10,30))
         if detail.status_code!=200 or "국방과학연구소" not in detail.text or item["title"].strip() not in detail.text:
             record("item",item["title"],"fail","detail validation failed",url=detail.url); continue
         files=get_files(item["disclosureNo"])
