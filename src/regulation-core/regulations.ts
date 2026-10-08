@@ -464,12 +464,18 @@ export async function selectLatestAttachment(
   if (!attachments.length) return {selected:null,other_attachments:[],selection_reason:'no_attachment'};
   const officialDate=normalizeDate(revisionDate);
   const formatRank=(f:Attachment)=>f.extension==='hwpx'?3:f.extension==='hwp'?2:f.extension==='pdf'?1:0;
-  const evidence=await Promise.all(attachments.map(async file=>{
+  // A matching official revision date in the filename is sufficient to shortlist
+  // candidates; avoid downloading and parsing unrelated historical attachments.
+  const matchingNames=officialDate?attachments.filter(file=>file.detectedDate===officialDate):[];
+  const probeCandidates=matchingNames.length?matchingNames:attachments;
+  const probed=await Promise.all(probeCandidates.map(async file=>{
     const text=officialDate?await attachmentBodyText(file):'';
     const check=text?versionCheck(revisionDate,file.detectedDate,text):null;
     const bodyDates=(check?.dates??[]).filter(d=>d.source==='body_last_revision_date'||d.source==='body_last_effective_date').map(d=>d.date);
     return {file,bodyMatch:!!officialDate&&bodyDates.includes(officialDate),filenameMatch:!!officialDate&&file.detectedDate===officialDate};
   }));
+  const checked=new Map(probed.map(item=>[item.file.fileNo,item]));
+  const evidence=attachments.map(file=>checked.get(file.fileNo)??{file,bodyMatch:false,filenameMatch:!!officialDate&&file.detectedDate===officialDate});
   evidence.sort((a,b)=>
     Number(b.bodyMatch)-Number(a.bodyMatch) ||
     Number(b.filenameMatch)-Number(a.filenameMatch) ||
