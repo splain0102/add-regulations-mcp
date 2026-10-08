@@ -19,18 +19,18 @@ jobs:
       - name: Install Python deps
         run: python -m pip install --upgrade requests selenium
       - name: Download ALIO and public sources
-        run: python scripts/tmp_alio_public_download.py
+        run: python scripts/tmp_alio_discover_add.py
       - name: Show result
         if: always()
         run: |
           find alio_public_files -maxdepth 3 -type f -printf '%p %s bytes\n' | sort || true
           echo "---- result ----"
-          cat alio_public_files/다운로드_결과.txt || true
+          cat alio_discovery/board.txt | head -80 || true\n          cat alio_discovery/audit.txt | head -80 || true
       - name: Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alio-public-files
-          path: alio_public_files/
+          name: alio-discovery
+          path: alio_discovery/
           if-no-files-found: warn
           retention-days: 7
