@@ -782,6 +782,7 @@ export async function getRegulationMetadata(name:string) {
  const attachment=detail.latestAttachment;
  const probe=attachment?await attachmentRevisionText(attachment,detail.updatedDate??match.updatedDate??''):'';
  const versions=versionCheck(detail.revisionDate??match.revisionDate,attachment?.detectedDate??undefined,probe);
+ const crossWarnings=await crossEntryAttachmentWarnings(match.title,attachment?.fileNo,attachment?.detectedDate??detail.revisionDate??match.revisionDate);
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,revisionDate:detail.revisionDate??match.revisionDate,
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
  version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
