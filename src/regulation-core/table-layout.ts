@@ -159,7 +159,8 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  const revisionSource=(section||text).normalize('NFKC');
   const revisions=[...(lastHeading?.[0]??'').matchAll(/20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2}/g),...revisionSource.matchAll(/(?:제정|전부\s*개정|개정)\s*[:：]?\s*(20\d{2}\s*[.년\/\-]\s*\d{1,2}\s*[.월\/\-]\s*\d{1,2})/g)].map(m=>normalize(m[1]??m[0])).filter(Boolean) as string[];
  const effective=[...section.matchAll(/(20\d{2}\D{0,4}\d{1,2}\D{0,4}\d{1,2})[^\n]{0,25}시행/g)].map(m=>normalize(m[1])).filter(Boolean) as string[];
- const r=revisions.sort().at(-1),e=effective.sort().at(-1);if(r)dates.push({source:'body_last_revision_date',date:r});if(e)dates.push({source:'body_last_effective_date',date:e});
+ const reverseDates=[...revisionSource.matchAll(/(20[0-9]{2}[^\n]{0,18})[ ]*개정/g)].map(m=>normalize(m[1])).filter(Boolean) as string[];
+ const r=[...revisions,...reverseDates].sort().at(-1),e=effective.sort().at(-1);if(r)dates.push({source:'body_last_revision_date',date:r});if(e)dates.push({source:'body_last_effective_date',date:e});
  const dateRange=(value:string):[number,number]=>{
   if(value.length===7){const [year,month]=value.split('-').map(Number);return [Date.UTC(year,month-1,1),Date.UTC(year,month,0)];}
   const day=Date.parse(value+'T00:00:00Z');return [day,day];
