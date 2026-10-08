@@ -42,6 +42,7 @@ await check('committee cross entry 140404',async()=>{
 });
 await check('committee PDF body revision 2021-03-29',async()=>{
  const r=await call('get_regulation',{name:'민군협력사업 전문위원회 운영방침'});
+ console.log('PDF_REVISION_DIAGNOSTIC',JSON.stringify({fileNo:r.structuredContent.fileNo,dates:r.structuredContent.version_check.dates,missing:r.structuredContent.version_check.missing,selection_reason:r.structuredContent.selection_reason}));
  assert(r.structuredContent.version_check.dates.some(x=>x.source==='body_last_revision_date'&&x.date==='2021-03-29'));
  return r.structuredContent.version_check.dates;
 });
