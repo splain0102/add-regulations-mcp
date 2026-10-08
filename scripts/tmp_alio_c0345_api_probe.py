@@ -34,3 +34,14 @@ def fetch(root,page=1):
 
 fetch("43005",1)
 fetch("43006",1)
+
+
+# Detail-page attachment probe
+for title, disc in [
+    ("BOARD_PROBE","2024032902781963"),
+    ("AUDIT_PROBE","2026071103214096"),
+]:
+    u=f"{BASE}/item/itemReport.do?seq={disc}&disclosureNo={disc}"
+    rr=s.get(u,timeout=30)
+    print("DETAIL",title,disc,"STATUS",rr.status_code,"LEN",len(rr.text),"URL",rr.url)
+    print(rr.text[:25000])
