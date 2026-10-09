@@ -1,8 +1,10 @@
+import {deletedSection} from './search-ranking';
 // Only whole-corpus search uses these offsets; parser identity stays unchanged.
-export type SearchSections={version:1;textLength:number;bounds:number[]};
+export type SearchSections={version:1;textLength:number;bounds:number[];excluded?:number[]};
 export function prepareSearchSections(text:string):SearchSections {
  const headings=[...text.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*(?:제\s*)?\d+(?:-\d+)?\s*(?:호)?[^\]\n]*\][^\n]*)/g)].map(m=>m.index??0);
- return {version:1,textLength:text.length,bounds:[...new Set([0,...headings,text.length])].sort((a,b)=>a-b)};
+ const bounds=[...new Set([0,...headings,text.length])].sort((a,b)=>a-b);
+ return {version:1,textLength:text.length,bounds,excluded:bounds.slice(0,-1).filter((at,i)=>deletedSection(text.slice(at,bounds[i+1])))};
 }
 export function searchBounds(text:string,sections?:SearchSections){
  const b=sections?.bounds;

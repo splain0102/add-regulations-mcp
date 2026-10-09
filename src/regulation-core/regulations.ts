@@ -1,6 +1,7 @@
+import {fold,tokenWeights,deletedSection,sectionScore} from './search-ranking';
 import {searchBounds} from './search-sections';
 import {PARSER_VERSION} from "./parser-version";
-import {refreshIndex,readIndex,type CorpusItem,indexErrorCode} from './corpus-index';
+import {INDEX_PREFIX,refreshIndex,readIndex,type IndexState,type CorpusItem,indexErrorCode} from './corpus-index';
 import {extractRevisionSection} from './revision-probe';
 import { unzipSync, strFromU8 } from "fflate";
 import { hwpToText } from "@ssabrojs/hwpxjs/browser";
@@ -814,15 +815,16 @@ function documentMeta(loaded: Awaited<ReturnType<typeof loadLatestDocument>>) {
  cache,cache_hit:cache.hit,parser_version:PARSER_VERSION,version_check:versions,version_warning:versions.warning,
  selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
-export async function getRegulationMetadata(name:string) {
+export async function getRegulationMetadata(name:string,kv?:KVNamespace) {
  const {match,detail}=await getLatestRegulationByName(name);
  const attachment=detail.latestAttachment;
  const probe=attachment?await attachmentRevisionText(attachment,detail.updatedDate??match.updatedDate??''):'';
  const versions=versionCheck(detail.revisionDate??match.revisionDate,attachment?.detectedDate??undefined,probe);
- const crossWarnings=await crossEntryAttachmentWarnings(match.title,attachment?.fileNo,attachment?.detectedDate??detail.revisionDate??match.revisionDate);
+ const crossState=kv?await kv.get<IndexState>(INDEX_PREFIX+'state','json'):null;
+ const crossWarnings=kv?(crossState?.crossEntryWarnings?.[match.title]??[]):await crossEntryAttachmentWarnings(match.title,attachment?.fileNo,attachment?.detectedDate??detail.revisionDate??match.revisionDate);
  return {regulationName:detail.title!=='제목 확인 필요'?detail.title:match.title,revisionDate:detail.revisionDate??match.revisionDate,
  updatedDate:detail.updatedDate??match.updatedDate,sourceUrl:detail.sourceUrl,filename:attachment?.name??null,extension:attachment?.extension??null,fileNo:attachment?.fileNo??null,
- version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
+ version_check:{...versions,cross_entry_warnings:crossWarnings,cross_entry_index_status:kv?{status:!crossState?.attachmentCatalog?'building':Object.keys(crossState.attachmentCatalog).length===crossState.items.length&&!Object.keys(crossState.errors).length?'ready':'stale',indexedEntries:Object.keys(crossState?.attachmentCatalog??{}).length,totalEntries:crossState?.items.length??0,index_build_version:crossState?.index_build_version??null}:null,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
 /** A-only source: fresh list, fresh attachment selection and raw-file SHA-256. */
 export async function responseSize(response:Response,maximum=65536){
@@ -903,7 +905,7 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
    else if(file.extension==='hwp')text=await hwpToText(file.bytes);
    else if(file.extension==='pdf'){const result=await extractText(file.bytes.slice(),{mergePages:true});text=Array.isArray(result.text)?result.text.join('\n\n'):result.text;}
    else throw Error('unsupported_index_format:'+file.extension);
-   return {fileNo:detail.latestAttachment.fileNo,text,bytes:file.bytes,parserVersion:PARSER_VERSION};
+   return {fileNo:detail.latestAttachment.fileNo,text,bytes:file.bytes,parserVersion:PARSER_VERSION,selectedDate:detail.latestAttachment.detectedDate??normalizeDate(item.revisionDate),attachments:detail.attachments.map(({name,fileNo,detectedDate})=>({name,fileNo,detectedDate}))};
   }
  };
 }
@@ -919,16 +921,17 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
   const found:any[]=[];
   for(let i=0;i<bounds.length-1;i++){
    const part=content.slice(bounds[i],bounds[i+1]).toLowerCase();
-   if(!terms.every(t=>part.includes(t)))continue;
-   const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
    const article=content.slice(bounds[i],bounds[i+1]);
+   if(deletedSection(article))continue;
+   const folded=fold(article);if(!terms.every(t=>folded.includes(fold(t))))continue;
+   const weights=tokenWeights(article,terms);if(weights.some(w=>!w))continue;
+   const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
    const snippet=extractArticleSnippet(article,at-bounds[i],query.length,true);
    const label=article.match(/^\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)[^\]\n]*\])/)?.[1]??snippet.label;
-   const frequency=terms.reduce((sum,term)=>sum+part.split(term).length-1,0);
-   const score=(part.includes(query.toLowerCase())?10:0)+terms.length+Math.min(12,frequency)*2+(terms.every(t=>label.toLowerCase().includes(t))?8:0)-(label.startsWith('[')?10:0);
+   const score=sectionScore(article,label,query,weights);
    found.push({label,snippet:snippet.snippet,score});
   }
-  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.verifiedAt,sha256:doc.sha256,score:found.reduce((sum,m)=>sum+m.score,0),matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.verifiedAt,sha256:doc.sha256,score:Math.max(...found.map(m=>m.score))+0.1*found.map(m=>m.score).sort((a,b)=>b-a).slice(0,3).reduce((sum,n)=>sum+n,0),matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
  }
  results.sort((a,b)=>b.score-a.score||b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
  const next_cursor=offset+limit<results.length?offset+limit:null;

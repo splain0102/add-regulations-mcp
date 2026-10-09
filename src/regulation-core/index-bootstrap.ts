@@ -1,3 +1,4 @@
+import {buildCrossAttachmentWarnings,type AttachmentCatalog} from './cross-attachments';
 import {BUILD_VERSION} from '../build-info';
 import {PARSER_VERSION} from './parser-version';
 import {INDEX_PREFIX,INDEX_SHARDS,MAX_SHARD_BYTES,MAX_CORPUS_BYTES,LIST_REFRESH_INTERVAL,shardId,sha256,type CorpusItem,type CorpusDocument,type IndexState} from './corpus-index';
@@ -44,15 +45,15 @@ export async function handleBootstrap(path:string,request:Request,storage:Durabl
   if(path==='/bootstrap/activate'){
    if(session.completed)return Response.json({activated:true,indexedRegulations:session.items.length,lastCompletedAt:new Date(session.completed).toISOString(),reused:true});
    if(Object.keys(session.refs).length!==INDEX_SHARDS)return fail('bootstrap_missing_shards',409);
-   const checked:Record<string,string>={};
+   const checked:Record<string,string>={};const attachmentCatalog:AttachmentCatalog={};
    for(let id=0;id<INDEX_SHARDS;id++){
     const value=await kv.get(session.refs[id],'text');if(!value||await sha256(encode.encode(value))!==session.hashes[id])return fail('bootstrap_shard_unavailable',409);
     const shard=JSON.parse(value);validateDocuments(shard.documents,id,session);
-    for(const [title,doc] of Object.entries(shard.documents) as [string,CorpusDocument][])checked[title]=doc.verifiedAt;
+    for(const [title,doc] of Object.entries(shard.documents) as [string,CorpusDocument][]){checked[title]=doc.verifiedAt;if(doc.attachments)attachmentCatalog[title]={fileNo:doc.fileNo,selectedDate:doc.selectedDate,attachments:doc.attachments};}
    }
    if(Object.keys(checked).length!==session.items.length||session.items.some(item=>!checked[item.title]))return fail('bootstrap_incomplete_corpus',409);
    const previous=await kv.get<IndexState>(INDEX_PREFIX+'state','json');const now=Date.now(),completed=new Date(now).toISOString();
-   const state:IndexState={schema:2,cursor:0,pending:[],items:session.items,refs:session.refs,sizes:session.sizes,checked,errors:{},lastCheckedAt:session.verified,lastVerifiedAt:completed,lastCompletedAt:completed,index_build_version:BUILD_VERSION,indexedTitles:session.items.map(item=>item.title),nextListAttemptAt:new Date(Date.parse(session.verified)+LIST_REFRESH_INTERVAL).toISOString(),fallbackRefs:previous?.refs,garbage:[...previous?.garbage??[],...Object.values(previous?.refs??{}).map(key=>({key,after:now+15*60000}))]};
+   const state:IndexState={attachmentCatalog,crossEntryWarnings:buildCrossAttachmentWarnings(session.items.map(i=>i.title),attachmentCatalog),schema:2,cursor:0,pending:[],items:session.items,refs:session.refs,sizes:session.sizes,checked,errors:{},lastCheckedAt:session.verified,lastVerifiedAt:completed,lastCompletedAt:completed,index_build_version:BUILD_VERSION,indexedTitles:session.items.map(item=>item.title),nextListAttemptAt:new Date(Date.parse(session.verified)+LIST_REFRESH_INTERVAL).toISOString(),fallbackRefs:previous?.refs,garbage:[...previous?.garbage??[],...Object.values(previous?.refs??{}).map(key=>({key,after:now+15*60000}))]};
    // The sole manifest write happens after every immutable shard is verified.
    await kv.put(INDEX_PREFIX+'state',JSON.stringify(state));session.completed=now;await storage.put('bootstrap',session);
    console.log('corpus_index_bootstrap_completed',JSON.stringify({build_version:BUILD_VERSION,indexedRegulations:session.items.length,lastCompletedAt:completed}));

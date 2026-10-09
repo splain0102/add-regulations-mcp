@@ -140,3 +140,31 @@ CI compares the complete response against the 1.10.9 implementation on the actua
 ALIO corpus, including missing-shard fallback and legacy records. The performance
 report uses injected KV delay: it is not a production latency measurement.
 Existing 2 MB shard / 16 MB corpus guards also include the boundary metadata.
+
+## Fourth correction (1.10.11)
+
+The 1.10.9 → 1.10.10 diff only accelerated reads and saved boundaries. It did
+not add N5/N6 scoring or persistent cross-entry attachments. Scores are computed
+at query time. The 15:05 KST old-build run preceded deployment; the 15:15 run
+used 327e4f8. Existing run history survives deployments.
+
+Fetch and scheduled share src/index.ts and BUILD_VERSION. The coordinator checks
+the caller build before acquiring a writer lease and records build_mismatch
+with the canonical hello build; no ALIO or corpus KV mutation follows mismatch.
+The deployment script stamps once and deploys every configured environment with
+the same source. wrangler.jsonc currently has one Worker and no named env.
+Parallel deployments across multiple Workers are not an atomic platform transaction.
+
+N5 uses lightweight word/suffix rules, with 0.3 inner-word weight and exclusion
+of unrelated suffixes such as 사고방식. N6 caps each token at one scoring occurrence,
+weights forms by 0.2 and omits deletion-only sections from search; original
+document text is retained. Ranking takes the strongest section plus a bounded
+three-section contribution. Article boundaries and document parser are unchanged.
+
+Cron stores each detail-page attachment list with its successful document.
+The same manifest also stores exact normalized cross-entry warnings and coverage.
+Bootstrap rebuilds those warnings from the verified imported document attachments.
+Production get_regulation reads the manifest once instead of fetching 213 pages.
+Cross-index coverage/status is reported in version_check.cross_entry_index_status.
+Old imports without attachments remain searchable but cannot supply cross warnings;
+rebuild/import a complete current snapshot before release acceptance.

@@ -22,6 +22,10 @@ jobs:
       - run: npm run test:corpus-workers
       - name: Actual ALIO whole-corpus acceptance
         run: npm run test:corpus-acceptance
+      - name: Fourth correction live acceptance (N5 N6 cross attachments)
+        run: npm run test:fourth-fixes
+        env:
+          FOURTH_CHECKPOINT: reports/corpus-index-live-checkpoint.json
       - name: Export verified initial corpus for administrator bootstrap
         run: node scripts/bootstrap-index.mjs export
       - name: Cold search equivalence and bounded KV performance
@@ -40,4 +44,5 @@ jobs:
             reports/corpus-index-acceptance.json
             reports/corpus-index-bootstrap.json
             reports/corpus-index-performance.json
+            reports/fourth-fixes-regression.json
           if-no-files-found: ignore

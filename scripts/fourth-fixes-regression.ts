@@ -1,0 +1,33 @@
+import {call,setHarnessKV} from './registered-handlers';
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {BUILD_VERSION} from '../src/build-info';
+import {INDEX_PREFIX,readIndex} from '../src/regulation-core/corpus-index';
+import {buildCrossAttachmentWarnings,canonicalAttachmentTitle} from '../src/regulation-core/cross-attachments';
+import {wordWeight,deletedSection,sectionScore} from '../src/regulation-core/search-ranking';
+import {getRegulationMetadata,searchAllRegulations} from '../src/regulation-core/regulations';
+import {CorpusIndexCoordinator} from '../src/regulation-core/index-coordinator';
+import {TestKV} from './corpus-index-test-kv';
+const kv=new TestKV();const path=process.env.FOURTH_CHECKPOINT;
+if(path)kv.values=new Map(JSON.parse(readFileSync(path,'utf8')));
+else{
+ const s=JSON.parse(readFileSync('reports/a6-ci/corpus-index-bootstrap.json','utf8')),refs:any={};for(const shard of s.shards){refs[shard.id]=INDEX_PREFIX+'fourth:'+shard.id;await kv.put(refs[shard.id],JSON.stringify({documents:shard.documents}));}
+ await kv.put(INDEX_PREFIX+'state',JSON.stringify({schema:2,items:s.items,refs,errors:{},checked:{},pending:[],cursor:0,sizes:{},garbage:[],lastCheckedAt:new Date().toISOString(),index_build_version:BUILD_VERSION}));
+}
+const checks:any[]=[];
+async function check(name:string,run:()=>Promise<any>){try{const evidence=await run();checks.push({name,passed:true,evidence});console.log('FOURTH_PASS',name,JSON.stringify(evidence));}catch(error){checks.push({name,passed:false,error:String(error)});console.error('FOURTH_FAIL',name,String(error));}}
+await check('1 사고 보고 ranking',async()=>{const r=await searchAllRegulations('사고 보고',5,0,kv.binding(),BUILD_VERSION);assert.equal(r.partial,false);assert.deepEqual(r.results.slice(0,2).map((x:any)=>x.regulationName),['연구소차량 관리방침','안전보건관리규정']);assert(r.results[0].matches[0].label.startsWith('제15조'));assert(r.results[1].matches[0].label.startsWith('제42조'));assert(!r.results.some((x:any)=>x.regulationName==='보고서 작성 및 관리요령'));return r.results.map((x:any)=>({name:x.regulationName,matches:x.matches.map((m:any)=>m.label)}));});
+await check('2 외국인 deleted/forms',async()=>{const r=await searchAllRegulations('외국인',10,0,kv.binding(),BUILD_VERSION);assert.equal(r.partial,false);assert(!r.results.some((x:any)=>x.regulationName==='여비규정'&&x.matches.some((m:any)=>m.label.startsWith('제21조'))));assert(!r.results.some((x:any)=>x.matches.some((m:any)=>/신고서|신고처리부|서식/.test(m.label)&&/신고/.test(x.regulationName))));assert(r.results.some((x:any)=>x.regulationName.endsWith('보안과제 관리요령')&&x.matches.some((m:any)=>m.label.startsWith('제8조'))));return r.results.map((x:any)=>({name:x.regulationName,matches:x.matches.map((m:any)=>m.label)}));});
+await check('N5/N6 rules and bounded repetition',async()=>{assert.equal(wordWeight('사고를','사고'),1);assert.equal(wordWeight('사고보고','사고'),1);assert.equal(wordWeight('보안사고','사고'),0.3);assert.equal(wordWeight('사고방식','사고'),0);assert(deletedSection('제21조(외국인대동) (삭제 2023. 4. 21.)'));assert(!deletedSection('제21조(외국인대동) 내용 (삭제 2023. 4. 21.)'));assert.equal(sectionScore('제1조\n외국인','제1조','외국인',[1]),sectionScore('제1조\n외국인 외국인 외국인','제1조','외국인',[1]));return 'word boundaries, 0.3 inner matches, deletion-only and repeat cap';});
+await check('3/4 exact cross attachment and both warnings',async()=>{
+ const owner='민군협력사업 전문위원회 운영방침',entry='민군기술협력사업 전문위원 운영방침';
+ assert.notEqual(canonicalAttachmentTitle(owner),canonicalAttachmentTitle(entry));
+ const synthetic=buildCrossAttachmentWarnings([owner,entry],{[owner]:{fileNo:'1',selectedDate:'2008-01-01',attachments:[]},[entry]:{fileNo:'2',selectedDate:'2020-01-01',attachments:[{name:'민군기술협력사업 전문위원회 운영방침 전문(21년 12월 개정).pdf',fileNo:'140404',detectedDate:'2021-12'}]}});
+ assert.equal(synthetic[owner][0].code,'cross_entry_newer_attachment');assert.equal(synthetic[entry][0].code,'foreign_attachment');assert.equal(synthetic[entry][0].belongs_to,owner);
+ if(path){setHarnessKV(kv.binding());const a=(await call('get_regulation',{name:owner})).structuredContent,b=(await call('get_regulation',{name:entry})).structuredContent;assert(a.version_check.cross_entry_warnings.some((w:any)=>w.code==='cross_entry_newer_attachment'&&w.fileNo==='140404'));assert(b.version_check.cross_entry_warnings.some((w:any)=>w.code==='foreign_attachment'&&w.fileNo==='140404'));return {owner:a.version_check.cross_entry_warnings,entry:b.version_check.cross_entry_warnings};}
+ return {fixtureOnly:true,warnings:synthetic};
+});
+await check('5 mismatched build aborts before KV mutation',async()=>{const records=new Map<string,any>();const state={storage:{get:async(k:string)=>records.get(k),put:async(k:any,v:any)=>{if(typeof k==='string')records.set(k,v);else for(const [a,b]of Object.entries(k))records.set(a,b);}}};const writes=kv.writes;const c=new CorpusIndexCoordinator(state as any,{OAUTH_KV:kv.binding()});const r=await c.fetch(new Request('https://internal/begin',{method:'POST',body:JSON.stringify({trigger:'cron',build_version:'obsolete-build'})}));assert.equal(r.status,409);const run=records.get('runs').latest;assert.equal(run.status,'build_mismatch');assert.equal(run.processed,0);assert.equal(run.result.hello_build_version,BUILD_VERSION);assert.equal(kv.writes,writes);assert(!records.has('lease'));return run;});
+// Existing handler regressions are exercised by Direct MCP CI, not duplicated here.
+await check('6 existing name and text regressions',async()=>{const items=(await kv.get<any>(INDEX_PREFIX+'state')).items;assert.equal(items.filter((i:any)=>i.title.replace(/[·ㆍ\s]/g,'').includes('민군')).length,7);if(!path)return {fixtureOnly:true,titles:7};const titles=await call('search_regulations',{query:'민·군'});assert.equal((titles.content[0].text.match(/^\d+\./gm)??[]).length,7);const ambiguous=await call('search_regulation_text',{name:'직제',query:'부소장'}).catch(e=>({error:String(e)}));assert(JSON.stringify(ambiguous).includes('ambiguous_name'));const missing=await call('search_regulation_text',{name:'보안업무규정',query:'보안'}).catch(e=>({error:String(e)}));assert(JSON.stringify(missing).includes('not_found'));const car=await call('search_regulation_text',{name:'연구소차량 관리방침',query:'사고 보험'});assert(car.structuredContent.matches.some((m:any)=>m.label.startsWith('제15조')));return {titles:7,ambiguous:'ambiguous_name',missing:'not_found',car:car.structuredContent.matches.map((m:any)=>m.label)};});
+writeFileSync('reports/fourth-fixes-regression.json',JSON.stringify({build_version:BUILD_VERSION,live:!!path,checks},null,2));assert(checks.every(c=>c.passed!==false));
