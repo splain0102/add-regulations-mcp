@@ -14,7 +14,7 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
-const MCP_VERSION = "1.10.10";
+const MCP_VERSION = "1.10.11";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
@@ -3952,7 +3952,7 @@ function createServer(env: Env) {
     },
     async ({ name }) => {
       try {
-        const result = await getRegulationMetadata(name);
+        const result = await getRegulationMetadata(name,env?.OAUTH_KV);
         const data={regulationName:result.regulationName,revisionDate:result.revisionDate,updatedDate:result.updatedDate,
           filename:result.filename,extension:result.extension,fileNo:result.fileNo,version_check:result.version_check,
           selection_reason:result.selection_reason,other_attachments:result.other_attachments,sourceUrl:result.sourceUrl};

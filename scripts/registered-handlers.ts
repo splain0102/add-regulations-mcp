@@ -12,10 +12,13 @@ const registrations=new Map<string,{config:any;callback:Function}>();
 class Registry {constructor(_:unknown){} registerTool(name:string,config:any,callback:Function){registrations.set(name,{config,callback});}}
 const source=readFileSync('src/index.ts','utf8');
 const code=source.slice(source.indexOf('async function loadTextWithToolRetry'),source.indexOf('const MCP_RESOURCE'));
-const bindings={McpServer:Registry,z,MCP_VERSION:'1.10.4',BUILD_VERSION:'test-harness',PARSER_VERSION,normalizeRegulationTitle,coreSearchAllRegulations:searchAllRegulations,searchRegulationText,coreListRegulations:listRegulations,coreGetLatestRegulationText:getLatestRegulationText,
+const harnessEnv:{OAUTH_KV?:KVNamespace}={};
+export function setHarnessKV(kv:KVNamespace){harnessEnv.OAUTH_KV=kv;}
+const bindings={harnessEnv,McpServer:Registry,z,MCP_VERSION:'1.10.4',BUILD_VERSION:'test-harness',PARSER_VERSION,normalizeRegulationTitle,coreSearchAllRegulations:searchAllRegulations,searchRegulationText,coreListRegulations:listRegulations,coreGetLatestRegulationText:getLatestRegulationText,
  getRegulationMetadata,searchLatestRegulationTable,tableToolResponse,extractArticleSnippet,sleep:(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms))};
-new Function(...Object.keys(bindings),transformSync(code,{loader:'ts',target:'es2022'}).code+';return createServer();')(...Object.values(bindings));
+new Function(...Object.keys(bindings),transformSync(code,{loader:'ts',target:'es2022'}).code+';return createServer(harnessEnv);')(...Object.values(bindings));
 export async function call(tool:string,input:Record<string,unknown>={}){
  const entry=registrations.get(tool);assert(entry,tool);const args=z.object(entry.config.inputSchema).parse(input);
  const response=await entry.callback(args);assert(!response.isError,tool+': '+JSON.stringify(response));return response;
 }
+

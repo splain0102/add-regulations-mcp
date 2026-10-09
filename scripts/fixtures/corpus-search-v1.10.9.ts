@@ -1,4 +1,6 @@
-// Frozen v1.10.9 search/read algorithm, used only for equivalence and benchmarks.
+import {fold,tokenWeights,deletedSection,sectionScore} from '../../src/regulation-core/search-ranking';
+import {searchBounds} from '../../src/regulation-core/search-sections';
+// Frozen v1.10.9 SERIAL read algorithm with current ranking rules, for IO equivalence/benchmarks.
 import {INDEX_PREFIX,INDEX_SHARDS,MAX_INDEX_AGE,MAX_LIST_AGE,indexErrorCode,type CorpusDocument,type CorpusItem,type IndexState} from '../../src/regulation-core/corpus-index';
 import {extractArticleSnippet} from '../../src/regulation-core/regulations';
 type ErrorEntry=any;type Shard={documents:Record<string,CorpusDocument>};
@@ -48,21 +50,21 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
  const results:any[]=[];
  if(terms.length)for(const doc of docs){
   const content=doc.text;
-  const headings=[...content.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*(?:제\s*)?\d+(?:-\d+)?\s*(?:호)?[^\]\n]*\][^\n]*)/g)].map(m=>m.index??0);
-  const bounds=[0,...headings,content.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
+  const bounds=searchBounds(content,doc.searchSections);
   const found:any[]=[];
   for(let i=0;i<bounds.length-1;i++){
    const part=content.slice(bounds[i],bounds[i+1]).toLowerCase();
-   if(!terms.every(t=>part.includes(t)))continue;
-   const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
    const article=content.slice(bounds[i],bounds[i+1]);
+   if(deletedSection(article))continue;
+   const folded=fold(article);if(!terms.every(t=>folded.includes(fold(t))))continue;
+   const weights=tokenWeights(article,terms);if(weights.some(w=>!w))continue;
+   const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
    const snippet=extractArticleSnippet(article,at-bounds[i],query.length,true);
    const label=article.match(/^\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)[^\]\n]*\])/)?.[1]??snippet.label;
-   const frequency=terms.reduce((sum,term)=>sum+part.split(term).length-1,0);
-   const score=(part.includes(query.toLowerCase())?10:0)+terms.length+Math.min(12,frequency)*2+(terms.every(t=>label.toLowerCase().includes(t))?8:0)-(label.startsWith('[')?10:0);
+   const score=sectionScore(article,label,query,weights);
    found.push({label,snippet:snippet.snippet,score});
   }
-  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.verifiedAt,sha256:doc.sha256,score:found.reduce((sum,m)=>sum+m.score,0),matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,indexedAt:doc.verifiedAt,sha256:doc.sha256,score:Math.max(...found.map(m=>m.score))+0.1*found.map(m=>m.score).sort((a,b)=>b-a).slice(0,3).reduce((sum,n)=>sum+n,0),matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
  }
  results.sort((a,b)=>b.score-a.score||b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
  const next_cursor=offset+limit<results.length?offset+limit:null;

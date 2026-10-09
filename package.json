@@ -1,11 +1,11 @@
 {
   "name": "add-regulations-mcp",
-  "version": "1.10.10",
+  "version": "1.10.11",
   "private": true,
   "scripts": {
     "prepare": "node scripts/stamp-build.mjs",
     "predeploy": "node scripts/stamp-build.mjs",
-    "deploy": "wrangler deploy",
+    "deploy": "node scripts/deploy-all.mjs",
     "dev": "wrangler dev",
     "prebuild:check": "node scripts/stamp-build.mjs",
     "build:check": "wrangler deploy --dry-run --outdir .build-check",
@@ -19,7 +19,8 @@
     "test:corpus-index": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-regression.ts",
     "test:corpus-workers": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-workers.ts",
     "test:corpus-acceptance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-acceptance.ts",
-    "test:corpus-performance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-performance.ts"
+    "test:corpus-performance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-performance.ts",
+    "test:fourth-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/fourth-fixes-regression.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.0.0",

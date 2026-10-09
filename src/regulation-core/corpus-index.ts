@@ -1,3 +1,4 @@
+import {buildCrossAttachmentWarnings,type AttachmentCatalog,type IndexedAttachment} from './cross-attachments';
 import {prepareSearchSections,type SearchSections} from './search-sections';
 // Only the Cron writer contacts ALIO. Search reads a committed KV manifest.
 export const INDEX_PREFIX = 'add:corpus:v2:';
@@ -12,18 +13,19 @@ export const DOCUMENT_CHECK_INTERVAL = 12 * 60 * 60 * 1000;
 export const RETRY_BASE = 5 * 60 * 1000;
 export function retryDelay(attempt:number){return Math.min(60 * 60 * 1000,RETRY_BASE * 2 ** Math.min(4,Math.max(0,attempt-1)));}
 export type CorpusItem = {title:string;detailUrl:string;revisionDate?:string;updatedDate?:string};
-export type CorpusDocument = CorpusItem & {fileNo:string;text:string;sha256:string;verifiedAt:string;parserVersion:string;searchSections?:SearchSections};
+export type CorpusDocument = CorpusItem & {fileNo:string;text:string;sha256:string;verifiedAt:string;parserVersion:string;searchSections?:SearchSections;attachments?:IndexedAttachment[];selectedDate?:string|null};
 type ErrorEntry = {title:string;message:string;checkedAt:string;code?:string;error_code?:string;build_version?:string;retry_attempts?:number;next_retry_at?:string;diagnostics?:Record<string,unknown>};
 export function errorDiagnostics(error:unknown){return error&&typeof error==='object'&&'diagnostics' in error?error.diagnostics as Record<string,unknown>:undefined;}
 type Shard = {documents:Record<string,CorpusDocument>};
 export type IndexState = {
+  attachmentCatalog?:AttachmentCatalog;crossEntryWarnings?:Record<string,any[]>;
   schema:2;cursor:number;pending?:string[];fallbackRefs?:Record<string,string>;items:CorpusItem[];refs:Record<string,string>;sizes:Record<string,number>;
   listWork?:unknown;checked:Record<string,string>;errors:Record<string,ErrorEntry>;lastCheckedAt:string;
   listError?:ErrorEntry;listRetryAttempts?:number;nextListAttemptAt?:string;
   index_build_version?:string;lastVerifiedAt?:string;sourceErrorAt?:string;sourceErrorCode?:string;lastCompletedAt?:string;sourceError?:string;indexedTitles?:string[];garbage:{key:string;after:number}[];
   sourceErrorDetails?:Record<string,unknown>;
 };
-export type CorpusSource = {list(work?:unknown):Promise<CorpusItem[]|{items?:CorpusItem[];work?:unknown}>;load(item:CorpusItem):Promise<{fileNo:string;text:string;bytes:Uint8Array;parserVersion:string}>};
+export type CorpusSource = {list(work?:unknown):Promise<CorpusItem[]|{items?:CorpusItem[];work?:unknown}>;load(item:CorpusItem):Promise<{fileNo:string;text:string;bytes:Uint8Array;parserVersion:string;attachments?:IndexedAttachment[];selectedDate?:string|null}>};
 export function shardId(title:string){let hash=2166136261;for(const c of title){hash^=c.charCodeAt(0);hash=Math.imul(hash,16777619);}return (hash>>>0)%INDEX_SHARDS;}
 export async function sha256(bytes:Uint8Array){const hash=await crypto.subtle.digest('SHA-256',bytes as BufferSource);return [...new Uint8Array(hash)].map(v=>v.toString(16).padStart(2,'0')).join('');}
 function sameMetadata(a:CorpusItem,b:CorpusItem){return a.title===b.title&&a.detailUrl===b.detailUrl&&a.revisionDate===b.revisionDate&&a.updatedDate===b.updatedDate;}
@@ -119,7 +121,7 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
         const loaded=await source.load(item);
         if(!loaded.fileNo||!loaded.text.trim())throw Error('empty_or_unselected_document');
         const hash=await sha256(loaded.bytes);
-        const doc:CorpusDocument={...item,fileNo:loaded.fileNo,text:loaded.text,sha256:hash,verifiedAt:timestamp,parserVersion:loaded.parserVersion,searchSections:prepareSearchSections(loaded.text)};
+        const doc:CorpusDocument={...item,fileNo:loaded.fileNo,text:loaded.text,sha256:hash,verifiedAt:timestamp,parserVersion:loaded.parserVersion,searchSections:prepareSearchSections(loaded.text),attachments:loaded.attachments,selectedDate:loaded.selectedDate};
         const old=shard.documents[item.title];
         const retained=Object.fromEntries(Object.entries(shard.documents).filter(([title])=>titles.has(title)));
         const candidate={documents:{...retained,[item.title]:doc}};
@@ -128,11 +130,13 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
         const total=Object.values(state.sizes).reduce((a,b)=>a+b,0)-(state.sizes[id]??0)+size;
         if(total>MAX_CORPUS_BYTES)throw Error('index_corpus_size_limit');
         state.sizes[id]=size;shard.documents=candidate.documents;
+        if(loaded.attachments)(state.attachmentCatalog??={})[item.title]={fileNo:doc.fileNo,selectedDate:doc.selectedDate,attachments:loaded.attachments};
         for(const title of Object.keys(candidate.documents))indexed.add(title);
         if(!old||old.sha256!==hash||old.fileNo!==doc.fileNo||old.parserVersion!==doc.parserVersion||!sameMetadata(old,doc))updated++;
         delete state.errors[item.title];state.pending=state.pending.filter(title=>title!==item.title);
       }catch(error){const attempts=(state.errors[item.title]?.retry_attempts??0)+1;state.errors[item.title]={title:item.title,message:String(error).slice(0,240),checkedAt:timestamp,code:indexErrorCode(error),error_code:indexErrorCode(error),build_version:buildVersion,retry_attempts:attempts,next_retry_at:new Date(now+retryDelay(attempts)).toISOString(),diagnostics:errorDiagnostics(error)};}
     }
+    if(state.attachmentCatalog){state.attachmentCatalog=Object.fromEntries(Object.entries(state.attachmentCatalog).filter(([title])=>titles.has(title)));state.crossEntryWarnings=buildCrossAttachmentWarnings(items.map(i=>i.title),state.attachmentCatalog);}
     // Verify the writer lease before any mutations and again before publication.
     await options?.beforeCommit?.();
     // New keys are written first; referenced old keys stay intact on any failure.

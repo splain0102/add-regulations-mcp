@@ -1,3 +1,4 @@
+import {BUILD_VERSION} from '../src/build-info';
 import {exportSnapshot,uploadSnapshot} from './bootstrap-index.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
@@ -48,6 +49,9 @@ try{
  const wrongMethod=await mf.dispatchFetch(adminUrl,{headers:adminHeaders});assert.equal(wrongMethod.status,405);
  const probe=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/admin/probe-alio',{method:'POST',headers:adminHeaders});assert.equal(probe.status,200);const probeResult=await probe.json();assert.equal(probeResult.results.length,4);assert(probeResult.results.every((r:any)=>r.http_status===200&&r.response_bytes>0));assert.deepEqual([...new Set(probeResult.results.map((r:any)=>r.scope))].sort(),['durable_object','worker']);
  const worker=await mf.getWorker();assert.equal(typeof worker.scheduled,'function');await worker.scheduled({cron:'*/5 * * * *',scheduledTime:Date.now()});
+ const firstCronStatus=await (await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/admin/index-status',{headers:adminHeaders})).json();assert.equal(firstCronStatus.last_index_run.build_version,BUILD_VERSION);
+ await new Promise(resolve=>setTimeout(resolve,1150));await worker.scheduled({cron:'*/5 * * * *',scheduledTime:Date.now()});
+ const secondCronStatus=await (await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/admin/index-status',{headers:adminHeaders})).json();assert.equal(secondCronStatus.last_index_run.build_version,BUILD_VERSION);assert.notEqual(firstCronStatus.last_index_run.run_id,secondCronStatus.last_index_run.run_id);
  const state=await kv.get<any>('add:corpus:v2:state','json');assert(state);assert.equal(state.items.length,1);assert.equal(Object.keys(state.errors).length,0);
  assert.equal(state.indexedTitles.length,1);assert(state.lastCompletedAt);assert(state.index_build_version);
  await new Promise(resolve=>setTimeout(resolve,1150));
@@ -73,6 +77,7 @@ try{
  const tokenResponse=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',client_id:client.client_id,code,redirect_uri:'https://example.com/callback',code_verifier:verifier,resource:'https://add-regulations-mcp.splain0102.workers.dev/mcp'}).toString()});assert.equal(tokenResponse.status,200);const token=await tokenResponse.json();assert(token.access_token);
  const rpcHeaders={host:'add-regulations-mcp.splain0102.workers.dev','content-type':'application/json',accept:'application/json, text/event-stream',authorization:'Bearer '+token.access_token};
  const initialize=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'A-test',version:'1'}}})});assert.equal(initialize.status,200);await initialize.text();
+ const helloResponse=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:99,method:'tools/call',params:{name:'hello',arguments:{}}})});assert.equal(helloResponse.status,200);const helloText=await helloResponse.text();assert(helloText.includes(BUILD_VERSION));assert.equal(manualRun.build_version,BUILD_VERSION);
  const beforeSearch=outbound;
  const search=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'search_all_regulations',arguments:{query:'외국인'}}})});assert.equal(search.status,200);const response=await search.text();assert(response.includes('"partial":false'));assert(response.includes('제8조'));assert.equal(outbound,beforeSearch);
  writeFileSync('reports/corpus-index-workers.json',JSON.stringify({passed:true,runtime:'workerd + Miniflare actual Worker bundle, local KV, mocked ALIO',oauthDiscovery:discovery.status,dynamicRegistration:register.status,unauthenticatedMcpBefore:protectedResponse.status,unauthenticatedMcpAfter:after.status,cron:state,outbound,pkceTokenExchange:tokenResponse.status,authenticatedSearchStatus:search.status,searchResponse:response,liveSnapshot:process.env.CORPUS_LIVE_CHECKPOINT??null,adminManualRun:manualRun,runStatus},null,2));console.log('CORPUS_WORKERS_PASS',JSON.stringify({outbound,oauthKeysPreserved:oauthBefore.length}));

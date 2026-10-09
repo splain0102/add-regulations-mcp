@@ -5,7 +5,7 @@ import {probeAlio} from './network-probe';
 import {bootstrapActive,handleBootstrap} from './index-bootstrap';
 
 type Run={run_id:string;build_version:string;trigger:'cron'|'manual';execution:'worker';started_at:string;finished_at:string|null;processed:number;duration_ms:number;subrequests_used:number;subrequest_limit:number;status:string;error_code?:string;result?:unknown};
-type History={latest?:Run;last_cron_started_at?:string;last_cron_finished_at?:string};
+type History={latest?:Run;last_build_mismatch?:Run;last_cron_started_at?:string;last_cron_finished_at?:string};
 type Lease={run_id:string;token:string;expires_at:number;build_version:string};
 export class CorpusIndexCoordinator {
  private busy=false;
@@ -16,7 +16,7 @@ export class CorpusIndexCoordinator {
   const path=new URL(request.url).pathname;
   if(path==='/status'){
    const history=await this.state.storage.get<History>('runs')??{};
-   return Response.json({last_cron_started_at:history.last_cron_started_at??null,last_cron_finished_at:history.last_cron_finished_at??null,processed_in_last_run:history.latest?.processed??0,last_index_run:history.latest??null});
+   return Response.json({hello_build_version:BUILD_VERSION,last_build_mismatch:history.last_build_mismatch??null,last_cron_started_at:history.last_cron_started_at??null,last_cron_finished_at:history.last_cron_finished_at??null,processed_in_last_run:history.latest?.processed??0,last_index_run:history.latest??null});
   }
   if(path==='/probe'&&request.method==='POST')return Response.json(await Promise.all([probeAlio('durable_object',false),probeAlio('durable_object',true)]));
   if(request.method!=='POST')return new Response('Not found',{status:404});
@@ -29,13 +29,18 @@ export class CorpusIndexCoordinator {
     return await handleBootstrap(path,request,this.state.storage,this.env.OAUTH_KV);
    }
    if(path==='/begin'){
+    const input=await request.json() as {trigger?:string;build_version?:string};
+    if(input.build_version&&input.build_version!==BUILD_VERSION){
+     const now=new Date().toISOString(),history=await this.state.storage.get<History>('runs')??{};
+     const run:Run={run_id:crypto.randomUUID(),build_version:input.build_version,trigger:input.trigger==='cron'?'cron':'manual',execution:'worker',started_at:now,finished_at:now,processed:0,duration_ms:0,subrequests_used:0,subrequest_limit:36,status:'build_mismatch',error_code:'build_mismatch',result:{hello_build_version:BUILD_VERSION}};
+     history.last_build_mismatch=run;history.latest=run;if(run.trigger==='cron'){history.last_cron_started_at=now;history.last_cron_finished_at=now;}await this.state.storage.put('runs',history);
+     console.error('corpus_index_build_mismatch',JSON.stringify(run));return Response.json(run,{status:409});
+    }
     if(lease&&lease.build_version===BUILD_VERSION&&lease.expires_at>Date.now())return Response.json({error_code:'index_busy'},{status:409});
     if(await bootstrapActive(this.state.storage))return Response.json({error_code:'bootstrap_in_progress'},{status:409});
     const history=await this.state.storage.get<History>('runs')??{};
     if(history.latest?.finished_at&&Date.now()-Date.parse(history.latest.finished_at)<1100)return Response.json({error_code:'index_rate_limited'},{status:429,headers:{'retry-after':'2'}});
     if(history.latest?.status==='running')console.error('corpus_index_previous_run_interrupted',{...history.latest,error_code:'timeout'});
-    const input=await request.json() as {trigger?:string;build_version?:string};
-    if(input.build_version&&input.build_version!==BUILD_VERSION)return Response.json({error_code:'index_build_changed'},{status:409});
     const started=Date.now();
     const run:Run={run_id:crypto.randomUUID(),build_version:BUILD_VERSION,trigger:input.trigger==='cron'?'cron':'manual',execution:'worker',started_at:new Date(started).toISOString(),finished_at:null,processed:0,duration_ms:0,subrequests_used:0,subrequest_limit:36,status:'running'};
     history.latest=run;if(run.trigger==='cron')history.last_cron_started_at=run.started_at;
