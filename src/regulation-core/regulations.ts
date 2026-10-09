@@ -922,7 +922,7 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
   for(let i=0;i<bounds.length-1;i++){
    const part=content.slice(bounds[i],bounds[i+1]).toLowerCase();
    const article=content.slice(bounds[i],bounds[i+1]);
-   if(deletedSection(article))continue;
+   if(bounds===doc.searchSections?.bounds&&doc.searchSections.excluded?.includes(bounds[i])||deletedSection(article))continue;
    const folded=fold(article);if(!terms.every(t=>folded.includes(fold(t))))continue;
    const weights=tokenWeights(article,terms);if(weights.some(w=>!w))continue;
    const at=bounds[i]+Math.max(0,part.indexOf(terms[0]));
