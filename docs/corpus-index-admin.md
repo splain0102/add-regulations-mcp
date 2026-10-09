@@ -127,3 +127,16 @@ After bootstrap, the existing hourly list comparison prioritizes new/changed
 documents. The 12-hour file recheck also detects replacement attachments whose
 list dates have not changed. Bootstrap does not change Cron registration,
 parser_version, tool list, feature flags or production auto-deployment.
+
+## Search performance (1.10.10)
+
+Whole-corpus reads use four bounded concurrent KV shard reads, keeping the same
+16 shards, freshness checks, fallback behavior and result ordering. Runtime run
+status is read concurrently with search. Index writes prepare article boundaries
+once; legacy documents without them still work. The parser version stays
+1.10.5-parser.1; snippet sizes and tool schemas are unchanged.
+
+CI compares the complete response against the 1.10.9 implementation on the actual
+ALIO corpus, including missing-shard fallback and legacy records. The performance
+report uses injected KV delay: it is not a production latency measurement.
+Existing 2 MB shard / 16 MB corpus guards also include the boundary metadata.

@@ -24,6 +24,8 @@ jobs:
         run: npm run test:corpus-acceptance
       - name: Export verified initial corpus for administrator bootstrap
         run: node scripts/bootstrap-index.mjs export
+      - name: Cold search equivalence and bounded KV performance
+        run: npm run test:corpus-performance
       - name: Authenticated search of actual ALIO corpus in workerd KV
         run: npm run test:corpus-workers
         env:
@@ -37,4 +39,5 @@ jobs:
             reports/corpus-index-workers.json
             reports/corpus-index-acceptance.json
             reports/corpus-index-bootstrap.json
+            reports/corpus-index-performance.json
           if-no-files-found: ignore

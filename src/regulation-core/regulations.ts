@@ -1,3 +1,4 @@
+import {searchBounds} from './search-sections';
 import {PARSER_VERSION} from "./parser-version";
 import {refreshIndex,readIndex,type CorpusItem,indexErrorCode} from './corpus-index';
 import {extractRevisionSection} from './revision-probe';
@@ -914,8 +915,7 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
  const results:any[]=[];
  if(terms.length)for(const doc of docs){
   const content=doc.text;
-  const headings=[...content.matchAll(/(?:^|\n)[ \t]*(?:제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)\s*(?:제\s*)?\d+(?:-\d+)?\s*(?:호)?[^\]\n]*\][^\n]*)/g)].map(m=>m.index??0);
-  const bounds=[0,...headings,content.length].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>a-b);
+  const bounds=searchBounds(content,doc.searchSections);
   const found:any[]=[];
   for(let i=0;i<bounds.length-1;i++){
    const part=content.slice(bounds[i],bounds[i+1]).toLowerCase();
