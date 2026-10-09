@@ -29,7 +29,7 @@ export class CorpusIndexCoordinator {
    history.latest=run;if(run.trigger==='cron')history.last_cron_started_at=run.started_at;
    await this.state.storage.put('runs',history);
    console.log('corpus_index_run_started',JSON.stringify(run));
-   const result=await refreshCorpusIndex(this.env.OAUTH_KV,BUILD_VERSION,transport);
+   const result=await refreshCorpusIndex(this.env.OAUTH_KV,BUILD_VERSION,transport,{forceDocuments:run.trigger==='manual'});
    run.processed=result.processed;run.status=result.errors.count?'partial':'success';run.result=result;
   }catch(error){run.status='failed';run.error_code=indexErrorCode(error);run.result={message:String(error).slice(0,240)};}
   try{
@@ -66,5 +66,6 @@ export async function handleIndexAdmin(request:Request,env:CoordinatorEnv):Promi
  if(request.method!=='GET')return Response.json({error_code:'method_not_allowed'},{status:405,headers:{allow:'GET'}});
  const [index,status]=await Promise.all([readIndex(env.OAUTH_KV,Date.now(),BUILD_VERSION),getIndexRuntimeStatus(env)]);
  return Response.json({...status,index_build_version:index.index_build_version,indexedRegulations:index.documents.length,totalRegulations:index.total,
-  partial:index.partial,lastVerifiedAt:index.lastVerifiedAt,lastCompletedAt:index.lastCompletedAt,errors:index.errors});
+  partial:index.partial,lastVerifiedAt:index.lastVerifiedAt,lastCompletedAt:index.lastCompletedAt,errors:index.errors,
+  last_list_verified_at:index.last_list_verified_at,next_list_refresh_at:index.next_list_refresh_at,next_retry_at:index.next_retry_at});
 }

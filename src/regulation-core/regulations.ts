@@ -853,20 +853,24 @@ export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Da
 type IndexListWork={rows:AlioRow[];nextPage:number;totalPage:number;totalCount:number;startedAt:number};
 async function collectIndexList(request:typeof fetchWithRetry,work?:unknown){
  let stage=work as IndexListWork|undefined;
+ // A list outage must leave time for cached-list document work in this event.
+ const pageRequest:typeof fetchWithRetry=(url,init)=>request(url,init,1);
+ try{
  // Persist at most four pages/event. A partial list never replaces the corpus.
- if(!stage||Date.now()-stage.startedAt>2*60*60*1000){const first=await fetchListPage(1,request);stage={rows:first.result,nextPage:2,totalPage:first.page.totalPage,totalCount:first.page.totalCount,startedAt:Date.now()};}
+ if(!stage||Date.now()-stage.startedAt>2*60*60*1000){const first=await fetchListPage(1,pageRequest);stage={rows:first.result,nextPage:2,totalPage:first.page.totalPage,totalCount:first.page.totalCount,startedAt:Date.now()};}
  if(!Number.isInteger(stage.totalPage)||stage.totalPage<1||stage.totalPage>100)throw Error('invalid_index_list_pages');
  const remaining=Math.min(3,stage.totalPage-stage.nextPage+1);
  for(let n=0;n<remaining;n++){
-  const page=await fetchListPage(stage.nextPage,request);
+  const page=await fetchListPage(stage.nextPage,pageRequest);
   if(page.page.totalPage!==stage.totalPage||page.page.totalCount!==stage.totalCount)throw Error('index_list_changed_during_collection');
   stage.rows.push(...page.result);stage.nextPage++;
  }
  if(stage.nextPage<=stage.totalPage)return {work:stage};
  if(stage.rows.length!==stage.totalCount)throw Error('incomplete_index_list');
- const first=await fetchListPage(1,request);if(JSON.stringify(first.result)!==JSON.stringify(stage.rows.slice(0,first.result.length)))throw Error('index_list_changed_during_collection');
+ const first=await fetchListPage(1,pageRequest);if(JSON.stringify(first.result)!==JSON.stringify(stage.rows.slice(0,first.result.length)))throw Error('index_list_changed_during_collection');
  const items=itemsFromRows(stage.rows);if(items.length!==stage.totalCount)throw Error('incomplete_index_list');
  return {items,work:undefined};
+ }catch(error){throw Object.assign(error instanceof Error?error:Error(String(error)),{listWork:stage});}
 }
 export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequest()){
  return {
@@ -893,7 +897,7 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
   }
  };
 }
-export async function refreshCorpusIndex(kv:KVNamespace,buildVersion?:string,request=createIndexRequest()){const source=createCorpusSource(request);const result=await refreshIndex(kv,{list:source.listBatch,load:source.load},Date.now(),buildVersion?{buildVersion}:undefined);return {...result,subrequests_used:request.usage!().used,subrequest_limit:40};}
+export async function refreshCorpusIndex(kv:KVNamespace,buildVersion?:string,request=createIndexRequest(),options?:{forceDocuments?:boolean}){const source=createCorpusSource(request);const result=await refreshIndex(kv,{list:source.listBatch,load:source.load},Date.now(),{buildVersion,...options});return {...result,subrequests_used:request.usage!().used,subrequest_limit:40};}
 export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace,buildVersion?:string){
  const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
  if(!kv) return {query,limit,offset,results:[],errors:{count:1,sample:[{code:'index_unavailable'}],retry_cursor:null},partial:true,index_status:'unavailable',next_cursor:null};
@@ -920,7 +924,8 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
  results.sort((a,b)=>b.score-a.score||b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
  const next_cursor=offset+limit<results.length?offset+limit:null;
  return {query,limit,offset,totalRegulations:index.total,indexedRegulations:docs.length,totalMatches:results.length,results:results.slice(offset,offset+limit),
- errors:index.errors,partial:index.partial,index_status:index.index_status,lastVerifiedAt:index.lastVerifiedAt,index_build_version:index.index_build_version,lastCompletedAt:index.lastCompletedAt,next_cursor};
+ errors:index.errors,partial:index.partial,index_status:index.index_status,lastVerifiedAt:index.lastVerifiedAt,index_build_version:index.index_build_version,lastCompletedAt:index.lastCompletedAt,next_cursor,
+ last_list_verified_at:index.last_list_verified_at,next_list_refresh_at:index.next_list_refresh_at,next_retry_at:index.next_retry_at};
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
