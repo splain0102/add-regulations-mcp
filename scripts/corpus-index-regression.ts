@@ -1,9 +1,10 @@
+import {CorpusIndexCoordinator,handleIndexAdmin} from '../src/regulation-core/index-coordinator';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {transformSync} from 'esbuild';
 import {z} from 'zod';
 import {zipSync,strToU8} from 'fflate';
-import {refreshIndex,readIndex,INDEX_PREFIX,MAX_INDEX_AGE,sha256,shardId,type CorpusItem} from '../src/regulation-core/corpus-index';
+import {refreshIndex,readIndex,INDEX_PREFIX,MAX_INDEX_AGE,sha256,shardId,indexErrorCode,type CorpusItem} from '../src/regulation-core/corpus-index';
 import {searchAllRegulations,createIndexRequest,createCorpusSource,getRegulationDetail,PARSER_VERSION} from '../src/regulation-core/regulations';
 import {TestKV} from './corpus-index-test-kv';
 const kv=new TestKV(),base=Date.now();
@@ -19,7 +20,7 @@ await test('213 documents complete; registered search defaults; zero external fe
  try{
   const text=readFileSync('src/index.ts','utf8');const start=text.indexOf('  server.registerTool(\n    "search_all_regulations"');const end=text.indexOf('  server.registerTool(\n    "search_regulation_text"',start);
   let registration:any;const server={registerTool:(_name:string,config:any,callback:any)=>{registration={config,callback};}};
-  new Function('server','z','env','coreSearchAllRegulations','publicErrorCode',transformSync(text.slice(start,end),{loader:'ts'}).code)(server,z,{OAUTH_KV:kv.binding()},searchAllRegulations,()=> 'error');
+  new Function('server','z','env','coreSearchAllRegulations','publicErrorCode','getIndexRuntimeStatus','BUILD_VERSION',transformSync(text.slice(start,end),{loader:'ts'}).code)(server,z,{OAUTH_KV:kv.binding()},searchAllRegulations,()=> 'error',async()=>({last_cron_started_at:null,last_cron_finished_at:null,processed_in_last_run:0}),'test');
   const args=z.object(registration.config.inputSchema).parse({query:'외국인'});const before=kv.reads;
   const r=await registration.callback(args);assert(!r.isError);assert.equal(r.structuredContent.partial,false);assert.equal(r.structuredContent.totalRegulations,213);assert.equal(r.structuredContent.indexedRegulations,213);assert.equal(r.structuredContent.results[0].regulationName,'보안과제 관리요령');assert(r.structuredContent.results[0].matches.some((m:any)=>m.label.includes('제8조')));assert(kv.reads-before<=17);
   assert.equal(kv.values.get('oauth:sentinel'),'{"unchanged":true}');assert(kv.writes<=107*3);
@@ -110,5 +111,32 @@ await test('A-2 empty/HTTP/network/subrequest failures expose distinct codes and
   const broken=new TestKV();await refreshIndex(broken.binding(),{list:async()=>[item],load:createCorpusSource(bad).load},base);
   const state=await broken.get<any>(INDEX_PREFIX+'state');assert.equal(state.errors['감사규정'].code,'fetch_failed');assert.equal((await readIndex(broken.binding(),base)).partial,true);assert.equal(state.lastCompletedAt,undefined);
  }finally{console.warn=warn;}
+});
+await test('A-3 build rollover clears old errors without deleting documents; pending sweep remains partial',async()=>{
+ const buildKV=new TestKV();for(let n=0;n<107;n++)await refreshIndex(buildKV.binding(),source,base+n*1000,{buildVersion:'old-build'});
+ const old=await buildKV.get<any>(INDEX_PREFIX+'state');for(const item of items.slice(0,110))old.errors[item.title]={title:item.title,message:'selection_error:no_attachment',checkedAt:'2026-10-08T20:05:00Z',build_version:'old-build',error_code:'no_attachment'};
+ await buildKV.put(INDEX_PREFIX+'state',JSON.stringify(old));const before=(await readIndex(buildKV.binding(),base+107000)).documents.length;
+ const failedItem=items[0].title;
+ await refreshIndex(buildKV.binding(),{...source,load:async item=>{if(item.title===failedItem)throw Error('HWP parse failed');return source.load(item);}},base+108000,{buildVersion:'new-build'});
+ const read=await readIndex(buildKV.binding(),base+108000,'new-build');assert.equal(read.documents.length,before);assert.equal(read.index_build_version,'new-build');assert.equal(read.errors.count,1);assert.equal(read.errors.sample[0].error_code,'parse_failed');assert(read.errors.sample.every(e=>e.build_version==='new-build'));assert.equal(read.partial,true);assert.equal(read.lastVerifiedAt,new Date(base+108000).toISOString());
+ const notRun=await readIndex(buildKV.binding(),base+108000,'next-build');assert.equal(notRun.errors.count,0);assert.equal(notRun.partial,true);assert.equal(notRun.index_build_version,'new-build');
+});
+await test('A-3 latest-first samples contain build and codes; timeout/fetch/parse/budget classification',async()=>{
+ const snapshot=new TestKV();await refreshIndex(snapshot.binding(),smallSource,base,{buildVersion:'current'});const state=await snapshot.get<any>(INDEX_PREFIX+'state');
+ state.errors={};for(let n=0;n<5;n++)state.errors['failure'+n]={title:'failure'+n,message:'selection_error:no_attachment',checkedAt:new Date(base+n*1000).toISOString(),build_version:'current',error_code:'no_attachment'};
+ state.errors.old={title:'old',message:'old',checkedAt:new Date(base+100000).toISOString(),build_version:'old-build'};await snapshot.put(INDEX_PREFIX+'state',JSON.stringify(state));
+ const index=await readIndex(snapshot.binding(),base+5000);assert.equal(index.errors.count,5);assert.deepEqual(index.errors.sample.map(e=>e.title),['failure4','failure3','failure2']);assert(index.errors.sample.every(e=>e.build_version==='current'&&e.error_code==='no_attachment'));
+ const cases=[['selection_error:no_attachment','no_attachment'],['fetch failed','fetch_failed'],['HWP parse failed','parse_failed'],['Too many subrequests','subrequest_limit'],['index_request_deadline_exhausted','timeout']];for(const [input,code] of cases)assert.equal(indexErrorCode(Error(input)),code);
+ assert.equal(indexErrorCode(new Error('fetch failed',{cause:Error('ConnectTimeoutError')})),'timeout');
+});
+await test('A-3 coordinator preserves start and finish on early failure, rejects concurrent writer; token absence fails closed',async()=>{
+ const values=new Map<string,unknown>();let startReady!:()=>void;const started=new Promise<void>(resolve=>startReady=resolve);let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);
+ const storage={get:async(key:string)=>structuredClone(values.get(key)),put:async(key:string,value:unknown)=>{values.set(key,structuredClone(value));if((value as any).latest?.status==='running')startReady();}};
+ const badKV={get:async()=>{await gate;throw Error('KV unavailable');}};
+ const coordinator=new CorpusIndexCoordinator({storage} as any,{OAUTH_KV:badKV as any});
+ const request=()=>new Request('https://internal/run',{method:'POST',body:JSON.stringify({trigger:'cron'})});
+ const first=coordinator.fetch(request());await started;const second=await coordinator.fetch(request());assert.equal(second.status,409);release();assert.equal((await first).status,500);
+ const status=await (await coordinator.fetch(new Request('https://internal/status'))).json() as any;assert(status.last_cron_started_at);assert(status.last_cron_finished_at);assert.equal(status.last_index_run.error_code,'fetch_failed');assert.equal(status.last_index_run.processed,0);assert(status.last_index_run.finished_at);
+ const disabled=await handleIndexAdmin(new Request('https://worker/admin/trigger-index',{method:'POST'}),{OAUTH_KV:badKV as any,CORPUS_INDEX_COORDINATOR:{} as any});assert.equal(disabled?.status,503);
 });
 writeFileSync('reports/corpus-index-regression.json',JSON.stringify({passed:true,tests:results,scope:'A only; synthetic failure injection; not live ALIO or deployed Workers'},null,2));

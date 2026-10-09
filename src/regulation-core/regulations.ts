@@ -1,4 +1,4 @@
-import {refreshIndex,readIndex,type CorpusItem} from './corpus-index';
+import {refreshIndex,readIndex,type CorpusItem,indexErrorCode} from './corpus-index';
 import {extractRevisionSection} from './revision-probe';
 import { unzipSync, strFromU8 } from "fflate";
 import { hwpToText } from "@ssabrojs/hwpxjs/browser";
@@ -154,7 +154,7 @@ export async function fetchWithRetry(
 
 type AttachmentDiagnostics = {http_status:number|null;response_bytes:number;subrequests_used:number|null;subrequest_limit:number|null};
 type AlioRequest = typeof fetchWithRetry & {usage?:()=>{used:number;limit:number;status:number|null}};
-function attachmentErrorCode(error:unknown){return /Too many subrequests|index_request_budget_exhausted|subrequest_limit/i.test(String(error))?'subrequest_limit':'fetch_failed';}
+function attachmentErrorCode(error:unknown){const code=indexErrorCode(error);return code==='parse_failed'?'fetch_failed':code;}
 function attachmentFailure(code:string,url:string,diagnostics:AttachmentDiagnostics,error?:unknown):Error {
  console.warn('alio_attachment_collection_failed',{code,url,...diagnostics,message:error?String(error).slice(0,240):undefined});
  return new Error('selection_error:'+code);
@@ -179,7 +179,7 @@ async function fetchAlio(url: string,request:AlioRequest=fetchWithRetry,diagnost
   try{html=await response.text();}catch(error){
    if(!diagnostics)throw error;
    const usage=request.usage?.();Object.assign(diagnostics,{http_status:response.status,subrequests_used:usage?.used??null,subrequest_limit:usage?.limit??null});
-   throw attachmentFailure('fetch_failed',url,diagnostics,error);
+   throw attachmentFailure(attachmentErrorCode(error),url,diagnostics,error);
   }
   if(diagnostics){const usage=request.usage?.();Object.assign(diagnostics,{http_status:response.status,response_bytes:new TextEncoder().encode(html).byteLength,subrequests_used:usage?.used??null,subrequest_limit:usage?.limit??null});}
 
@@ -881,7 +881,7 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
     try{const loaded=await download(file);return await extractRevisionSection(loaded.bytes,loaded.extension);}catch(error){probeError=error;throw error;}
    }});
    if(!detail.latestAttachment){
-    if(probeError&&/fetch|HTTP|subrequest|budget_exhausted|deadline_exhausted/i.test(String(probeError))){const usage=(request as AlioRequest).usage?.();throw attachmentFailure(attachmentErrorCode(probeError),item.detailUrl,{http_status:usage?.status??null,response_bytes:0,subrequests_used:usage?.used??null,subrequest_limit:usage?.limit??null},probeError);}
+    if(probeError&&/fetch|HTTP|subrequest|budget_exhausted|deadline_exhausted|timeout|abort|timed.?out/i.test(String(probeError))){const usage=(request as AlioRequest).usage?.();throw attachmentFailure(attachmentErrorCode(probeError),item.detailUrl,{http_status:usage?.status??null,response_bytes:0,subrequests_used:usage?.used??null,subrequest_limit:usage?.limit??null},probeError);}
     throw Error('selection_error:'+detail.selection_reason.join(','));
    }
    const file=await download(detail.latestAttachment);let text:string;
@@ -893,11 +893,11 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
   }
  };
 }
-export async function refreshCorpusIndex(kv:KVNamespace){const source=createCorpusSource();return refreshIndex(kv,{list:source.listBatch,load:source.load});}
-export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace){
+export async function refreshCorpusIndex(kv:KVNamespace,buildVersion?:string,request=createIndexRequest()){const source=createCorpusSource(request);const result=await refreshIndex(kv,{list:source.listBatch,load:source.load},Date.now(),buildVersion?{buildVersion}:undefined);return {...result,subrequests_used:request.usage!().used,subrequest_limit:40};}
+export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace,buildVersion?:string){
  const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
  if(!kv) return {query,limit,offset,results:[],errors:{count:1,sample:[{code:'index_unavailable'}],retry_cursor:null},partial:true,index_status:'unavailable',next_cursor:null};
- const index=await readIndex(kv);const docs=index.documents;
+ const index=await readIndex(kv,Date.now(),buildVersion);const docs=index.documents;
  const results:any[]=[];
  if(terms.length)for(const doc of docs){
   const content=doc.text;
@@ -920,7 +920,7 @@ export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KV
  results.sort((a,b)=>b.score-a.score||b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
  const next_cursor=offset+limit<results.length?offset+limit:null;
  return {query,limit,offset,totalRegulations:index.total,indexedRegulations:docs.length,totalMatches:results.length,results:results.slice(offset,offset+limit),
- errors:index.errors,partial:index.partial,index_status:index.index_status,lastVerifiedAt:index.lastCheckedAt,lastCompletedAt:index.lastCompletedAt,next_cursor};
+ errors:index.errors,partial:index.partial,index_status:index.index_status,lastVerifiedAt:index.lastVerifiedAt,index_build_version:index.index_build_version,lastCompletedAt:index.lastCompletedAt,next_cursor};
 }
 export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);

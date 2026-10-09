@@ -19,6 +19,8 @@ import {
 
 export interface Env {
   OAUTH_KV: KVNamespace;
+  CORPUS_INDEX_COORDINATOR: DurableObjectNamespace;
+  INDEX_ADMIN_TOKEN?: string;
   OAUTH_PROVIDER: OAuthHelpers;
 
   ACCESS_CLIENT_ID: string;
@@ -477,3 +479,4 @@ async function verifyToken(
 
   return claims;
 }
+

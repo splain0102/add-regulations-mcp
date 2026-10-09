@@ -1,3 +1,5 @@
+import {handleIndexAdmin,runCoordinatedIndex,getIndexRuntimeStatus} from './regulation-core/index-coordinator';
+export {CorpusIndexCoordinator} from './regulation-core/index-coordinator';
 import {searchRegulationText} from "./regulation-core/text-search";
 import {PARSER_VERSION,normalizeRegulationTitle} from "./regulation-core/regulations";
 import {BUILD_VERSION} from "./build-info";
@@ -12,7 +14,7 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
-const MCP_VERSION = "1.10.6";
+const MCP_VERSION = "1.10.7";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
@@ -4042,7 +4044,7 @@ function createServer(env: Env) {
     },
     async ({query,limit,offset})=>{
       try{
-        const data=await coreSearchAllRegulations(query,limit,offset,env.OAUTH_KV);
+        const data={...await coreSearchAllRegulations(query,limit,offset,env.OAUTH_KV,BUILD_VERSION),...await getIndexRuntimeStatus(env)};
         return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }catch(error){
         const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
@@ -4212,11 +4214,13 @@ const oauthProvider = new OAuthProvider<Env>({
 
 
 
-// OAuth routes remain unchanged; scheduled events update the persisted corpus index.
+// Cron and admin events share one durable coordinator; OAuth routes remain intact.
 export default {
- fetch(request:Request,env:Env,ctx:ExecutionContext){return oauthProvider.fetch(request,env,ctx);},
- async scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext){
-  ctx.waitUntil(refreshCorpusIndex(env.OAUTH_KV).then(result=>console.log('corpus_index_refresh',JSON.stringify(result))).catch(error=>console.error('corpus_index_refresh_failed',String(error))));
+ async fetch(request:Request,env:Env,ctx:ExecutionContext){const admin=await handleIndexAdmin(request,env);return admin??oauthProvider.fetch(request,env,ctx);},
+ async scheduled(controller:ScheduledController,env:Env,ctx:ExecutionContext){
+  const started=Date.now();console.log('corpus_cron_handler_started',{build_version:BUILD_VERSION,cron:controller.cron,scheduledTime:controller.scheduledTime});
+  const job=(async()=>{try{const response=await runCoordinatedIndex(env,'cron');const result=await response.json();console.log('corpus_cron_handler_finished',{build_version:BUILD_VERSION,status:response.status,duration_ms:Date.now()-started,...result as object});}
+   catch(error){console.error('corpus_cron_handler_failed',{build_version:BUILD_VERSION,duration_ms:Date.now()-started,message:String(error)});throw error;}})();
+  ctx.waitUntil(job);await job;
  }
 };
-
