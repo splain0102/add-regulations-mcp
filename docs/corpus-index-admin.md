@@ -1,6 +1,6 @@
 # Corpus index operations
 
-Main merges automatically deploy this Worker. The A-3 release is 1.10.7.
+Main merges automatically deploy this Worker. The retry-policy release is 1.10.8.
 `wrangler.jsonc` is the configuration file; there is no separate production `env`.
 The Cron remains `*/5 * * * *` (UTC), using the same OAUTH_KV namespace.
 
@@ -11,6 +11,29 @@ with 409 and immediate repeat runs with 429, and stores run history without
 adding heartbeat writes to the shared OAuth KV quota. Corpus documents, staging,
 cursor and current-build errors remain in KV. Each batch processes at most two
 documents with at most 40 external attempts, including retries and redirects.
+
+## Refresh and retry policy
+
+- Initial/new/changed documents continue in five-minute Cron batches.
+- After a full list is verified, another collection starts after 60 minutes.
+  Each event collects bounded pages; an in-progress collection resumes at its
+  saved page, including when a later page fails. Partial lists never replace the
+  committed complete list. List pages use one attempt each per event so an ALIO
+  outage leaves invocation time for document work.
+- A failed list fetch does not block document indexing from the last complete
+  list. Its current-build error stays visible until a complete list is verified.
+  List freshness expires after two hours; an outage cannot silently report ready.
+- List and document failures persist independent cooldowns of 5, 10, 20, 40,
+  then at most 60 minutes. They continue retrying across Cron runs. Successful
+  progress resets consecutive failures; changed document metadata resets that
+  document's obsolete retry state. Other pending titles continue during cooldown.
+- Healthy documents are reselected/downloaded/hashed after 12 hours, before the
+  existing 24-hour validity limit. This detects replacement fileNo or SHA even
+  without stDate/idate changes. Administrator batches can recheck healthy
+  documents early but still respect failed-document cooldowns.
+- Search and administrator status expose last_list_verified_at,
+  next_list_refresh_at and next_retry_at. Waiting batches can legitimately
+  process zero documents; the saved error and next retry time explain why.
 
 ## Administrator token
 
@@ -49,7 +72,7 @@ record identifies an interrupted run; the next run logs that interruption.
 
 ## Release acceptance
 
-1. Confirm hello version 1.10.7 and its git SHA.
+1. Confirm hello version 1.10.8 and its git SHA.
 2. Invoke one administrator batch. Require processed > 0 and an advanced
    lastVerifiedAt; inspect `corpus_index_run_started/finished` logs.
 3. Confirm error samples belong to that build and no old no_attachment samples

@@ -4,7 +4,7 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import {transformSync} from 'esbuild';
 import {z} from 'zod';
 import {zipSync,strToU8} from 'fflate';
-import {refreshIndex,readIndex,INDEX_PREFIX,MAX_INDEX_AGE,sha256,shardId,indexErrorCode,type CorpusItem} from '../src/regulation-core/corpus-index';
+import {refreshIndex as scheduledRefresh,readIndex,INDEX_PREFIX,MAX_INDEX_AGE,MAX_LIST_AGE,LIST_REFRESH_INTERVAL,DOCUMENT_CHECK_INTERVAL,RETRY_BASE,retryDelay,sha256,shardId,indexErrorCode,type CorpusItem} from '../src/regulation-core/corpus-index';
 import {searchAllRegulations,createIndexRequest,createCorpusSource,getRegulationDetail,PARSER_VERSION} from '../src/regulation-core/regulations';
 import {TestKV} from './corpus-index-test-kv';
 const kv=new TestKV(),base=Date.now();
@@ -12,6 +12,9 @@ const items:CorpusItem[]=Array.from({length:213},(_,i)=>({title:i===212?'보안�
 let fileNo='100',body='원문 바이트',fail='';
 const source={list:async()=>items,load:async(item:CorpusItem)=>{if(item.title===fail)throw Error('injected parse failure');return {fileNo,text:item.title==='보안과제 관리요령'?'제1조(목적)\n목적\n제8조(외국인 참여)\n외국인 참여는 승인 대상이다.\n제9조(보안)\n보안 업무': '제1조(목적)\n일반 업무',bytes:new TextEncoder().encode(body),parserVersion:'test'}}};
 const results:any[]=[];
+// Existing content/integrity tests deliberately force revalidation; scheduling
+// and persisted cooldowns are exercised below through the production defaults.
+function refreshIndex(...args:Parameters<typeof scheduledRefresh>){return scheduledRefresh(args[0],args[1],args[2],{forceList:true,forceDocuments:true,...args[3]});}
 async function test(name:string,fn:()=>unknown){await fn();results.push({name,status:'passed'});console.log('CORPUS_INDEX PASS',name);}
 await test('213 documents complete; registered search defaults; zero external fetch; <=17 KV reads',async()=>{
  kv.values.set('oauth:sentinel','{"unchanged":true}');
@@ -35,15 +38,16 @@ await test('same stDate/idate detects replaced fileNo and same-file raw SHA chan
 await test('metadata update failure preserves successful text; persists error; recovery clears it',async()=>{
  two[0].revisionDate='2026-03-03';two[0].updatedDate='2026-04-04';fail=two[0].title;
  await refreshIndex(small.binding(),smallSource,++now);const r=await readIndex(small.binding(),now);assert.equal(r.partial,true);assert.equal(r.errors.count,1);assert.equal(r.documents.find(d=>d.title===fail)!.revisionDate,'2026-01-01');
- fail='';await refreshIndex(small.binding(),smallSource,++now);const recovered=await readIndex(small.binding(),now);assert.equal(recovered.partial,false);assert.equal(recovered.errors.count,0);assert.equal(recovered.documents.find(d=>d.title===two[0].title)!.updatedDate,'2026-04-04');
+ fail='';now+=RETRY_BASE;await refreshIndex(small.binding(),smallSource,now);const recovered=await readIndex(small.binding(),now);assert.equal(recovered.partial,false);assert.equal(recovered.errors.count,0);assert.equal(recovered.documents.find(d=>d.title===two[0].title)!.updatedDate,'2026-04-04');
 });
 await test('KV shard write failure keeps manifest refs; reports failure',async()=>{
  const before=await small.get<any>(INDEX_PREFIX+'state');small.failKey='shard:';body='changed';await refreshIndex(small.binding(),smallSource,++now);small.failKey='';const after=await small.get<any>(INDEX_PREFIX+'state');assert.deepEqual(after.refs,before.refs);assert((await readIndex(small.binding(),now)).errors.count>0);await refreshIndex(small.binding(),smallSource,++now);
 });
 await test('list outage and empty list preserve snapshot; missing KV shard cannot report ready',async()=>{
  const before=(await readIndex(small.binding(),now)).documents;
- await refreshIndex(small.binding(),{...smallSource,list:async()=>{throw Error('ALIO 522');}},++now);assert.deepEqual((await readIndex(small.binding(),now)).documents,before);assert.equal((await readIndex(small.binding(),now)).partial,true);
- await refreshIndex(small.binding(),{...smallSource,list:async()=>[]},++now);assert.deepEqual((await readIndex(small.binding(),now)).documents,before);
+ const contents=(docs:any[])=>docs.map(({verifiedAt,...doc})=>doc);
+ await refreshIndex(small.binding(),{...smallSource,list:async()=>{throw Error('ALIO HTTP 522');}},++now);assert.deepEqual(contents((await readIndex(small.binding(),now)).documents),contents(before));assert.equal((await readIndex(small.binding(),now)).partial,true);
+ await refreshIndex(small.binding(),{...smallSource,list:async()=>[]},++now);assert.deepEqual(contents((await readIndex(small.binding(),now)).documents),contents(before));
  await refreshIndex(small.binding(),smallSource,++now);const state=await small.get<any>(INDEX_PREFIX+'state');const key=Object.values(state.refs)[0] as string;const saved=small.values.get(key)!;small.values.delete(key);const missing=await readIndex(small.binding(),now);assert.equal(missing.partial,true);assert(missing.errors.count>0);assert(missing.documents.length>0,'fallback keeps preceding committed data');small.values.set(key,saved);
 });
 await test('removed titles excluded; new title never hidden by prior completion',async()=>{
@@ -138,5 +142,65 @@ await test('A-3 coordinator preserves start and finish on early failure, rejects
  const first=coordinator.fetch(request());await started;const second=await coordinator.fetch(request());assert.equal(second.status,409);release();assert.equal((await first).status,500);
  const status=await (await coordinator.fetch(new Request('https://internal/status'))).json() as any;assert(status.last_cron_started_at);assert(status.last_cron_finished_at);assert.equal(status.last_index_run.error_code,'fetch_failed');assert.equal(status.last_index_run.processed,0);assert(status.last_index_run.finished_at);
  const disabled=await handleIndexAdmin(new Request('https://worker/admin/trigger-index',{method:'POST'}),{OAUTH_KV:badKV as any,CORPUS_INDEX_COORDINATOR:{} as any});assert.equal(disabled?.status,503);
+});
+await test('A-4 list 522 does not block cached-list indexing; cooldown and error remain visible',async()=>{
+ const store=new TestKV(),six=items.slice(0,6);let listCalls=0,offline=false;
+ const adapter={list:async()=>{listCalls++;if(offline)throw Error('ALIO HTTP 522');return six;},load:source.load};
+ await scheduledRefresh(store.binding(),adapter,base,{buildVersion:'current'});offline=true;
+ const failedAt=base+LIST_REFRESH_INTERVAL;
+ const result=await scheduledRefresh(store.binding(),adapter,failedAt,{buildVersion:'current'});
+ assert.equal(result.processed,2);assert.equal(result.indexedRegulations,4);assert.equal(result.errors.count,1);assert.equal(result.errors.sample[0].error_code,'fetch_failed');assert.equal(result.next_retry_at,new Date(failedAt+RETRY_BASE).toISOString());
+ const waiting=await scheduledRefresh(store.binding(),adapter,failedAt+60000,{buildVersion:'current'});
+ assert.equal(listCalls,2);assert.equal(waiting.indexedRegulations,6);assert.equal(waiting.processed,2);assert.equal(waiting.lastCompletedAt,null);assert.equal((await readIndex(store.binding(),failedAt+60000,'current')).partial,true);
+ offline=false;await scheduledRefresh(store.binding(),adapter,failedAt+RETRY_BASE,{buildVersion:'current'});const ready=await readIndex(store.binding(),failedAt+RETRY_BASE,'current');assert.equal(ready.errors.count,0);assert.equal(ready.partial,false);assert(ready.lastCompletedAt);
+});
+await test('A-4 failed document retries persist 5/10/20/40/60 minute backoff and resume after recovery',async()=>{
+ const store=new TestKV(),one=items.slice(0,1);let calls=0,offline=true;
+ const adapter={list:async()=>one,load:async(item:CorpusItem)=>{calls++;if(offline)throw Error('ALIO HTTP 522');return source.load(item);}};
+ let at=base;
+ for(let attempt=1;attempt<=6;attempt++){
+  const result=await scheduledRefresh(store.binding(),adapter,at,{buildVersion:'current'});assert.equal(result.processed,1);
+  const state=await store.get<any>(INDEX_PREFIX+'state');const error=state.errors[one[0].title];assert.equal(error.retry_attempts,attempt);assert.equal(Date.parse(error.next_retry_at)-at,retryDelay(attempt));
+  await scheduledRefresh(store.binding(),adapter,at+60000,{buildVersion:'current'});assert.equal(calls,attempt,'cooldown survives a new refresh invocation');at=Date.parse(error.next_retry_at);
+ }
+ assert.equal(retryDelay(1),5*60000);assert.equal(retryDelay(4),40*60000);assert.equal(retryDelay(20),60*60000);
+ offline=false;await scheduledRefresh(store.binding(),adapter,at,{buildVersion:'current'});const ready=await readIndex(store.binding(),at,'current');assert.equal(ready.documents.length,1);assert.equal(ready.errors.count,0);assert.equal(ready.partial,false);assert(ready.lastCompletedAt);
+});
+await test('A-4 list backoff survives events and a resumed page advances the next retry time',async()=>{
+ const store=new TestKV();let calls=0;let at=base;
+ const failing={...source,list:async()=>{calls++;throw Error('ALIO HTTP 522');}};
+ for(let attempt=1;attempt<=5;attempt++){
+  const result=await scheduledRefresh(store.binding(),failing,at);assert.equal(result.errors.sample[0].retry_attempts,attempt);assert.equal(Date.parse(result.next_retry_at!)-at,retryDelay(attempt));
+  await scheduledRefresh(store.binding(),failing,at+60000);assert.equal(calls,attempt);at=Date.parse(result.next_retry_at!);
+ }
+ const progress=await scheduledRefresh(store.binding(),{...source,list:async()=>({work:{nextPage:2}})},at);assert.equal(progress.next_retry_at,new Date(at+RETRY_BASE).toISOString());assert.equal((await store.get<any>(INDEX_PREFIX+'state')).listRetryAttempts,0);
+});
+await test('A-4 completed corpus skips healthy downloads until due; unchanged metadata still detects SHA replacement',async()=>{
+ const store=new TestKV(),one=items.slice(0,1);let lists=0,loads=0,bytes='old';
+ const adapter={list:async()=>{lists++;return one;},load:async(item:CorpusItem)=>{loads++;return {...await source.load(item),bytes:new TextEncoder().encode(bytes)};}};
+ await scheduledRefresh(store.binding(),adapter,base);const first=(await readIndex(store.binding(),base)).documents[0];
+ const idle=await scheduledRefresh(store.binding(),adapter,base+RETRY_BASE);assert.equal(idle.processed,0);assert.equal(lists,1);assert.equal(loads,1);
+ await scheduledRefresh(store.binding(),adapter,base+LIST_REFRESH_INTERVAL);assert.equal(lists,2);assert.equal(loads,1);
+ bytes='replacement';const due=await scheduledRefresh(store.binding(),adapter,base+DOCUMENT_CHECK_INTERVAL);assert.equal(due.processed,1);assert.equal(due.updated,1);assert.equal(loads,2);assert.notEqual((await readIndex(store.binding(),base+DOCUMENT_CHECK_INTERVAL)).documents[0].sha256,first.sha256);
+});
+await test('A-4 changed metadata bypasses obsolete failed-document cooldown; newly discovered titles are prioritized',async()=>{
+ const store=new TestKV(),one=[{...items[0]}];let offline=true;
+ const adapter={list:async()=>one.map(i=>({...i})),load:async(item:CorpusItem)=>{if(offline)throw Error('ALIO HTTP 522');return source.load(item);}};
+ await scheduledRefresh(store.binding(),adapter,base);offline=false;one[0].updatedDate='new';
+ const fresh=await scheduledRefresh(store.binding(),adapter,base+60000,{forceList:true});assert.equal(fresh.processed,1);assert.equal(fresh.errors.count,0);assert.equal((await readIndex(store.binding(),base+60000)).documents[0].updatedDate,'new');
+ one.push({...items[1]});const added=await scheduledRefresh(store.binding(),adapter,base+120000,{forceList:true});assert.equal(added.processed,1);assert.equal(added.indexedRegulations,2);
+});
+await test('A-4 empty/stale list cannot fabricate completion; existing documents stay searchable',async()=>{
+ const empty=new TestKV();let loads=0;const adapter={list:async()=>{throw Error('ALIO HTTP 522');},load:async(item:CorpusItem)=>{loads++;return source.load(item);}};
+ const first=await scheduledRefresh(empty.binding(),adapter,base);assert.equal(first.processed,0);assert.equal(loads,0);assert.equal(first.errors.count,1);assert.equal((await readIndex(empty.binding(),base)).partial,true);
+ const saved=new TestKV();await scheduledRefresh(saved.binding(),{...source,list:async()=>items.slice(0,2)},base);
+ const at=base+MAX_LIST_AGE+1;await scheduledRefresh(saved.binding(),adapter,at);const stale=await readIndex(saved.binding(),at);assert.equal(stale.documents.length,2);assert.equal(stale.partial,true);assert.equal(stale.last_list_verified_at,new Date(base).toISOString());assert.equal(stale.errors.count,1);
+});
+await test('A-4 partial list page progress survives 522 and resumes without replacing committed list',async()=>{
+ let failPage=true;const pages:number[]=[];
+ const request=async(_url:string,init?:RequestInit,maxAttempts?:number)=>{assert.equal(maxAttempts,1);const page=JSON.parse(String(init?.body)).pageNo;pages.push(page);if(page===2&&failPage)throw Error('ALIO HTTP 522');return Response.json({data:{result:[{title:'page'+page,apbaId:'C0345',idx:String(page),reportFormNo:'21110',tableName:'T',idxName:'idx',reportGbn:'A',bidType:'',stDate:'2026-01-01',idate:'2026-02-02'}],page:{totalPage:3,totalCount:3}}});};
+ const store=new TestKV(),adapter={list:createCorpusSource(request).listBatch,load:source.load};
+ await scheduledRefresh(store.binding(),adapter,base);const state=await store.get<any>(INDEX_PREFIX+'state');assert.equal(state.listWork.nextPage,2);assert.equal(state.listWork.rows.length,1);assert.equal(state.items.length,0);
+ failPage=false;const recovered=await scheduledRefresh(store.binding(),adapter,base+RETRY_BASE);assert.equal(recovered.processed,2);assert.equal(recovered.indexedRegulations,2);assert.equal((await store.get<any>(INDEX_PREFIX+'state')).items.length,3);assert.deepEqual(pages,[1,2,2,3,1]);
 });
 writeFileSync('reports/corpus-index-regression.json',JSON.stringify({passed:true,tests:results,scope:'A only; synthetic failure injection; not live ALIO or deployed Workers'},null,2));
