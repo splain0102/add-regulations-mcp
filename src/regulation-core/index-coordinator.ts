@@ -6,7 +6,7 @@ import {bootstrapActive,handleBootstrap} from './index-bootstrap';
 
 type Run={run_id:string;build_version:string;trigger:'cron'|'manual';execution:'worker';started_at:string;finished_at:string|null;processed:number;duration_ms:number;subrequests_used:number;subrequest_limit:number;status:string;error_code?:string;result?:unknown};
 type History={latest?:Run;last_cron_started_at?:string;last_cron_finished_at?:string};
-type Lease={run_id:string;token:string;expires_at:number};
+type Lease={run_id:string;token:string;expires_at:number;build_version:string};
 export class CorpusIndexCoordinator {
  private busy=false;
  private state:DurableObjectState;
@@ -25,26 +25,28 @@ export class CorpusIndexCoordinator {
   try{
    const lease=await this.state.storage.get<Lease>('lease');
    if(path.startsWith('/bootstrap/')){
-    if(lease&&lease.expires_at>Date.now())return Response.json({error_code:'index_busy'},{status:409});
+    if(lease&&lease.build_version===BUILD_VERSION&&lease.expires_at>Date.now())return Response.json({error_code:'index_busy'},{status:409});
     return await handleBootstrap(path,request,this.state.storage,this.env.OAUTH_KV);
    }
    if(path==='/begin'){
-    if(lease&&lease.expires_at>Date.now())return Response.json({error_code:'index_busy'},{status:409});
+    if(lease&&lease.build_version===BUILD_VERSION&&lease.expires_at>Date.now())return Response.json({error_code:'index_busy'},{status:409});
     if(await bootstrapActive(this.state.storage))return Response.json({error_code:'bootstrap_in_progress'},{status:409});
     const history=await this.state.storage.get<History>('runs')??{};
     if(history.latest?.finished_at&&Date.now()-Date.parse(history.latest.finished_at)<1100)return Response.json({error_code:'index_rate_limited'},{status:429,headers:{'retry-after':'2'}});
     if(history.latest?.status==='running')console.error('corpus_index_previous_run_interrupted',{...history.latest,error_code:'timeout'});
-    const input=await request.json() as {trigger?:string};const started=Date.now();
+    const input=await request.json() as {trigger?:string;build_version?:string};
+    if(input.build_version&&input.build_version!==BUILD_VERSION)return Response.json({error_code:'index_build_changed'},{status:409});
+    const started=Date.now();
     const run:Run={run_id:crypto.randomUUID(),build_version:BUILD_VERSION,trigger:input.trigger==='cron'?'cron':'manual',execution:'worker',started_at:new Date(started).toISOString(),finished_at:null,processed:0,duration_ms:0,subrequests_used:0,subrequest_limit:36,status:'running'};
     history.latest=run;if(run.trigger==='cron')history.last_cron_started_at=run.started_at;
-    const next:Lease={run_id:run.run_id,token:crypto.randomUUID(),expires_at:started+20*60*1000};
+    const next:Lease={run_id:run.run_id,token:crypto.randomUUID(),expires_at:started+20*60*1000,build_version:BUILD_VERSION};
     await this.state.storage.put({runs:history,lease:next});
     console.log('corpus_index_run_started',JSON.stringify(run));
     return Response.json({run,lease_token:next.token});
    }
    if(path==='/assert'||path==='/finish'){
     const input=await request.json() as {run_id:string;lease_token:string;run?:Run};
-    if(!lease||lease.run_id!==input.run_id||lease.token!==input.lease_token||lease.expires_at<=Date.now())return Response.json({error_code:'index_lease_expired'},{status:409});
+    if(!lease||lease.build_version!==BUILD_VERSION||lease.run_id!==input.run_id||lease.token!==input.lease_token||lease.expires_at<=Date.now())return Response.json({error_code:'index_lease_expired'},{status:409});
     if(path==='/assert')return new Response(null,{status:204});
     const history=await this.state.storage.get<History>('runs')??{};
     const run={...history.latest!,...input.run,run_id:lease.run_id};history.latest=run;
@@ -61,7 +63,7 @@ type CoordinatorEnv={CORPUS_INDEX_COORDINATOR:DurableObjectNamespace;INDEX_ADMIN
 function coordinator(env:CoordinatorEnv){return env.CORPUS_INDEX_COORDINATOR.get(env.CORPUS_INDEX_COORDINATOR.idFromName('add-corpus-index'));}
 export async function runCoordinatedIndex(env:CoordinatorEnv,trigger:'cron'|'manual'){
  const stub=coordinator(env);const send=(path:string,body:unknown)=>stub.fetch('https://index.internal'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
- const acquired=await send('/begin',{trigger});if(!acquired.ok)return acquired;
+ const acquired=await send('/begin',{trigger,build_version:BUILD_VERSION});if(!acquired.ok)return acquired;
  const {run,lease_token}=await acquired.json() as {run:Run;lease_token:string};
  const transport=createIndexRequest(fetch,Date.now,36),started=Date.now();
  const identity={run_id:run.run_id,lease_token};
