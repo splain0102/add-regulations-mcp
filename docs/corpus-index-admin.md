@@ -1,16 +1,18 @@
 # Corpus index operations
 
-Main merges automatically deploy this Worker. The retry-policy release is 1.10.8.
+Main merges automatically deploy this Worker. The Worker-execution/bootstrap release is 1.10.9.
 `wrangler.jsonc` is the configuration file; there is no separate production `env`.
 The Cron remains `*/5 * * * *` (UTC), using the same OAUTH_KV namespace.
 
 Cron and manual batches use one SQLite Durable Object,
 `CORPUS_INDEX_COORDINATOR` / `CorpusIndexCoordinator`. The migration provisions
-this coordinator on deployment. It serializes writers, rejects overlapping runs
+this coordinator on deployment. ALIO fetches and parsing execute in the caller
+Worker; the object only grants a 20-minute writer lease, validates commits and
+stores run history. Expired writers cannot publish or roll back a snapshot. It serializes writers, rejects overlapping runs
 with 409 and immediate repeat runs with 429, and stores run history without
 adding heartbeat writes to the shared OAuth KV quota. Corpus documents, staging,
 cursor and current-build errors remain in KV. Each batch processes at most two
-documents with at most 40 external attempts, including retries and redirects.
+documents with at most 36 external attempts, including retries and redirects.
 
 ## Refresh and retry policy
 
@@ -72,7 +74,7 @@ record identifies an interrupted run; the next run logs that interruption.
 
 ## Release acceptance
 
-1. Confirm hello version 1.10.8 and its git SHA.
+1. Confirm hello version 1.10.9 and its git SHA.
 2. Invoke one administrator batch. Require processed > 0 and an advanced
    lastVerifiedAt; inspect `corpus_index_run_started/finished` logs.
 3. Confirm error samples belong to that build and no old no_attachment samples
@@ -87,3 +89,41 @@ record identifies an interrupted run; the next run logs that interruption.
 The repository configuration and local workerd tests cannot prove the account's
 actual Cron registration, environment, administrator secret or production run
 results. Check those through the account dashboard/logs after release.
+
+## ALIO communication diagnosis
+
+Authenticated `POST /admin/probe-alio` probes the same fixed public ALIO detail
+URL through Worker and Durable Object, each with standard redirects and bounded
+manual redirects. Results include execution scope, HTTP status, response bytes
+(up to a bounded stream sample), CF-Ray, server, elapsed time and build SHA.
+Errors saved by indexing now retain HTTP/network diagnostics. This comparison
+helps distinguish execution location from redirect/transport behavior; a local
+mock cannot establish the cause of a production 522.
+
+## Initial full corpus bootstrap
+
+After actual ALIO acceptance succeeds, CI exports
+`reports/corpus-index-bootstrap.json` in the evidence artifact. The export uses
+only the currently referenced corpus shards, never OAuth KV data. The list is
+rechecked at acceptance completion. This is a trusted administrator import; the
+receiving Worker validates the supplied snapshot rather than claiming to fetch
+its entire source list again. The manifest must be no older than 30 minutes.
+
+```sh
+node scripts/bootstrap-index.mjs export
+node --use-env-proxy scripts/bootstrap-index.mjs upload
+```
+
+Upload creates a 30-minute session, sends 16 immutable shards individually and
+activates one manifest only after all checks succeed: complete title coverage,
+ALIO-only detail URLs, metadata, parser identity, SHA-256 shard checksums, raw
+file hash format (source bytes are checked in CI), fileNo, document age, 2 MB per shard and 16 MB corpus limits. Upload
+and activation retries are idempotent. Cron and manual writers are excluded
+during the session. Missing/corrupt shards or a failed final KV write preserve
+the preceding manifest. OAuth keys are untouched. Abandoned staging keys remain
+unreferenced; they can be removed by an administrator after session expiry.
+
+After bootstrap, the existing hourly list comparison prioritizes new/changed
+documents. The 12-hour file recheck also detects replacement attachments whose
+list dates have not changed. Bootstrap does not change Cron registration,
+parser_version, tool list, feature flags or production auto-deployment.

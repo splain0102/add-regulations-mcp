@@ -12,13 +12,15 @@ export const RETRY_BASE = 5 * 60 * 1000;
 export function retryDelay(attempt:number){return Math.min(60 * 60 * 1000,RETRY_BASE * 2 ** Math.min(4,Math.max(0,attempt-1)));}
 export type CorpusItem = {title:string;detailUrl:string;revisionDate?:string;updatedDate?:string};
 export type CorpusDocument = CorpusItem & {fileNo:string;text:string;sha256:string;verifiedAt:string;parserVersion:string};
-type ErrorEntry = {title:string;message:string;checkedAt:string;code?:string;error_code?:string;build_version?:string;retry_attempts?:number;next_retry_at?:string};
+type ErrorEntry = {title:string;message:string;checkedAt:string;code?:string;error_code?:string;build_version?:string;retry_attempts?:number;next_retry_at?:string;diagnostics?:Record<string,unknown>};
+export function errorDiagnostics(error:unknown){return error&&typeof error==='object'&&'diagnostics' in error?error.diagnostics as Record<string,unknown>:undefined;}
 type Shard = {documents:Record<string,CorpusDocument>};
 export type IndexState = {
   schema:2;cursor:number;pending?:string[];fallbackRefs?:Record<string,string>;items:CorpusItem[];refs:Record<string,string>;sizes:Record<string,number>;
   listWork?:unknown;checked:Record<string,string>;errors:Record<string,ErrorEntry>;lastCheckedAt:string;
   listError?:ErrorEntry;listRetryAttempts?:number;nextListAttemptAt?:string;
   index_build_version?:string;lastVerifiedAt?:string;sourceErrorAt?:string;sourceErrorCode?:string;lastCompletedAt?:string;sourceError?:string;indexedTitles?:string[];garbage:{key:string;after:number}[];
+  sourceErrorDetails?:Record<string,unknown>;
 };
 export type CorpusSource = {list(work?:unknown):Promise<CorpusItem[]|{items?:CorpusItem[];work?:unknown}>;load(item:CorpusItem):Promise<{fileNo:string;text:string;bytes:Uint8Array;parserVersion:string}>};
 export function shardId(title:string){let hash=2166136261;for(const c of title){hash^=c.charCodeAt(0);hash=Math.imul(hash,16777619);}return (hash>>>0)%INDEX_SHARDS;}
@@ -34,7 +36,7 @@ async function readShard(kv:KVNamespace,state:IndexState,id:number):Promise<Shar
 export function indexErrorCode(error:unknown){
  const text=String(error)+' '+(error&&typeof error==='object'&&'cause' in error?String(error.cause):'');
  if(/subrequest|index_request_budget_exhausted/i.test(text))return 'subrequest_limit';
- if(/timeout|timed.?out|abort|deadline_exhausted/i.test(text))return 'timeout';
+ if(/timeout|timed.?out|abort|deadline_exhausted|lease_expired/i.test(text))return 'timeout';
  if(/no_attachment/i.test(text))return 'no_attachment';
  if(/fetch|HTTP|network|KV|index_.*(?:unavailable|write_failed)/i.test(text))return 'fetch_failed';
  return 'parse_failed';
@@ -42,7 +44,7 @@ export function indexErrorCode(error:unknown){
 function errorSummary(state:IndexState){
  const errors=Object.values(state.errors).filter(e=>!state.index_build_version||e.build_version===state.index_build_version);
  if(state.listError)errors.push(state.listError);
- if(state.sourceError)errors.push({title:'ALIO/KV',message:state.sourceError,checkedAt:state.sourceErrorAt??'',build_version:state.index_build_version,error_code:state.sourceErrorCode??indexErrorCode(state.sourceError)});
+ if(state.sourceError)errors.push({title:'ALIO/KV',message:state.sourceError,checkedAt:state.sourceErrorAt??'',build_version:state.index_build_version,error_code:state.sourceErrorCode??indexErrorCode(state.sourceError),diagnostics:state.sourceErrorDetails});
  errors.sort((a,b)=>b.checkedAt.localeCompare(a.checkedAt));
  return {count:errors.length,sample:errors.slice(0,3),retry_cursor:errors.length?state.cursor:null};
 }
@@ -52,12 +54,13 @@ function timing(state:IndexState){
 }
 // KV is not a lock: run one Cron writer. Immutable shards + one manifest prevent
 // a failed multi-key write from destroying the preceding committed snapshot.
-export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.now(),options?:{buildVersion?:string;forceList?:boolean;forceDocuments?:boolean}){
+export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.now(),options?:{buildVersion?:string;forceList?:boolean;forceDocuments?:boolean;beforeCommit?:()=>Promise<void>}){
   const previous=await readState(kv)??emptyState();
   const buildVersion=options?.buildVersion??previous.index_build_version??'test';
   if(previous.index_build_version!==buildVersion){
     // Start new build diagnostics without discarding committed documents or refs.
     previous.index_build_version=buildVersion;previous.errors={};delete previous.sourceError;delete previous.sourceErrorAt;delete previous.sourceErrorCode;
+    delete previous.sourceErrorDetails;
     delete previous.listError;delete previous.listRetryAttempts;delete previous.nextListAttemptAt;
     previous.checked={};previous.pending=previous.items.map(item=>item.title);
   }
@@ -82,13 +85,14 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
         if(/index_list_changed|incomplete_index_list|invalid_index_list|invalid_or_empty_regulation_list/.test(String(error)))state.listWork=undefined;
         const attempts=(state.listRetryAttempts??0)+1;state.listRetryAttempts=attempts;
         state.nextListAttemptAt=new Date(now+retryDelay(attempts)).toISOString();
-        state.listError={title:'ALIO list',message:String(error).slice(0,240),checkedAt:timestamp,build_version:buildVersion,error_code:indexErrorCode(error),retry_attempts:attempts,next_retry_at:state.nextListAttemptAt};
+        state.listError={title:'ALIO list',message:String(error).slice(0,240),checkedAt:timestamp,build_version:buildVersion,error_code:indexErrorCode(error),retry_attempts:attempts,next_retry_at:state.nextListAttemptAt,diagnostics:errorDiagnostics(error)};
       }
     }
     const items=freshItems??state.items;
-    if(!items.length&&!freshItems){await kv.put(INDEX_PREFIX+'state',JSON.stringify(state));return {processed:0,updated:0,index_build_version:buildVersion,index_status:'building_list',errors:errorSummary(state),...timing(state)};}
+    if(!items.length&&!freshItems){await options?.beforeCommit?.();await kv.put(INDEX_PREFIX+'state',JSON.stringify(state));return {processed:0,updated:0,index_build_version:buildVersion,index_status:'building_list',errors:errorSummary(state),...timing(state)};}
     if(!items.length||new Set(items.map(i=>i.title)).size!==items.length)throw Error('invalid_or_empty_regulation_list');
     state.items=items;if(freshItems)state.lastCheckedAt=timestamp;delete state.sourceError;delete state.sourceErrorAt;delete state.sourceErrorCode;
+    delete state.sourceErrorDetails;
     const titles=new Set(items.map(i=>i.title));
     const indexed=new Set((state.indexedTitles??[]).filter(title=>titles.has(title)));
     for(const title of Object.keys(state.errors))if(!titles.has(title))delete state.errors[title];
@@ -126,8 +130,10 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
         for(const title of Object.keys(candidate.documents))indexed.add(title);
         if(!old||old.sha256!==hash||old.fileNo!==doc.fileNo||old.parserVersion!==doc.parserVersion||!sameMetadata(old,doc))updated++;
         delete state.errors[item.title];state.pending=state.pending.filter(title=>title!==item.title);
-      }catch(error){const attempts=(state.errors[item.title]?.retry_attempts??0)+1;state.errors[item.title]={title:item.title,message:String(error).slice(0,240),checkedAt:timestamp,code:indexErrorCode(error),error_code:indexErrorCode(error),build_version:buildVersion,retry_attempts:attempts,next_retry_at:new Date(now+retryDelay(attempts)).toISOString()};}
+      }catch(error){const attempts=(state.errors[item.title]?.retry_attempts??0)+1;state.errors[item.title]={title:item.title,message:String(error).slice(0,240),checkedAt:timestamp,code:indexErrorCode(error),error_code:indexErrorCode(error),build_version:buildVersion,retry_attempts:attempts,next_retry_at:new Date(now+retryDelay(attempts)).toISOString(),diagnostics:errorDiagnostics(error)};}
     }
+    // Verify the writer lease before any mutations and again before publication.
+    await options?.beforeCommit?.();
     // New keys are written first; referenced old keys stay intact on any failure.
     for(const [id,shard] of changed){
       const key=INDEX_PREFIX+'shard:'+id+':'+crypto.randomUUID();
@@ -143,12 +149,14 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
     const due=state.garbage.filter(g=>g.after<=now&&!protectedKeys.includes(g.key)).slice(0,INDEX_BATCH);
     for(const g of due)if(!Object.values(state.refs).includes(g.key))await kv.delete(g.key);
     state.garbage=state.garbage.filter(g=>!due.includes(g));
-    await kv.put(INDEX_PREFIX+'state',JSON.stringify(state));
+    await options?.beforeCommit?.();await kv.put(INDEX_PREFIX+'state',JSON.stringify(state));
   }catch(error){
     // State records failure but points to exactly the old, valid snapshot.
     previous.sourceError=String(error).slice(0,240);previous.sourceErrorAt=timestamp;previous.sourceErrorCode=indexErrorCode(error);
+    previous.sourceErrorDetails=errorDiagnostics(error);
     previous.garbage.push(...writtenKeys.map(key=>({key,after:now+15*60*1000})));
     previous.listWork=/index_list_changed|incomplete_index_list/.test(String(error))?undefined:state.listWork;
+    await options?.beforeCommit?.();
     try{await kv.put(INDEX_PREFIX+'state',JSON.stringify(previous));}catch(writeError){throw Error('index_state_write_failed:'+String(writeError));}
     return {processed,updated:0,indexedRegulations:previous.indexedTitles?.length??0,index_build_version:buildVersion,lastVerifiedAt:previous.lastVerifiedAt??null,lastCompletedAt:previous.lastCompletedAt??null,index_status:'stale',errors:errorSummary(previous),...timing(previous)};
   }

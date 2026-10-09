@@ -1,4 +1,5 @@
-import {CorpusIndexCoordinator,handleIndexAdmin} from '../src/regulation-core/index-coordinator';
+import {handleBootstrap,bootstrapActive} from '../src/regulation-core/index-bootstrap';
+import {CorpusIndexCoordinator,handleIndexAdmin,runCoordinatedIndex} from '../src/regulation-core/index-coordinator';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {transformSync} from 'esbuild';
@@ -135,11 +136,12 @@ await test('A-3 latest-first samples contain build and codes; timeout/fetch/pars
 });
 await test('A-3 coordinator preserves start and finish on early failure, rejects concurrent writer; token absence fails closed',async()=>{
  const values=new Map<string,unknown>();let startReady!:()=>void;const started=new Promise<void>(resolve=>startReady=resolve);let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);
- const storage={get:async(key:string)=>structuredClone(values.get(key)),put:async(key:string,value:unknown)=>{values.set(key,structuredClone(value));if((value as any).latest?.status==='running')startReady();}};
+ const storage={get:async(key:string)=>structuredClone(values.get(key)),put:async(key:any,value?:unknown)=>{const entries=typeof key==='string'?[[key,value]]:Object.entries(key);for(const [name,data] of entries){values.set(name,structuredClone(data));if((data as any)?.latest?.status==='running')startReady();}}};
  const badKV={get:async()=>{await gate;throw Error('KV unavailable');}};
  const coordinator=new CorpusIndexCoordinator({storage} as any,{OAUTH_KV:badKV as any});
- const request=()=>new Request('https://internal/run',{method:'POST',body:JSON.stringify({trigger:'cron'})});
- const first=coordinator.fetch(request());await started;const second=await coordinator.fetch(request());assert.equal(second.status,409);release();assert.equal((await first).status,500);
+ const request=()=>new Request('https://internal/begin',{method:'POST',body:JSON.stringify({trigger:'cron'})});
+ const env={OAUTH_KV:badKV as any,CORPUS_INDEX_COORDINATOR:{idFromName:()=> 'test',get:()=>({fetch:(url:any,init:any)=>coordinator.fetch(url instanceof Request?url:new Request(url,init))})} as any};
+ const first=runCoordinatedIndex(env,'cron');await started;const second=await coordinator.fetch(request());assert.equal(second.status,409);release();assert.equal((await first).status,500);
  const status=await (await coordinator.fetch(new Request('https://internal/status'))).json() as any;assert(status.last_cron_started_at);assert(status.last_cron_finished_at);assert.equal(status.last_index_run.error_code,'fetch_failed');assert.equal(status.last_index_run.processed,0);assert(status.last_index_run.finished_at);
  const disabled=await handleIndexAdmin(new Request('https://worker/admin/trigger-index',{method:'POST'}),{OAUTH_KV:badKV as any,CORPUS_INDEX_COORDINATOR:{} as any});assert.equal(disabled?.status,503);
 });
@@ -202,5 +204,35 @@ await test('A-4 partial list page progress survives 522 and resumes without repl
  const store=new TestKV(),adapter={list:createCorpusSource(request).listBatch,load:source.load};
  await scheduledRefresh(store.binding(),adapter,base);const state=await store.get<any>(INDEX_PREFIX+'state');assert.equal(state.listWork.nextPage,2);assert.equal(state.listWork.rows.length,1);assert.equal(state.items.length,0);
  failPage=false;const recovered=await scheduledRefresh(store.binding(),adapter,base+RETRY_BASE);assert.equal(recovered.processed,2);assert.equal(recovered.indexedRegulations,2);assert.equal((await store.get<any>(INDEX_PREFIX+'state')).items.length,3);assert.deepEqual(pages,[1,2,2,3,1]);
+});
+await test('A-5 HTTP and network diagnostics persist; redirects use browser method rules',async()=>{
+ const transport=createIndexRequest(async()=>new Response('origin connection timeout',{status:522,headers:{'cf-ray':'test-ray','server':'cloudflare'}}),Date.now,36);
+ const store=new TestKV();const result=await scheduledRefresh(store.binding(),{...source,list:async()=>items.slice(0,1),load:async()=>{await transport('https://www.alio.go.kr/item/test',undefined,1);throw Error('unreachable');}},base);
+ const diagnostics=result.errors.sample[0].diagnostics!;assert.equal(diagnostics.http_status,522);assert.equal(diagnostics.response_bytes,25);assert.equal(diagnostics.cf_ray,'test-ray');assert.equal(result.errors.sample[0].error_code,'fetch_failed');
+ const network=createIndexRequest(async()=>{throw new TypeError('fetch failed');});await assert.rejects(network('https://www.alio.go.kr/item/test',undefined,1),(error:any)=>error.diagnostics.http_status===null&&error.diagnostics.request_url.includes('alio'));
+ const methods:string[]=[];const redirected=createIndexRequest(async(_url,init)=>{methods.push(String(init?.method));return methods.length===1?new Response(null,{status:302,headers:{location:'/item/final'}}):new Response('OK');});await redirected('https://www.alio.go.kr/item/test',{method:'POST',body:'request'},1);assert.deepEqual(methods,['POST','GET']);
+});
+await test('A-5 expired writer lease cannot mutate or replace a committed snapshot',async()=>{
+ const store=new TestKV();await scheduledRefresh(store.binding(),smallSource,base);const previous=store.values.get(INDEX_PREFIX+'state');const writes=store.writes;
+ await assert.rejects(scheduledRefresh(store.binding(),smallSource,base+60000,{forceDocuments:true,beforeCommit:async()=>{throw Error('index_lease_expired');}}),/index_lease_expired/);
+ assert.equal(store.values.get(INDEX_PREFIX+'state'),previous);assert.equal(store.writes,writes);assert.equal(indexErrorCode(Error('index_lease_expired')),'timeout');
+});
+await test('A-5 administrator bootstrap validates all 213 documents before atomic activation and preserves OAuth',async()=>{
+ const store=new TestKV();await scheduledRefresh(store.binding(),smallSource,base);const before=store.values.get(INDEX_PREFIX+'state');store.values.set('oauth:sentinel','{"preserved":true}');
+ const values=new Map<string,unknown>(),storage={get:async(key:string)=>structuredClone(values.get(key)),put:async(key:string,value:unknown)=>values.set(key,structuredClone(value))} as any;
+ const send=(path:string,body:any)=>handleBootstrap('/bootstrap/'+path,new Request('https://internal/bootstrap/'+path,{method:'POST',body:JSON.stringify(body)}),storage,store.binding());
+ const fresh=items.map(item=>({...item,detailUrl:'https://www.alio.go.kr/item/itemBoard21110.do?idx=1'}));
+ assert.equal((await send('begin',{items:fresh,parser_version:'old',source_verified_at:new Date().toISOString()})).status,400);
+ const begin=await send('begin',{items:fresh,parser_version:PARSER_VERSION,source_verified_at:new Date().toISOString()});assert.equal(begin.status,200);const {session_id}=await begin.json() as any;assert(await bootstrapActive(storage));
+ assert.equal((await send('activate',{session_id})).status,409);assert.equal(store.values.get(INDEX_PREFIX+'state'),before);
+ for(let id=0;id<16;id++){
+  const documents=Object.fromEntries(fresh.filter(item=>shardId(item.title)===id).map(item=>[item.title,{...item,fileNo:'100',text:item.title==='보안과제 관리요령'?'제8조(외국인 참여)\n외국인 승인':'제1조(목적)\n업무',sha256:'a'.repeat(64),verifiedAt:new Date().toISOString(),parserVersion:PARSER_VERSION}]));
+  const hash=await sha256(new TextEncoder().encode(JSON.stringify({documents})));const input={session_id,id,documents,sha256:hash};
+  assert.equal((await send('shard',{...input,sha256:'b'.repeat(64)})).status,400);assert.equal((await send('shard',input)).status,200);assert.equal((await send('shard',input)).status,200);
+ }
+ const stage=values.get('bootstrap') as any;const saved=store.values.get(stage.refs[0])!;store.values.delete(stage.refs[0]);assert.equal((await send('activate',{session_id})).status,409);assert.equal(store.values.get(INDEX_PREFIX+'state'),before);store.values.set(stage.refs[0],saved);
+ store.failKey=':state';assert.equal((await send('activate',{session_id})).status,500);assert.equal(store.values.get(INDEX_PREFIX+'state'),before);store.failKey='';
+ assert.equal((await send('activate',{session_id})).status,200);assert.equal((await send('activate',{session_id})).status,200);
+ const index=await readIndex(store.binding());assert.equal(index.documents.length,213);assert.equal(index.partial,false);assert(index.lastCompletedAt);assert.equal(index.errors.count,0);assert.equal(store.values.get('oauth:sentinel'),'{"preserved":true}');
 });
 writeFileSync('reports/corpus-index-regression.json',JSON.stringify({passed:true,tests:results,scope:'A only; synthetic failure injection; not live ALIO or deployed Workers'},null,2));
