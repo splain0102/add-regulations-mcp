@@ -1,6 +1,6 @@
 // Lightweight Korean word rules; no morphology service or runtime dependency.
 export const fold=(s:string)=>s.normalize('NFKC').toLowerCase().replace(/[·ㆍ･‧]/g,'');
-const suffix=/^(?:(?:을|를|이|가|은|는|의|에|로|으로|와|과|도|만|부터|까지|에게|께|보다|및|등|서)(?:는|도|만|서|게|부터|까지)?|보고(?:서)?(?:를|의|는|에)?|(?:하|되|받)[가-힣]*)$/;
+const suffix=/^(?:(?:을|를|이|가|은|는|의|에|로|으로|와|과|도|만|부터|까지|에게|께|보다|및|등|서){1,3}|보고(?:서)?(?:를|의|는|에)?|(?:하|되|받)[가-힣]*)$/;
 export function wordWeight(word:string,term:string){
  return normalizedWeight(fold(word),fold(term));
 }
