@@ -152,25 +152,45 @@ export async function fetchWithRetry(
   );
 }
 
-async function fetchAlio(url: string): Promise<string> {
+type AttachmentDiagnostics = {http_status:number|null;response_bytes:number;subrequests_used:number|null;subrequest_limit:number|null};
+type AlioRequest = typeof fetchWithRetry & {usage?:()=>{used:number;limit:number;status:number|null}};
+function attachmentErrorCode(error:unknown){return /Too many subrequests|index_request_budget_exhausted|subrequest_limit/i.test(String(error))?'subrequest_limit':'fetch_failed';}
+function attachmentFailure(code:string,url:string,diagnostics:AttachmentDiagnostics,error?:unknown):Error {
+ console.warn('alio_attachment_collection_failed',{code,url,...diagnostics,message:error?String(error).slice(0,240):undefined});
+ return new Error('selection_error:'+code);
+}
+async function fetchAlio(url: string,request:AlioRequest=fetchWithRetry,diagnostics?:AttachmentDiagnostics): Promise<string> {
   const target = new URL(url);
   if (target.origin !== ALIO_BASE) throw new Error("ALIO 주소만 조회할 수 있습니다.");
-  const response = await fetchWithRetry(url, {
+  let response:Response;
+  try{response = await request(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 ADD-Regulations-MCP/1.0",
       Accept:
         "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
       "Accept-Language": "ko-KR,ko;q=0.9",
     },
-  });
+  });}catch(error){
+   if(!diagnostics)throw error;
+   const usage=request.usage?.();Object.assign(diagnostics,{http_status:usage?.status??null,subrequests_used:usage?.used??null,subrequest_limit:usage?.limit??null});
+   throw attachmentFailure(attachmentErrorCode(error),url,diagnostics,error);
+  }
+  let html:string;
+  try{html=await response.text();}catch(error){
+   if(!diagnostics)throw error;
+   const usage=request.usage?.();Object.assign(diagnostics,{http_status:response.status,subrequests_used:usage?.used??null,subrequest_limit:usage?.limit??null});
+   throw attachmentFailure('fetch_failed',url,diagnostics,error);
+  }
+  if(diagnostics){const usage=request.usage?.();Object.assign(diagnostics,{http_status:response.status,response_bytes:new TextEncoder().encode(html).byteLength,subrequests_used:usage?.used??null,subrequest_limit:usage?.limit??null});}
 
   if (!response.ok) {
+    if(diagnostics)throw attachmentFailure('fetch_failed',url,diagnostics,Error('ALIO HTTP '+response.status));
     throw new Error(
       `ALIO 요청 실패: HTTP ${response.status}`
     );
   }
 
-  return await response.text();
+  return html;
 }
 
 export function normalizeDate(value?: string): string {
@@ -470,11 +490,14 @@ export async function selectLatestAttachment(attachments:Attachment[],revisionDa
  return {selected:winner?.file??null,selection_reason:reason,other_attachments:evidence.filter(e=>e!==winner).map(({file,failed,bodyMatch,filenameMatch,excluded})=>({...file,detectedDate:file.detectedDate??null,selection_reason:failed?'parse_failed':excluded?'not_probed_latest_revision_confirmed':bodyMatch||filenameMatch?'not_selected_tiebreak_format_or_fileNo':'revision_date_does_not_match_selected_version'}))};
 }
 
-async function getRegulationDetail(
+export async function getRegulationDetail(
   url: string,
-  fallbackUpdatedDate?:string
+  fallbackUpdatedDate?:string,
+  options?:{request?:AlioRequest;probe?:typeof attachmentRevisionText;fallbackRevisionDate?:string;requireAttachments?:boolean}
 ) {
-  const html = await fetchAlio(url);
+  const diagnostics:AttachmentDiagnostics={http_status:null,response_bytes:0,subrequests_used:null,subrequest_limit:null};
+  const request=options?.request??fetchWithRetry;
+  const html = await fetchAlio(url,request,options?.requireAttachments?diagnostics:undefined);
   const plain = cleanHtml(html);
 
   const title =
@@ -499,12 +522,14 @@ async function getRegulationDetail(
 
   const attachments =
     extractAttachments(html);
+  if(options?.requireAttachments&&!attachments.length)throw attachmentFailure('no_attachment',url,diagnostics);
 
   const selection =
     await selectLatestAttachment(
       attachments,
-      revisionDate,
-      updatedDate ?? fallbackUpdatedDate ?? ''
+      revisionDate ?? options?.fallbackRevisionDate,
+      updatedDate ?? fallbackUpdatedDate ?? '',
+      options?.probe
     );
   const latestAttachment = selection.selected;
 
@@ -736,7 +761,7 @@ type DocumentEntry = {
  pdfPending?: Promise<void>;
 };
 // Bounded isolate cache. Metadata is re-read before every lookup; changed fileNo/idate evicts the old entry.
-export const PARSER_VERSION = "1.10.4-parser.1";
+export const PARSER_VERSION = "1.10.5-parser.1";
 export const normalizeRegulationTitle = (value:string) => value.normalize("NFKC").toLowerCase().replace(/[·･‧ㆍ・\s「」｢｣()（）]/g,"");
 const documentCache = new Map<string, Promise<DocumentEntry>>();
 const latestDocumentKey = new Map<string, string>();
@@ -798,18 +823,20 @@ export async function getRegulationMetadata(name:string) {
  version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
 /** A-only source: fresh list, fresh attachment selection and raw-file SHA-256. */
-export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Date.now):typeof fetchWithRetry {
- let requests=0;const deadline=now()+240_000;
- return async (url,init,maxAttempts=3)=>{
+export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Date.now):AlioRequest {
+ let requests=0,status:number|null=null;const deadline=now()+240_000;
+ const request:AlioRequest=async (url,init,maxAttempts=3)=>{
   let last:unknown;
   for(let attempt=0;attempt<maxAttempts;attempt++){
    let target=url;
    try{
     for(let redirect=0;redirect<6;redirect++){
-     if(requests>=40||now()>=deadline)throw Error('index_request_budget_exhausted');
+     if(requests>=40)throw Error('index_request_budget_exhausted');
+     if(now()>=deadline)throw Error('index_request_deadline_exhausted');
      if(new URL(target).origin!==ALIO_BASE)throw Error('index_redirect_origin_rejected');
-     requests++;
+     requests++;status=null;
      const response=await rawFetch(target,{...init,redirect:'manual',signal:AbortSignal.timeout(Math.min(25000,Math.max(1,deadline-now())))});
+     status=response.status;
      if(response.status>=300&&response.status<400&&response.headers.has('location')){
       target=new URL(response.headers.get('location')!,target).href;await response.body?.cancel();continue;
      }
@@ -817,10 +844,11 @@ export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Da
      return response;
     }
     throw Error('index_redirect_limit');
-   }catch(error){last=error;if(/budget_exhausted|origin_rejected|redirect_limit/.test(String(error)))throw error;if(attempt+1<maxAttempts)await sleep(400*(attempt+1));}
+   }catch(error){last=error;if(/budget_exhausted|deadline_exhausted|origin_rejected|redirect_limit|Too many subrequests/.test(String(error)))throw error;if(attempt+1<maxAttempts)await sleep(400*(attempt+1));}
   }
   throw last;
  };
+ request.usage=()=>({used:requests,limit:40,status});return request;
 }
 type IndexListWork={rows:AlioRow[];nextPage:number;totalPage:number;totalCount:number;startedAt:number};
 async function collectIndexList(request:typeof fetchWithRetry,work?:unknown){
@@ -845,21 +873,23 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
   list:()=>listRegulations({fresh:true,request}),
   listBatch:(work?:unknown)=>collectIndexList(request,work),
   async load(item:CorpusItem){
-   const response=await request(item.detailUrl);if(!response.ok)throw Error('ALIO detail HTTP '+response.status);
-   const attachments=extractAttachments(await response.text());
    // One invocation-local byte cache: selection and SHA use the same fresh file.
    let lastFile:{fileNo:string;value:Awaited<ReturnType<typeof downloadLatestFile>>}|undefined;
    async function download(file:Attachment){if(lastFile?.fileNo===file.fileNo)return lastFile.value;const value=await downloadLatestFile(file,request);if(value.bytes.byteLength>4_000_000)throw Error("index_attachment_size_limit");lastFile={fileNo:file.fileNo,value};return value;}
-   const selection=await selectLatestAttachment(attachments,item.revisionDate,item.updatedDate??'',async file=>{
-    const loaded=await download(file);return extractRevisionSection(loaded.bytes,loaded.extension);
-   });
-   if(!selection.selected)throw Error('selection_error:'+selection.selection_reason.join(','));
-   const file=await download(selection.selected);let text:string;
+   let probeError:unknown;
+   const detail=await getRegulationDetail(item.detailUrl,item.updatedDate,{request,fallbackRevisionDate:item.revisionDate,requireAttachments:true,probe:async file=>{
+    try{const loaded=await download(file);return await extractRevisionSection(loaded.bytes,loaded.extension);}catch(error){probeError=error;throw error;}
+   }});
+   if(!detail.latestAttachment){
+    if(probeError&&/fetch|HTTP|subrequest|budget_exhausted|deadline_exhausted/i.test(String(probeError))){const usage=(request as AlioRequest).usage?.();throw attachmentFailure(attachmentErrorCode(probeError),item.detailUrl,{http_status:usage?.status??null,response_bytes:0,subrequests_used:usage?.used??null,subrequest_limit:usage?.limit??null},probeError);}
+    throw Error('selection_error:'+detail.selection_reason.join(','));
+   }
+   const file=await download(detail.latestAttachment);let text:string;
    if(file.extension==='hwpx')text=extractHwpxText(file.bytes);
    else if(file.extension==='hwp')text=await hwpToText(file.bytes);
    else if(file.extension==='pdf'){const result=await extractText(file.bytes.slice(),{mergePages:true});text=Array.isArray(result.text)?result.text.join('\n\n'):result.text;}
    else throw Error('unsupported_index_format:'+file.extension);
-   return {fileNo:selection.selected.fileNo,text,bytes:file.bytes,parserVersion:PARSER_VERSION};
+   return {fileNo:detail.latestAttachment.fileNo,text,bytes:file.bytes,parserVersion:PARSER_VERSION};
   }
  };
 }

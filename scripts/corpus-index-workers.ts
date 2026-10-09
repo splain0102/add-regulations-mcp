@@ -28,7 +28,10 @@ await build({stdin:{contents:source,loader:'ts',resolveDir:process.cwd()+'/src'}
 const mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'.build-check/oauth-test.js',compatibilityDate:'2026-10-01',compatibilityFlags:['global_fetch_strictly_public'],kvNamespaces:['OAUTH_KV'],bindings:{ACCESS_CLIENT_ID:'test',ACCESS_CLIENT_SECRET:'test',COOKIE_ENCRYPTION_KEY:'0123456789abcdef0123456789abcdef'},outboundService:async request=>{
  outbound++;const url=new URL(request.url);
  if(url.pathname.endsWith('itemReportListSusi.json'))return Response.json({data:{result:[{title:'보안과제 관리요령',apbaId:'C0345',idx:'1',reportFormNo:'21110',tableName:'COMM_RULE',idxName:'RULE_NO',reportGbn:'N',bidType:'',stDate:'2026.01.01',idate:'2026.02.02'}],page:{totalPage:1,totalCount:1}}});
- if(url.pathname.includes('itemBoard'))return new Response('<a href="/download/rulefiledown.json?fileNo=100">보안과제 관리요령.hwpx</a>');
+ if(url.pathname.includes('itemBoard')){
+  assert.match(request.headers.get('user-agent')??'',/ADD-Regulations-MCP/);assert.match(request.headers.get('accept')??'',/text\/html/);assert.match(request.headers.get('accept-language')??'',/ko-KR/);
+  return new Response('<a href="/download/rulefiledown.json?fileNo=100">보안과제 관리요령.hwpx</a>');
+ }
  if(url.pathname.includes('rulefiledown'))return new Response(bytes,{headers:{'content-disposition':'attachment; filename="test.hwpx"'}});
  throw Error('unexpected outbound '+url);
 }}));
@@ -39,6 +42,7 @@ try{
  const kv=await mf.getKVNamespace('OAUTH_KV');const oauthBefore=(await kv.list()).keys.filter(k=>!k.name.startsWith('add:corpus:')).map(k=>k.name);assert(oauthBefore.length);
  const worker=await mf.getWorker();assert.equal(typeof worker.scheduled,'function');await worker.scheduled({cron:'*/5 * * * *',scheduledTime:Date.now()});
  const state=await kv.get<any>('add:corpus:v2:state','json');assert(state);assert.equal(state.items.length,1);assert.equal(Object.keys(state.errors).length,0);
+ assert.equal(state.indexedTitles.length,1);assert(state.lastCompletedAt);
  const shard=await kv.get<any>(Object.values(state.refs)[0] as string,'json');assert.equal(shard.documents['보안과제 관리요령'].fileNo,'100');assert.match(shard.documents['보안과제 관리요령'].sha256,/^[a-f0-9]{64}$/);
  for(const name of oauthBefore)assert(await kv.get(name));
  const after=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(after.status,401);
