@@ -25,7 +25,7 @@ export default {
  }
 };`;
 await build({stdin:{contents:source,loader:'ts',resolveDir:process.cwd()+'/src'},bundle:true,format:'esm',platform:'browser',conditions:['workerd','worker','browser'],external:['cloudflare:*','node:async_hooks'],outfile:'.build-check/oauth-test.js'});
-const mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'.build-check/oauth-test.js',compatibilityDate:'2026-10-01',compatibilityFlags:['global_fetch_strictly_public'],kvNamespaces:['OAUTH_KV'],bindings:{ACCESS_CLIENT_ID:'test',ACCESS_CLIENT_SECRET:'test',COOKIE_ENCRYPTION_KEY:'0123456789abcdef0123456789abcdef'},outboundService:async request=>{
+const mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'.build-check/oauth-test.js',compatibilityDate:'2026-10-01',compatibilityFlags:['global_fetch_strictly_public'],kvNamespaces:['OAUTH_KV'],durableObjects:{CORPUS_INDEX_COORDINATOR:{className:'CorpusIndexCoordinator',useSQLite:true}},bindings:{INDEX_ADMIN_TOKEN:'test-index-admin-token',ACCESS_CLIENT_ID:'test',ACCESS_CLIENT_SECRET:'test',COOKIE_ENCRYPTION_KEY:'0123456789abcdef0123456789abcdef'},outboundService:async request=>{
  outbound++;const url=new URL(request.url);
  if(url.pathname.endsWith('itemReportListSusi.json'))return Response.json({data:{result:[{title:'보안과제 관리요령',apbaId:'C0345',idx:'1',reportFormNo:'21110',tableName:'COMM_RULE',idxName:'RULE_NO',reportGbn:'N',bidType:'',stDate:'2026.01.01',idate:'2026.02.02'}],page:{totalPage:1,totalCount:1}}});
  if(url.pathname.includes('itemBoard')){
@@ -40,9 +40,19 @@ try{
  const protectedResponse=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(protectedResponse.status,401);
  const register=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({client_name:'A regression client',redirect_uris:['https://example.com/callback'],grant_types:['authorization_code'],response_types:['code'],token_endpoint_auth_method:'none'})});assert.equal(register.status,201);const client=await register.json();assert(client.client_id);
  const kv=await mf.getKVNamespace('OAUTH_KV');const oauthBefore=(await kv.list()).keys.filter(k=>!k.name.startsWith('add:corpus:')).map(k=>k.name);assert(oauthBefore.length);
+ const adminUrl='https://add-regulations-mcp.splain0102.workers.dev/admin/trigger-index';
+ const adminHeaders={'authorization':'Bearer test-index-admin-token'};
+ const denied=await mf.dispatchFetch(adminUrl,{method:'POST'});assert.equal(denied.status,401);
+ const wrong=await mf.dispatchFetch(adminUrl,{method:'POST',headers:{authorization:'Bearer wrong'}});assert.equal(wrong.status,401);
+ const wrongMethod=await mf.dispatchFetch(adminUrl,{headers:adminHeaders});assert.equal(wrongMethod.status,405);
  const worker=await mf.getWorker();assert.equal(typeof worker.scheduled,'function');await worker.scheduled({cron:'*/5 * * * *',scheduledTime:Date.now()});
  const state=await kv.get<any>('add:corpus:v2:state','json');assert(state);assert.equal(state.items.length,1);assert.equal(Object.keys(state.errors).length,0);
- assert.equal(state.indexedTitles.length,1);assert(state.lastCompletedAt);
+ assert.equal(state.indexedTitles.length,1);assert(state.lastCompletedAt);assert(state.index_build_version);
+ await new Promise(resolve=>setTimeout(resolve,1150));
+ const manual=await mf.dispatchFetch(adminUrl,{method:'POST',headers:adminHeaders});assert.equal(manual.status,200);const manualRun=await manual.json();assert(manualRun.processed>0);assert.equal(manualRun.trigger,'manual');assert(manualRun.finished_at);assert(manualRun.subrequests_used<=40);
+ const runtime=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/admin/index-status',{headers:adminHeaders});assert.equal(runtime.status,200);const runStatus=await runtime.json();assert(runStatus.last_cron_started_at);assert(runStatus.last_cron_finished_at);assert(runStatus.processed_in_last_run>0);assert.equal(runStatus.index_build_version,manualRun.build_version);
+ const rateLimited=await mf.dispatchFetch(adminUrl,{method:'POST',headers:adminHeaders});assert.equal(rateLimited.status,429);
+ const afterManual=await kv.get<any>('add:corpus:v2:state','json');assert(afterManual.lastVerifiedAt);assert(Date.parse(afterManual.lastVerifiedAt)>Date.parse(state.lastVerifiedAt));
  const shard=await kv.get<any>(Object.values(state.refs)[0] as string,'json');assert.equal(shard.documents['보안과제 관리요령'].fileNo,'100');assert.match(shard.documents['보안과제 관리요령'].sha256,/^[a-f0-9]{64}$/);
  for(const name of oauthBefore)assert(await kv.get(name));
  const after=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(after.status,401);
@@ -60,5 +70,5 @@ try{
  const initialize=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'A-test',version:'1'}}})});assert.equal(initialize.status,200);await initialize.text();
  const beforeSearch=outbound;
  const search=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'search_all_regulations',arguments:{query:'외국인'}}})});assert.equal(search.status,200);const response=await search.text();assert(response.includes('"partial":false'));assert(response.includes('제8조'));assert.equal(outbound,beforeSearch);
- writeFileSync('reports/corpus-index-workers.json',JSON.stringify({passed:true,runtime:'workerd + Miniflare actual Worker bundle, local KV, mocked ALIO',oauthDiscovery:discovery.status,dynamicRegistration:register.status,unauthenticatedMcpBefore:protectedResponse.status,unauthenticatedMcpAfter:after.status,cron:state,outbound,pkceTokenExchange:tokenResponse.status,authenticatedSearchStatus:search.status,searchResponse:response,liveSnapshot:process.env.CORPUS_LIVE_CHECKPOINT??null},null,2));console.log('CORPUS_WORKERS_PASS',JSON.stringify({outbound,oauthKeysPreserved:oauthBefore.length}));
+ writeFileSync('reports/corpus-index-workers.json',JSON.stringify({passed:true,runtime:'workerd + Miniflare actual Worker bundle, local KV, mocked ALIO',oauthDiscovery:discovery.status,dynamicRegistration:register.status,unauthenticatedMcpBefore:protectedResponse.status,unauthenticatedMcpAfter:after.status,cron:state,outbound,pkceTokenExchange:tokenResponse.status,authenticatedSearchStatus:search.status,searchResponse:response,liveSnapshot:process.env.CORPUS_LIVE_CHECKPOINT??null,adminManualRun:manualRun,runStatus},null,2));console.log('CORPUS_WORKERS_PASS',JSON.stringify({outbound,oauthKeysPreserved:oauthBefore.length}));
 }finally{await mf.dispose();}

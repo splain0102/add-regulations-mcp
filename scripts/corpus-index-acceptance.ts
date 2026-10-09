@@ -1,3 +1,4 @@
+import {BUILD_VERSION} from '../src/build-info';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {existsSync,readFileSync,writeFileSync,mkdirSync,statSync} from 'node:fs';
@@ -22,19 +23,20 @@ async function liveLoad(item:any){
 let cursor=0;await Promise.all(Array.from({length:4},async()=>{while(cursor<items.length){const item=items[cursor++];try{await liveLoad(item);console.log('LIVE_FILE_OK',item.title);}catch(error){console.log('LIVE_FILE_RETRY',item.title,String(error));}}}));
 let complete=false;
 for(let batch=0;batch<Math.ceil(items.length/2)+20;batch++){
- const source=createCorpusSource();const r=await refreshIndex(kv.binding(),{list:async()=>items,load:liveLoad});
+ const source=createCorpusSource();const r=await refreshIndex(kv.binding(),{list:async()=>items,load:liveLoad},Date.now(),{buildVersion:BUILD_VERSION});
  writeFileSync(checkpoint,JSON.stringify([...kv.values]));
  const state=await kv.get<any>(INDEX_PREFIX+'state');
  console.log('LIVE_CORPUS_BATCH',JSON.stringify({batch,...r,verified:Object.keys(state?.checked??{}).length}));
- const index=await readIndex(kv.binding());if(!index.partial){complete=true;break;}
+ const index=await readIndex(kv.binding(),Date.now(),BUILD_VERSION);if(!index.partial){complete=true;break;}
 }
 // Revalidate the complete list at the end; changed metadata cannot be hidden.
 let latest:any[]=[];stage=undefined;for(let pass=0;pass<40;pass++){const r=await createCorpusSource().listBatch(stage);if(r.items){latest=r.items;break;}stage=r.work;}assert.deepEqual(latest,items,'ALIO list changed during acceptance; rebuild required');
-const final=await refreshIndex(kv.binding(),{list:async()=>latest,load:createCorpusSource().load});
-const index=await readIndex(kv.binding());
+const final=await refreshIndex(kv.binding(),{list:async()=>latest,load:createCorpusSource().load},Date.now(),{buildVersion:BUILD_VERSION});
+const index=await readIndex(kv.binding(),Date.now(),BUILD_VERSION);
 const original=globalThis.fetch;globalThis.fetch=async()=>{throw Error('request-time ALIO download forbidden');};
-let result:any;try{result=await searchAllRegulations('외국인',10,0,kv.binding());}finally{globalThis.fetch=original;}
+let result:any;try{result=await searchAllRegulations('외국인',10,0,kv.binding(),BUILD_VERSION);}finally{globalThis.fetch=original;}
 const security=result.results.find((r:any)=>r.regulationName.endsWith('보안과제 관리요령'));
+const audit=index.documents.find(d=>d.title==='감사규정');assert(audit?.fileNo,'감사규정 must be indexed');assert(index.lastCompletedAt);assert.equal(index.index_build_version,BUILD_VERSION);
 const passed=complete&&result.partial===false&&!!security?.matches.some((m:any)=>m.label.includes('제8조'));
-const report={passed,startedAt,finishedAt:new Date().toISOString(),execution:'Actual ALIO current list and raw HWP/HWPX/PDF. In-process KV; no production deployment. Bootstrap list captured once and fresh list equality checked at end.',total:items.length,indexed:index.documents.length,finalRefresh:final,result,security,sizes:(await kv.get<any>(INDEX_PREFIX+'state'))?.sizes};
+const report={passed,startedAt,finishedAt:new Date().toISOString(),execution:'Actual ALIO current list and raw HWP/HWPX/PDF. In-process KV; no production deployment. Bootstrap list captured once and fresh list equality checked at end.',total:items.length,indexed:index.documents.length,finalRefresh:final,result,security,audit:{title:audit.title,fileNo:audit.fileNo,sha256:audit.sha256},sizes:(await kv.get<any>(INDEX_PREFIX+'state'))?.sizes};
 writeFileSync('reports/corpus-index-acceptance.json',JSON.stringify(report,null,2));console.log('LIVE_CORPUS_RESULT',JSON.stringify({passed,total:items.length,indexed:index.documents.length,partial:result.partial,security}));assert(passed,'A live acceptance incomplete: see report');

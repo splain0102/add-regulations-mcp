@@ -4,6 +4,8 @@
   "build": {
     "command": "node scripts/stamp-build.mjs"
   },
+  "durable_objects": {"bindings": [{"name": "CORPUS_INDEX_COORDINATOR", "class_name": "CorpusIndexCoordinator"}]},
+  "migrations": [{"tag": "corpus-index-coordinator-v1", "new_sqlite_classes": ["CorpusIndexCoordinator"]}],
   "compatibility_date": "2026-10-01",
   "compatibility_flags": [
     "global_fetch_strictly_public"
@@ -30,3 +32,4 @@
     ]
   }
 }
+
