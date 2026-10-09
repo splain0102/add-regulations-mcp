@@ -217,6 +217,14 @@ await test('A-5 expired writer lease cannot mutate or replace a committed snapsh
  await assert.rejects(scheduledRefresh(store.binding(),smallSource,base+60000,{forceDocuments:true,beforeCommit:async()=>{throw Error('index_lease_expired');}}),/index_lease_expired/);
  assert.equal(store.values.get(INDEX_PREFIX+'state'),previous);assert.equal(store.writes,writes);assert.equal(indexErrorCode(Error('index_lease_expired')),'timeout');
 });
+await test('A-5 deployment change revokes the old build lease and rejects stale publication',async()=>{
+ const values=new Map<string,any>(),storage={get:async(key:string)=>structuredClone(values.get(key)),put:async(key:any,value?:any)=>{for(const [name,data] of typeof key==='string'?[[key,value]]:Object.entries(key))values.set(name,structuredClone(data));}};
+ values.set('lease',{run_id:'obsolete',token:'secret',expires_at:Date.now()+600000,build_version:'old-build'});
+ const coordinator=new CorpusIndexCoordinator({storage} as any,{OAUTH_KV:new TestKV().binding()});
+ const stale=await coordinator.fetch(new Request('https://internal/assert',{method:'POST',body:JSON.stringify({run_id:'obsolete',lease_token:'secret'})}));assert.equal(stale.status,409);
+ const begin=await coordinator.fetch(new Request('https://internal/begin',{method:'POST',body:JSON.stringify({trigger:'cron'})}));assert.equal(begin.status,200);const result=await begin.json() as any;assert.notEqual(result.run.run_id,'obsolete');
+ const old=await coordinator.fetch(new Request('https://internal/assert',{method:'POST',body:JSON.stringify({run_id:'obsolete',lease_token:'secret'})}));assert.equal(old.status,409);
+});
 await test('A-5 administrator bootstrap validates all 213 documents before atomic activation and preserves OAuth',async()=>{
  const store=new TestKV();await scheduledRefresh(store.binding(),smallSource,base);const before=store.values.get(INDEX_PREFIX+'state');store.values.set('oauth:sentinel','{"preserved":true}');
  const values=new Map<string,unknown>(),storage={get:async(key:string)=>structuredClone(values.get(key)),put:async(key:string,value:unknown)=>values.set(key,structuredClone(value))} as any;
