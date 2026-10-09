@@ -1,3 +1,4 @@
+import {prepareSearchSections,type SearchSections} from './search-sections';
 // Only the Cron writer contacts ALIO. Search reads a committed KV manifest.
 export const INDEX_PREFIX = 'add:corpus:v2:';
 export const INDEX_SHARDS = 16;
@@ -11,7 +12,7 @@ export const DOCUMENT_CHECK_INTERVAL = 12 * 60 * 60 * 1000;
 export const RETRY_BASE = 5 * 60 * 1000;
 export function retryDelay(attempt:number){return Math.min(60 * 60 * 1000,RETRY_BASE * 2 ** Math.min(4,Math.max(0,attempt-1)));}
 export type CorpusItem = {title:string;detailUrl:string;revisionDate?:string;updatedDate?:string};
-export type CorpusDocument = CorpusItem & {fileNo:string;text:string;sha256:string;verifiedAt:string;parserVersion:string};
+export type CorpusDocument = CorpusItem & {fileNo:string;text:string;sha256:string;verifiedAt:string;parserVersion:string;searchSections?:SearchSections};
 type ErrorEntry = {title:string;message:string;checkedAt:string;code?:string;error_code?:string;build_version?:string;retry_attempts?:number;next_retry_at?:string;diagnostics?:Record<string,unknown>};
 export function errorDiagnostics(error:unknown){return error&&typeof error==='object'&&'diagnostics' in error?error.diagnostics as Record<string,unknown>:undefined;}
 type Shard = {documents:Record<string,CorpusDocument>};
@@ -118,7 +119,7 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
         const loaded=await source.load(item);
         if(!loaded.fileNo||!loaded.text.trim())throw Error('empty_or_unselected_document');
         const hash=await sha256(loaded.bytes);
-        const doc:CorpusDocument={...item,fileNo:loaded.fileNo,text:loaded.text,sha256:hash,verifiedAt:timestamp,parserVersion:loaded.parserVersion};
+        const doc:CorpusDocument={...item,fileNo:loaded.fileNo,text:loaded.text,sha256:hash,verifiedAt:timestamp,parserVersion:loaded.parserVersion,searchSections:prepareSearchSections(loaded.text)};
         const old=shard.documents[item.title];
         const retained=Object.fromEntries(Object.entries(shard.documents).filter(([title])=>titles.has(title)));
         const candidate={documents:{...retained,[item.title]:doc}};
@@ -165,12 +166,18 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
 export async function readIndex(kv:KVNamespace,now=Date.now(),expectedBuildVersion?:string){
   const state=await readState(kv);if(!state)return {documents:[] as CorpusDocument[],partial:true,index_status:'building',errors:{count:0,sample:[],retry_cursor:null},total:0,lastCheckedAt:null,lastVerifiedAt:null,lastCompletedAt:null,index_build_version:null,...timing(emptyState())};
   const documents:CorpusDocument[]=[];const failures:ErrorEntry[]=[];
-  // Serial reads keep peak memory bounded; no ALIO fetch is performed here.
-  for(let id=0;id<INDEX_SHARDS;id++){
-    try{const shard=await readShard(kv,state,id);documents.push(...Object.values(shard.documents));}
-    catch(error){failures.push({title:'KV shard '+id,message:String(error),checkedAt:new Date(now).toISOString(),error_code:'fetch_failed',build_version:expectedBuildVersion??state.index_build_version});
-      if(state.fallbackRefs?.[id]){try{const old=await kv.get<Shard>(state.fallbackRefs[id],'json');if(old?.documents)documents.push(...Object.values(old.documents));}catch{ /* Error remains visible; no false ready state. */ }}
-    }
+  // At most four 2 MB shard reads in flight; retain shard order deterministically.
+  for(let start=0;start<INDEX_SHARDS;start+=4){
+    const batch=await Promise.all(Array.from({length:Math.min(4,INDEX_SHARDS-start)},async(_,offset)=>{
+      const id=start+offset;
+      try{return {documents:Object.values((await readShard(kv,state,id)).documents)};}
+      catch(error){
+        const failure:ErrorEntry={title:'KV shard '+id,message:String(error),checkedAt:new Date(now).toISOString(),error_code:'fetch_failed',build_version:expectedBuildVersion??state.index_build_version};
+        if(state.fallbackRefs?.[id])try{const old=await kv.get<Shard>(state.fallbackRefs[id],'json');if(old?.documents)return {documents:Object.values(old.documents),failure};}catch{ /* Preserve the primary failure. */ }
+        return {documents:[] as CorpusDocument[],failure};
+      }
+    }));
+    for(const result of batch){documents.push(...result.documents);if(result.failure)failures.push(result.failure);}
   }
   const wanted=new Map(state.items.map(i=>[i.title,i]));
   const active=documents.filter(d=>wanted.has(d.title));

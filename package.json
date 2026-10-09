@@ -1,6 +1,6 @@
 {
   "name": "add-regulations-mcp",
-  "version": "1.10.9",
+  "version": "1.10.10",
   "private": true,
   "scripts": {
     "prepare": "node scripts/stamp-build.mjs",
@@ -18,7 +18,8 @@
     "typecheck:corpus-index": "tsc -p tsconfig.corpus-index.json",
     "test:corpus-index": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-regression.ts",
     "test:corpus-workers": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-workers.ts",
-    "test:corpus-acceptance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-acceptance.ts"
+    "test:corpus-acceptance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-acceptance.ts",
+    "test:corpus-performance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-performance.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.0.0",

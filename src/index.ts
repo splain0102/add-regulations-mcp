@@ -14,7 +14,7 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
-const MCP_VERSION = "1.10.9";
+const MCP_VERSION = "1.10.10";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
@@ -4044,7 +4044,8 @@ function createServer(env: Env) {
     },
     async ({query,limit,offset})=>{
       try{
-        const data={...await coreSearchAllRegulations(query,limit,offset,env.OAUTH_KV,BUILD_VERSION),...await getIndexRuntimeStatus(env)};
+        const [search,status]=await Promise.all([coreSearchAllRegulations(query,limit,offset,env.OAUTH_KV,BUILD_VERSION),getIndexRuntimeStatus(env)]);
+        const data={...search,...status};
         return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }catch(error){
         const data={error:{code:publicErrorCode(error),message:error instanceof Error?error.message:String(error)}};
