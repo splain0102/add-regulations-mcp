@@ -1,6 +1,9 @@
 {
   "name": "add-regulations-mcp",
   "main": "src/index.ts",
+  "build": {
+    "command": "node scripts/stamp-build.mjs"
+  },
   "compatibility_date": "2026-10-01",
   "compatibility_flags": [
     "global_fetch_strictly_public"

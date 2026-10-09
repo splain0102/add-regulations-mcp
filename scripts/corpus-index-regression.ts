@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {transformSync} from 'esbuild';
 import {z} from 'zod';
+import {zipSync,strToU8} from 'fflate';
 import {refreshIndex,readIndex,INDEX_PREFIX,MAX_INDEX_AGE,sha256,shardId,type CorpusItem} from '../src/regulation-core/corpus-index';
-import {searchAllRegulations,createIndexRequest,createCorpusSource} from '../src/regulation-core/regulations';
+import {searchAllRegulations,createIndexRequest,createCorpusSource,getRegulationDetail,PARSER_VERSION} from '../src/regulation-core/regulations';
 import {TestKV} from './corpus-index-test-kv';
 const kv=new TestKV(),base=Date.now();
 const items:CorpusItem[]=Array.from({length:213},(_,i)=>({title:i===212?'보안과제 관리요령':'규정'+String(i).padStart(3,'0'),detailUrl:'https://www.alio.go.kr/test/'+i,revisionDate:'2026-01-01',updatedDate:'2026-02-02'}));
@@ -73,5 +74,41 @@ await test('rank relevant multi-article matches ahead of alphabetical single-hit
  const rankedSource={list:async()=>all,load:async(item:CorpusItem)=>({...await source.load(item),text:item.title==='보안과제 관리요령'?'제6조(보고)\n외국인 접촉 결과와 외국인 참여 현황\n제8조(자료 취급 의무)\n외국인 접촉을 보고한다.\n[별지 제2호 서식] 외국인 접촉 결과 보고서\n외국인 정보': '제1조(정의)\n외국인도 포함한다.'})};
  for(let i=0;i<11;i++)await refreshIndex(ranked.binding(),rankedSource,base+i*1000);
  const r=await searchAllRegulations('외국인',10,0,ranked.binding());assert.equal(r.partial,false);assert.equal(r.results[0].regulationName,'보안과제 관리요령');assert(r.results[0].matches.some(m=>m.label.includes('제8조')));assert(r.results[0].matches.some(m=>m.label==='[별지 제2호 서식]'));
+});
+await test('A-2 shared detail headers and selection; one successful document increments persisted coverage',async()=>{
+ const xml='<hs:sec><hp:p><hp:run><hp:t>제8조(외국인 참여) 외국인 승인을 받아야 한다.</hp:t></hp:run></hp:p></hs:sec>';
+ const bytes=zipSync({'Contents/section0.xml':strToU8(xml)});
+ const detailUrl='https://www.alio.go.kr/item/itemBoard21110.do?idx=audit';
+ const html='<p>제목 감사규정 파일 제·개정일 2026.01.01 최종수정일 2026.02.02</p>'+[1,2,3].map(n=>`<a href="/download/rulefiledown.json?fileNo=${n}">감사규정.hwpx</a>`).join('');
+ let detailCalls=0;
+ const raw=async(url:any,init?:RequestInit)=>{
+  if(String(url)===detailUrl){detailCalls++;const h=new Headers(init?.headers);return new Response(h.get('accept-language')==='ko-KR,ko;q=0.9'?html:'<html>no files</html>');}
+  return new Response(bytes,{headers:{'content-disposition':'attachment; filename="audit.hwpx"'}});
+ };
+ const request=createIndexRequest(raw as typeof fetch);
+ const normal=await getRegulationDetail(detailUrl,undefined,{request,probe:async()=>''});
+ assert.equal(normal.attachments.length,3);assert.equal(normal.latestAttachment?.fileNo,'3');
+ const item={title:'감사규정',detailUrl,revisionDate:'2026.01.01',updatedDate:'2026.02.02'};
+ const indexed=await createCorpusSource(request).load(item);assert.equal(indexed.fileNo,normal.latestAttachment?.fileNo);assert.equal(indexed.parserVersion,'1.10.5-parser.1');assert.equal(detailCalls,2);
+ const single=new TestKV();const result=await refreshIndex(single.binding(),{list:async()=>[item],load:async()=>indexed},base);
+ assert.equal(result.indexedRegulations,1);assert(result.lastCompletedAt);assert.equal((await readIndex(single.binding(),base)).documents.length,1);
+ assert.deepEqual((await single.get<any>(INDEX_PREFIX+'state')).indexedTitles,['감사규정']);
+});
+await test('A-2 empty/HTTP/network/subrequest failures expose distinct codes and response diagnostics',async()=>{
+ const logs:any[]=[];const warn=console.warn;console.warn=(name,...args)=>{if(name==='alio_attachment_collection_failed')logs.push(args[0]);};
+ const item={title:'감사규정',detailUrl:'https://www.alio.go.kr/item/itemBoard21110.do'};
+ try{
+  await assert.rejects(()=>createCorpusSource(createIndexRequest((async()=>new Response('<html>empty</html>')) as typeof fetch)).load(item),/selection_error:no_attachment/);
+  assert.equal(logs.at(-1).http_status,200);assert.equal(logs.at(-1).response_bytes,18);assert.equal(logs.at(-1).subrequests_used,1);assert.equal(logs.at(-1).subrequest_limit,40);
+  await assert.rejects(()=>createCorpusSource(createIndexRequest((async()=>new Response('denied',{status:403})) as typeof fetch)).load(item),/selection_error:fetch_failed/);
+  assert.equal(logs.at(-1).http_status,403);assert.equal(logs.at(-1).response_bytes,6);
+  await assert.rejects(()=>createCorpusSource(createIndexRequest((async()=>{throw Error('Too many subrequests by single Worker invocation');}) as typeof fetch)).load(item),/selection_error:subrequest_limit/);
+  assert.equal(logs.at(-1).subrequests_used,1);
+  const budget=createIndexRequest((async()=>new Response('ok')) as typeof fetch);for(let n=0;n<40;n++)await budget('https://www.alio.go.kr/test');
+  await assert.rejects(()=>createCorpusSource(budget).load(item),/selection_error:subrequest_limit/);assert.equal(logs.at(-1).subrequests_used,40);
+  const bad=createIndexRequest((async()=>{throw Error('network down');}) as typeof fetch);
+  const broken=new TestKV();await refreshIndex(broken.binding(),{list:async()=>[item],load:createCorpusSource(bad).load},base);
+  const state=await broken.get<any>(INDEX_PREFIX+'state');assert.equal(state.errors['감사규정'].code,'fetch_failed');assert.equal((await readIndex(broken.binding(),base)).partial,true);assert.equal(state.lastCompletedAt,undefined);
+ }finally{console.warn=warn;}
 });
 writeFileSync('reports/corpus-index-regression.json',JSON.stringify({passed:true,tests:results,scope:'A only; synthetic failure injection; not live ALIO or deployed Workers'},null,2));

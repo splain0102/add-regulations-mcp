@@ -7,12 +7,12 @@ export const MAX_CORPUS_BYTES = 16_000_000;
 export const MAX_INDEX_AGE = 24 * 60 * 60 * 1000;
 export type CorpusItem = {title:string;detailUrl:string;revisionDate?:string;updatedDate?:string};
 export type CorpusDocument = CorpusItem & {fileNo:string;text:string;sha256:string;verifiedAt:string;parserVersion:string};
-type ErrorEntry = {title:string;message:string;checkedAt:string};
+type ErrorEntry = {title:string;message:string;checkedAt:string;code?:string};
 type Shard = {documents:Record<string,CorpusDocument>};
 export type IndexState = {
   schema:2;cursor:number;pending?:string[];fallbackRefs?:Record<string,string>;items:CorpusItem[];refs:Record<string,string>;sizes:Record<string,number>;
   listWork?:unknown;checked:Record<string,string>;errors:Record<string,ErrorEntry>;lastCheckedAt:string;
-  lastCompletedAt?:string;sourceError?:string;garbage:{key:string;after:number}[];
+  lastCompletedAt?:string;sourceError?:string;indexedTitles?:string[];garbage:{key:string;after:number}[];
 };
 export type CorpusSource = {list(work?:unknown):Promise<CorpusItem[]|{items?:CorpusItem[];work?:unknown}>;load(item:CorpusItem):Promise<{fileNo:string;text:string;bytes:Uint8Array;parserVersion:string}>};
 export function shardId(title:string){let hash=2166136261;for(const c of title){hash^=c.charCodeAt(0);hash=Math.imul(hash,16777619);}return (hash>>>0)%INDEX_SHARDS;}
@@ -42,6 +42,7 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
     if(!items.length||new Set(items.map(i=>i.title)).size!==items.length)throw Error('invalid_or_empty_regulation_list');
     state.items=items;if(freshItems)state.lastCheckedAt=timestamp;delete state.sourceError;
     const titles=new Set(items.map(i=>i.title));
+    const indexed=new Set((state.indexedTitles??[]).filter(title=>titles.has(title)));
     for(const title of Object.keys(state.errors))if(!titles.has(title))delete state.errors[title];
     for(const title of Object.keys(state.checked))if(!titles.has(title))delete state.checked[title];
     const oldItems=new Map(previous.items.map(i=>[i.title,i]));
@@ -69,9 +70,10 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
         const total=Object.values(state.sizes).reduce((a,b)=>a+b,0)-(state.sizes[id]??0)+size;
         if(total>MAX_CORPUS_BYTES)throw Error('index_corpus_size_limit');
         state.sizes[id]=size;shard.documents=candidate.documents;
+        for(const title of Object.keys(candidate.documents))indexed.add(title);
         if(!old||old.sha256!==hash||old.fileNo!==doc.fileNo||old.parserVersion!==doc.parserVersion||!sameMetadata(old,doc))updated++;
         delete state.errors[item.title];state.pending=state.pending.filter(title=>title!==item.title);
-      }catch(error){state.errors[item.title]={title:item.title,message:String(error).slice(0,240),checkedAt:timestamp};}
+      }catch(error){state.errors[item.title]={title:item.title,message:String(error).slice(0,240),checkedAt:timestamp,code:String(error).match(/selection_error:([a-z_]+)/)?.[1]};}
     }
     // New keys are written first; referenced old keys stay intact on any failure.
     for(const [id,shard] of changed){
@@ -81,6 +83,7 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
       state.refs[id]=key;
     }
     state.cursor=new Set([...state.pending,...items.filter(i=>!state.checked[i.title]).map(i=>i.title)]).size;
+    state.indexedTitles=[...indexed];
     if(!state.cursor&&!Object.keys(state.errors).length)state.lastCompletedAt=timestamp;
     // GC waits beyond KV propagation, runs only in Cron, and never deletes refs.
     const protectedKeys=[...Object.values(state.refs),...Object.values(state.fallbackRefs??{})];
@@ -96,7 +99,7 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
     try{await kv.put(INDEX_PREFIX+'state',JSON.stringify(previous));}catch(writeError){throw Error('index_state_write_failed:'+String(writeError));}
     return {processed,updated:0,index_status:'stale',errors:errorSummary(previous)};
   }
-  return {processed,updated,next_cursor:state.cursor||null,errors:errorSummary(state),lastCheckedAt:state.lastCheckedAt};
+  return {processed,updated,indexedRegulations:state.indexedTitles?.length??0,next_cursor:state.cursor||null,errors:errorSummary(state),lastCheckedAt:state.lastCheckedAt,lastCompletedAt:state.lastCompletedAt??null};
 }
 export async function readIndex(kv:KVNamespace,now=Date.now()){
   const state=await readState(kv);if(!state)return {documents:[] as CorpusDocument[],partial:true,index_status:'building',errors:{count:0,sample:[],retry_cursor:null},total:0,lastCheckedAt:null,lastCompletedAt:null};
