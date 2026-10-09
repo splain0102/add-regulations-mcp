@@ -1,6 +1,6 @@
 // Lightweight Korean word rules; no morphology service or runtime dependency.
 export const fold=(s:string)=>s.normalize('NFKC').toLowerCase().replace(/[·ㆍ･‧]/g,'');
-const suffix=/^(?:을|를|이|가|은|는|의|에|로|으로|와|과|도|만|부터|까지|에게|께|보다|및|등|하고|하여|하|되|받|서|보고(?:서)?(?:를|의|는|에)?$)/;
+const suffix=/^(?:(?:을|를|이|가|은|는|의|에|로|으로|와|과|도|만|부터|까지|에게|께|보다|및|등|서)(?:는|도|만|서|게|부터|까지)?|보고(?:서)?(?:를|의|는|에)?|(?:하|되|받)[가-힣]*)$/;
 export function wordWeight(word:string,term:string){
  return normalizedWeight(fold(word),fold(term));
 }
@@ -19,7 +19,7 @@ export function deletedSection(article:string){
  return /^\s*제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?\s*[.(]?\s*삭제\s*20\d{2}\s*[.년]\s*\d{1,2}\s*[.월]\s*\d{1,2}\s*[.일]?\s*[).]?\s*$/u.test(article);
 }
 export function formSection(article:string,label:string){
- if(/서식|견본/.test(label)||label.startsWith('[')&&/서식|견본|신고서|신고처리부/.test(article.slice(0,180)))return true;
+ if(/서식|견본/.test(label)||label.startsWith('[')&&/서식|견본|신고서|신고처리부/.test(article.split('\n').map(s=>s.trim()).filter(Boolean).slice(0,2).join(' ')))return true;
  const fields=article.match(/성\s*명|소\s*속|연락처|주\s*소|년\s*월\s*일|\(\s*(?:인|서명)\s*\)/g)??[];
  const lines=article.split('\n').map(s=>s.trim()).filter(Boolean);
  const fieldLines=lines.filter(s=>/^(?:성\s*명|소\s*속|연락처|주\s*소|년\s*월\s*일|\(\s*(?:인|서명)\s*\))\s*[:：_()\s]*$/.test(s));
