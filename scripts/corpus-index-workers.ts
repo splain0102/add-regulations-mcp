@@ -1,3 +1,4 @@
+import {exportSnapshot,uploadSnapshot} from './bootstrap-index.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
@@ -45,11 +46,12 @@ try{
  const denied=await mf.dispatchFetch(adminUrl,{method:'POST'});assert.equal(denied.status,401);
  const wrong=await mf.dispatchFetch(adminUrl,{method:'POST',headers:{authorization:'Bearer wrong'}});assert.equal(wrong.status,401);
  const wrongMethod=await mf.dispatchFetch(adminUrl,{headers:adminHeaders});assert.equal(wrongMethod.status,405);
+ const probe=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/admin/probe-alio',{method:'POST',headers:adminHeaders});assert.equal(probe.status,200);const probeResult=await probe.json();assert.equal(probeResult.results.length,4);assert(probeResult.results.every((r:any)=>r.http_status===200&&r.response_bytes>0));assert.deepEqual([...new Set(probeResult.results.map((r:any)=>r.scope))].sort(),['durable_object','worker']);
  const worker=await mf.getWorker();assert.equal(typeof worker.scheduled,'function');await worker.scheduled({cron:'*/5 * * * *',scheduledTime:Date.now()});
  const state=await kv.get<any>('add:corpus:v2:state','json');assert(state);assert.equal(state.items.length,1);assert.equal(Object.keys(state.errors).length,0);
  assert.equal(state.indexedTitles.length,1);assert(state.lastCompletedAt);assert(state.index_build_version);
  await new Promise(resolve=>setTimeout(resolve,1150));
- const manual=await mf.dispatchFetch(adminUrl,{method:'POST',headers:adminHeaders});assert.equal(manual.status,200);const manualRun=await manual.json();assert(manualRun.processed>0);assert.equal(manualRun.trigger,'manual');assert(manualRun.finished_at);assert(manualRun.subrequests_used<=40);
+ const manual=await mf.dispatchFetch(adminUrl,{method:'POST',headers:adminHeaders});assert.equal(manual.status,200);const manualRun=await manual.json();assert(manualRun.processed>0);assert.equal(manualRun.trigger,'manual');assert(manualRun.finished_at);assert(manualRun.subrequests_used<=36);assert.equal(manualRun.execution,'worker');
  const runtime=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/admin/index-status',{headers:adminHeaders});assert.equal(runtime.status,200);const runStatus=await runtime.json();assert(runStatus.last_cron_started_at);assert(runStatus.last_cron_finished_at);assert(runStatus.processed_in_last_run>0);assert.equal(runStatus.index_build_version,manualRun.build_version);
  const rateLimited=await mf.dispatchFetch(adminUrl,{method:'POST',headers:adminHeaders});assert.equal(rateLimited.status,429);
  const afterManual=await kv.get<any>('add:corpus:v2:state','json');assert(afterManual.lastVerifiedAt);assert(Date.parse(afterManual.lastVerifiedAt)>Date.parse(state.lastVerifiedAt));
@@ -59,7 +61,10 @@ try{
  if(process.env.CORPUS_LIVE_CHECKPOINT){
   const entries=JSON.parse(readFileSync(process.env.CORPUS_LIVE_CHECKPOINT,'utf8')) as [string,string][];
   await new Promise(resolve=>setTimeout(resolve,1100));
-  for(const [key,value] of entries)if(key.startsWith('add:corpus:v2:'))await kv.put(key,value);
+  const report=JSON.parse(readFileSync('reports/corpus-index-acceptance.json','utf8'));
+  const snapshot=exportSnapshot(entries,report);
+  const activated=await uploadSnapshot(snapshot,async(path:string,body:any)=>{const response=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/admin/bootstrap-index/'+path,{method:'POST',headers:{...adminHeaders,'content-type':'application/json'},body:JSON.stringify(body)});const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));return result;});
+  assert.equal(activated.indexedRegulations,213);for(const name of oauthBefore)assert(await kv.get(name));
  }
  const verifier='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~';
  const challenge=createHash('sha256').update(verifier).digest('base64url');

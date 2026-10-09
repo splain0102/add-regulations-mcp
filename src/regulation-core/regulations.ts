@@ -1,3 +1,4 @@
+import {PARSER_VERSION} from "./parser-version";
 import {refreshIndex,readIndex,type CorpusItem,indexErrorCode} from './corpus-index';
 import {extractRevisionSection} from './revision-probe';
 import { unzipSync, strFromU8 } from "fflate";
@@ -152,12 +153,12 @@ export async function fetchWithRetry(
   );
 }
 
-type AttachmentDiagnostics = {http_status:number|null;response_bytes:number;subrequests_used:number|null;subrequest_limit:number|null};
+type AttachmentDiagnostics = {http_status:number|null;response_bytes:number|null;subrequests_used:number|null;subrequest_limit:number|null};
 type AlioRequest = typeof fetchWithRetry & {usage?:()=>{used:number;limit:number;status:number|null}};
 function attachmentErrorCode(error:unknown){const code=indexErrorCode(error);return code==='parse_failed'?'fetch_failed':code;}
 function attachmentFailure(code:string,url:string,diagnostics:AttachmentDiagnostics,error?:unknown):Error {
  console.warn('alio_attachment_collection_failed',{code,url,...diagnostics,message:error?String(error).slice(0,240):undefined});
- return new Error('selection_error:'+code);
+ return Object.assign(new Error('selection_error:'+code,{cause:error}),{diagnostics:{request_url:url,...diagnostics,...(error&&typeof error==='object'&&'diagnostics' in error?error.diagnostics as object:{})}});
 }
 async function fetchAlio(url: string,request:AlioRequest=fetchWithRetry,diagnostics?:AttachmentDiagnostics): Promise<string> {
   const target = new URL(url);
@@ -761,7 +762,7 @@ type DocumentEntry = {
  pdfPending?: Promise<void>;
 };
 // Bounded isolate cache. Metadata is re-read before every lookup; changed fileNo/idate evicts the old entry.
-export const PARSER_VERSION = "1.10.5-parser.1";
+export {PARSER_VERSION} from "./parser-version";
 export const normalizeRegulationTitle = (value:string) => value.normalize("NFKC").toLowerCase().replace(/[·･‧ㆍ・\s「」｢｣()（）]/g,"");
 const documentCache = new Map<string, Promise<DocumentEntry>>();
 const latestDocumentKey = new Map<string, string>();
@@ -823,32 +824,40 @@ export async function getRegulationMetadata(name:string) {
  version_check:{...versions,cross_entry_warnings:crossWarnings,warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning},version_warning:crossWarnings.find(w=>w.code==='cross_entry_newer_attachment')??versions.warning,selection_reason:detail.selection_reason,other_attachments:detail.other_attachments};
 }
 /** A-only source: fresh list, fresh attachment selection and raw-file SHA-256. */
-export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Date.now):AlioRequest {
+export async function responseSize(response:Response,maximum=65536){
+ const reader=response.body?.getReader();let bytes=0;
+ if(reader)try{while(bytes<maximum){const next=await reader.read();if(next.done)return {response_bytes:bytes,response_truncated:false};bytes+=next.value.byteLength;}return {response_bytes:bytes,response_truncated:true};}finally{await reader.cancel().catch(()=>{});}
+ return {response_bytes:0,response_truncated:false};
+}
+export function createIndexRequest(rawFetch:typeof fetch=fetch,now:()=>number=Date.now,limit=40):AlioRequest {
+ if(limit<1||limit>40)throw Error('invalid_index_request_limit');
  let requests=0,status:number|null=null;const deadline=now()+240_000;
  const request:AlioRequest=async (url,init,maxAttempts=3)=>{
   let last:unknown;
   for(let attempt=0;attempt<maxAttempts;attempt++){
-   let target=url;
+   let target=url,method=init?.method??"GET",body=init?.body;const attemptStarted=now();
    try{
     for(let redirect=0;redirect<6;redirect++){
-     if(requests>=40)throw Error('index_request_budget_exhausted');
+     if(requests>=limit)throw Error('index_request_budget_exhausted');
      if(now()>=deadline)throw Error('index_request_deadline_exhausted');
      if(new URL(target).origin!==ALIO_BASE)throw Error('index_redirect_origin_rejected');
      requests++;status=null;
-     const response=await rawFetch(target,{...init,redirect:'manual',signal:AbortSignal.timeout(Math.min(25000,Math.max(1,deadline-now())))});
+     const requestStarted=now();
+     const response=await rawFetch(target,{...init,method,body,redirect:'manual',signal:AbortSignal.timeout(Math.min(25000,Math.max(1,deadline-now())))});
      status=response.status;
      if(response.status>=300&&response.status<400&&response.headers.has('location')){
+      if(response.status===303||((response.status===301||response.status===302)&&method.toUpperCase()==='POST')){method='GET';body=undefined;}
       target=new URL(response.headers.get('location')!,target).href;await response.body?.cancel();continue;
      }
-     if(response.status===429||response.status>=500){await response.body?.cancel();throw Error('ALIO HTTP '+response.status);}
+     if(response.status===429||response.status>=500){const size=await responseSize(response);throw Object.assign(Error('ALIO HTTP '+response.status),{diagnostics:{request_url:target,http_status:response.status,...size,cf_ray:response.headers.get('cf-ray'),server:response.headers.get('server'),elapsed_ms:now()-requestStarted}});}
      return response;
     }
     throw Error('index_redirect_limit');
-   }catch(error){last=error;if(/budget_exhausted|deadline_exhausted|origin_rejected|redirect_limit|Too many subrequests/.test(String(error)))throw error;if(attempt+1<maxAttempts)await sleep(400*(attempt+1));}
+   }catch(error){const failure=error instanceof Error?error:Error(String(error));last=failure;if(!('diagnostics' in failure))Object.assign(failure,{diagnostics:{request_url:target,http_status:status,response_bytes:null,subrequests_used:requests,elapsed_ms:now()-attemptStarted}});if(/budget_exhausted|deadline_exhausted|origin_rejected|redirect_limit|Too many subrequests/.test(String(error)))throw last;if(attempt+1<maxAttempts)await sleep(400*(attempt+1));}
   }
   throw last;
  };
- request.usage=()=>({used:requests,limit:40,status});return request;
+ request.usage=()=>({used:requests,limit,status});return request;
 }
 type IndexListWork={rows:AlioRow[];nextPage:number;totalPage:number;totalCount:number;startedAt:number};
 async function collectIndexList(request:typeof fetchWithRetry,work?:unknown){
@@ -897,7 +906,7 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
   }
  };
 }
-export async function refreshCorpusIndex(kv:KVNamespace,buildVersion?:string,request=createIndexRequest(),options?:{forceDocuments?:boolean}){const source=createCorpusSource(request);const result=await refreshIndex(kv,{list:source.listBatch,load:source.load},Date.now(),{buildVersion,...options});return {...result,subrequests_used:request.usage!().used,subrequest_limit:40};}
+export async function refreshCorpusIndex(kv:KVNamespace,buildVersion?:string,request=createIndexRequest(),options?:{forceDocuments?:boolean;beforeCommit?:()=>Promise<void>}){const source=createCorpusSource(request);const result=await refreshIndex(kv,{list:source.listBatch,load:source.load},Date.now(),{buildVersion,...options});return {...result,subrequests_used:request.usage!().used,subrequest_limit:request.usage!().limit};}
 export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace,buildVersion?:string){
  const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
  if(!kv) return {query,limit,offset,results:[],errors:{count:1,sample:[{code:'index_unavailable'}],retry_cursor:null},partial:true,index_status:'unavailable',next_cursor:null};

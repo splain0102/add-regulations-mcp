@@ -1,11 +1,14 @@
 import {BUILD_VERSION} from '../build-info';
 import {createIndexRequest,refreshCorpusIndex} from './regulations';
-import {indexErrorCode,readIndex} from './corpus-index';
+import {indexErrorCode,errorDiagnostics,readIndex} from './corpus-index';
+import {probeAlio} from './network-probe';
+import {bootstrapActive,handleBootstrap} from './index-bootstrap';
 
-type Run = {run_id:string;build_version:string;trigger:'cron'|'manual';started_at:string;finished_at:string|null;processed:number;duration_ms:number;subrequests_used:number;subrequest_limit:number;status:string;error_code?:string;result?:unknown};
-type History = {latest?:Run;last_cron_started_at?:string;last_cron_finished_at?:string};
+type Run={run_id:string;build_version:string;trigger:'cron'|'manual';execution:'worker';started_at:string;finished_at:string|null;processed:number;duration_ms:number;subrequests_used:number;subrequest_limit:number;status:string;error_code?:string;result?:unknown};
+type History={latest?:Run;last_cron_started_at?:string;last_cron_finished_at?:string};
+type Lease={run_id:string;token:string;expires_at:number;build_version:string};
 export class CorpusIndexCoordinator {
- private running=false;
+ private busy=false;
  private state:DurableObjectState;
  private env:{OAUTH_KV:KVNamespace};
  constructor(state:DurableObjectState,env:{OAUTH_KV:KVNamespace}){this.state=state;this.env=env;}
@@ -13,38 +16,63 @@ export class CorpusIndexCoordinator {
   const path=new URL(request.url).pathname;
   if(path==='/status'){
    const history=await this.state.storage.get<History>('runs')??{};
-   return Response.json({last_cron_started_at:history.last_cron_started_at??null,last_cron_finished_at:history.last_cron_finished_at??null,
-    processed_in_last_run:history.latest?.processed??0,last_index_run:history.latest??null});
+   return Response.json({last_cron_started_at:history.last_cron_started_at??null,last_cron_finished_at:history.last_cron_finished_at??null,processed_in_last_run:history.latest?.processed??0,last_index_run:history.latest??null});
   }
-  if(path!=='/run'||request.method!=='POST')return new Response('Not found',{status:404});
-  if(this.running)return Response.json({error_code:'index_busy'},{status:409});
-  this.running=true;
-  const started=Date.now(),transport=createIndexRequest();
-  let history:History={},run:Run={run_id:crypto.randomUUID(),build_version:BUILD_VERSION,trigger:'manual',started_at:new Date(started).toISOString(),finished_at:null,processed:0,duration_ms:0,subrequests_used:0,subrequest_limit:40,status:'running'};
+  if(path==='/probe'&&request.method==='POST')return Response.json(await Promise.all([probeAlio('durable_object',false),probeAlio('durable_object',true)]));
+  if(request.method!=='POST')return new Response('Not found',{status:404});
+  if(this.busy)return Response.json({error_code:'index_busy'},{status:409});
+  this.busy=true;
   try{
-   const input=await request.json() as {trigger?:string};run.trigger=input.trigger==='cron'?'cron':'manual';
-   history=await this.state.storage.get<History>('runs')??{};
-   if(history.latest?.finished_at&&Date.now()-Date.parse(history.latest.finished_at)<1100){this.running=false;return Response.json({error_code:'index_rate_limited'},{status:429,headers:{'retry-after':'2'}});}
-   if(history.latest?.status==='running')console.error('corpus_index_previous_run_interrupted',{...history.latest,error_code:'timeout'});
-   history.latest=run;if(run.trigger==='cron')history.last_cron_started_at=run.started_at;
-   await this.state.storage.put('runs',history);
-   console.log('corpus_index_run_started',JSON.stringify(run));
-   const result=await refreshCorpusIndex(this.env.OAUTH_KV,BUILD_VERSION,transport,{forceDocuments:run.trigger==='manual'});
-   run.processed=result.processed;run.status=result.errors.count?'partial':'success';run.result=result;
-  }catch(error){run.status='failed';run.error_code=indexErrorCode(error);run.result={message:String(error).slice(0,240)};}
-  try{
-   run.finished_at=new Date().toISOString();run.duration_ms=Date.now()-started;run.subrequests_used=transport.usage!().used;
-   history.latest=run;if(run.trigger==='cron')history.last_cron_finished_at=run.finished_at;
-   await this.state.storage.put('runs',history);
-   console.log('corpus_index_run_finished',JSON.stringify(run));
-   return Response.json(run,{status:run.status==='failed'?500:200});
-  }finally{this.running=false;}
+   const lease=await this.state.storage.get<Lease>('lease');
+   if(path.startsWith('/bootstrap/')){
+    if(lease&&lease.build_version===BUILD_VERSION&&lease.expires_at>Date.now())return Response.json({error_code:'index_busy'},{status:409});
+    return await handleBootstrap(path,request,this.state.storage,this.env.OAUTH_KV);
+   }
+   if(path==='/begin'){
+    if(lease&&lease.build_version===BUILD_VERSION&&lease.expires_at>Date.now())return Response.json({error_code:'index_busy'},{status:409});
+    if(await bootstrapActive(this.state.storage))return Response.json({error_code:'bootstrap_in_progress'},{status:409});
+    const history=await this.state.storage.get<History>('runs')??{};
+    if(history.latest?.finished_at&&Date.now()-Date.parse(history.latest.finished_at)<1100)return Response.json({error_code:'index_rate_limited'},{status:429,headers:{'retry-after':'2'}});
+    if(history.latest?.status==='running')console.error('corpus_index_previous_run_interrupted',{...history.latest,error_code:'timeout'});
+    const input=await request.json() as {trigger?:string;build_version?:string};
+    if(input.build_version&&input.build_version!==BUILD_VERSION)return Response.json({error_code:'index_build_changed'},{status:409});
+    const started=Date.now();
+    const run:Run={run_id:crypto.randomUUID(),build_version:BUILD_VERSION,trigger:input.trigger==='cron'?'cron':'manual',execution:'worker',started_at:new Date(started).toISOString(),finished_at:null,processed:0,duration_ms:0,subrequests_used:0,subrequest_limit:36,status:'running'};
+    history.latest=run;if(run.trigger==='cron')history.last_cron_started_at=run.started_at;
+    const next:Lease={run_id:run.run_id,token:crypto.randomUUID(),expires_at:started+20*60*1000,build_version:BUILD_VERSION};
+    await this.state.storage.put({runs:history,lease:next});
+    console.log('corpus_index_run_started',JSON.stringify(run));
+    return Response.json({run,lease_token:next.token});
+   }
+   if(path==='/assert'||path==='/finish'){
+    const input=await request.json() as {run_id:string;lease_token:string;run?:Run};
+    if(!lease||lease.build_version!==BUILD_VERSION||lease.run_id!==input.run_id||lease.token!==input.lease_token||lease.expires_at<=Date.now())return Response.json({error_code:'index_lease_expired'},{status:409});
+    if(path==='/assert')return new Response(null,{status:204});
+    const history=await this.state.storage.get<History>('runs')??{};
+    const run={...history.latest!,...input.run,run_id:lease.run_id};history.latest=run;
+    if(run.trigger==='cron')history.last_cron_finished_at=run.finished_at??undefined;
+    await this.state.storage.put({runs:history,lease:{...lease,expires_at:0}});
+    console.log('corpus_index_run_finished',JSON.stringify(run));
+    return Response.json(run,{status:run.status==='failed'?500:200});
+   }
+   return new Response('Not found',{status:404});
+  }finally{this.busy=false;}
  }
 }
 type CoordinatorEnv={CORPUS_INDEX_COORDINATOR:DurableObjectNamespace;INDEX_ADMIN_TOKEN?:string;OAUTH_KV:KVNamespace};
 function coordinator(env:CoordinatorEnv){return env.CORPUS_INDEX_COORDINATOR.get(env.CORPUS_INDEX_COORDINATOR.idFromName('add-corpus-index'));}
 export async function runCoordinatedIndex(env:CoordinatorEnv,trigger:'cron'|'manual'){
- return coordinator(env).fetch('https://index.internal/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({trigger})});
+ const stub=coordinator(env);const send=(path:string,body:unknown)=>stub.fetch('https://index.internal'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+ const acquired=await send('/begin',{trigger,build_version:BUILD_VERSION});if(!acquired.ok)return acquired;
+ const {run,lease_token}=await acquired.json() as {run:Run;lease_token:string};
+ const transport=createIndexRequest(fetch,Date.now,36),started=Date.now();
+ const identity={run_id:run.run_id,lease_token};
+ try{
+  const result=await refreshCorpusIndex(env.OAUTH_KV,BUILD_VERSION,transport,{forceDocuments:trigger==='manual',beforeCommit:async()=>{const response=await send('/assert',identity);if(!response.ok)throw Error('index_lease_expired');}});
+  run.processed=result.processed;run.status=result.errors.count?'partial':'success';run.result=result;
+ }catch(error){run.status='failed';run.error_code=indexErrorCode(error);run.result={message:String(error).slice(0,240),diagnostics:errorDiagnostics(error)};}
+ run.finished_at=new Date().toISOString();run.duration_ms=Date.now()-started;run.subrequests_used=transport.usage!().used;
+ return send('/finish',{...identity,run});
 }
 export async function getIndexRuntimeStatus(env:CoordinatorEnv){
  try{const response=await coordinator(env).fetch('https://index.internal/status');if(!response.ok)throw Error('HTTP '+response.status);return await response.json() as {last_cron_started_at:string|null;last_cron_finished_at:string|null;processed_in_last_run:number;last_index_run:Run|null};}
@@ -56,16 +84,18 @@ async function authorized(request:Request,secret:string){
  const first=new Uint8Array(a),second=new Uint8Array(b);let diff=0;for(let i=0;i<first.length;i++)diff|=first[i]^second[i];return diff===0;
 }
 export async function handleIndexAdmin(request:Request,env:CoordinatorEnv):Promise<Response|null>{
- const path=new URL(request.url).pathname;if(path!=='/admin/trigger-index'&&path!=='/admin/index-status')return null;
+ const path=new URL(request.url).pathname;
+ if(!['/admin/trigger-index','/admin/index-status','/admin/probe-alio','/admin/bootstrap-index/begin','/admin/bootstrap-index/shard','/admin/bootstrap-index/activate'].includes(path))return null;
  if(!env.INDEX_ADMIN_TOKEN)return Response.json({error_code:'admin_token_not_configured'},{status:503});
  if(!await authorized(request,env.INDEX_ADMIN_TOKEN))return Response.json({error_code:'unauthorized'},{status:401});
- if(path==='/admin/trigger-index'){
-  if(request.method!=='POST')return Response.json({error_code:'method_not_allowed'},{status:405,headers:{allow:'POST'}});
-  return runCoordinatedIndex(env,'manual');
+ const method=path==='/admin/index-status'?'GET':'POST';
+ if(request.method!==method)return Response.json({error_code:'method_not_allowed'},{status:405,headers:{allow:method}});
+ if(path==='/admin/trigger-index')return runCoordinatedIndex(env,'manual');
+ if(path==='/admin/probe-alio'){
+  const [worker,object]=await Promise.all([Promise.all([probeAlio('worker',false),probeAlio('worker',true)]),coordinator(env).fetch('https://index.internal/probe',{method:'POST'})]);
+  return Response.json({build_version:BUILD_VERSION,checked_at:new Date().toISOString(),worker_colo:request.cf?.colo??null,results:[...worker,...await object.json() as object[]]});
  }
- if(request.method!=='GET')return Response.json({error_code:'method_not_allowed'},{status:405,headers:{allow:'GET'}});
+ if(path.startsWith('/admin/bootstrap-index/'))return coordinator(env).fetch(new Request('https://index.internal/bootstrap/'+path.split('/').at(-1),request));
  const [index,status]=await Promise.all([readIndex(env.OAUTH_KV,Date.now(),BUILD_VERSION),getIndexRuntimeStatus(env)]);
- return Response.json({...status,index_build_version:index.index_build_version,indexedRegulations:index.documents.length,totalRegulations:index.total,
-  partial:index.partial,lastVerifiedAt:index.lastVerifiedAt,lastCompletedAt:index.lastCompletedAt,errors:index.errors,
-  last_list_verified_at:index.last_list_verified_at,next_list_refresh_at:index.next_list_refresh_at,next_retry_at:index.next_retry_at});
+ return Response.json({...status,index_build_version:index.index_build_version,indexedRegulations:index.documents.length,totalRegulations:index.total,partial:index.partial,lastVerifiedAt:index.lastVerifiedAt,lastCompletedAt:index.lastCompletedAt,errors:index.errors,last_list_verified_at:index.last_list_verified_at,next_list_refresh_at:index.next_list_refresh_at,next_retry_at:index.next_retry_at});
 }
