@@ -168,3 +168,16 @@ Production get_regulation reads the manifest once instead of fetching 213 pages.
 Cross-index coverage/status is reported in version_check.cross_entry_index_status.
 Old imports without attachments remain searchable but cannot supply cross warnings;
 rebuild/import a complete current snapshot before release acceptance.
+
+## v1.10.12: CPU reduction and interrupted-run recovery
+
+The Cloudflare event `outcome: exceededCpu` is a platform termination; `scriptVersion.id` is a deployment UUID, not an error code. A following scheduled event may be `ok` while the handler returns `409 index_busy`, because it skipped the still-leased run.
+
+- Cron processes one document per invocation; administrator manual runs retain the two-document batch. List collection remains staged and bounded.
+- Fresh downloaded bytes are still checked by SHA-256. For the same fileNo, hash and parser identity, the selector uses bounded cached revision text and the indexer reuses cached body text. Changed bytes use the normal shared selector and parser.
+- An unchanged document keeps its immutable shard, search sections and attachment warnings. The manifest records the successful verification time. Failed attempts do not yield `partial:false`; missing/stale list evidence and pending changes remain visible.
+- Cross-entry warnings are rebuilt only when document/catalog or list metadata changes. An invocation with no due work performs one manifest read and no corpus writes or outbound requests.
+- Writer leases last five minutes, beyond the four-minute network deadline. A Durable Object alarm, status read or next writer recovers an expired/obsolete lease as `interrupted` / `execution_interrupted`; `last_interrupted_run` records it. Recovery cannot prove whether CPU, process interruption or another platform failure caused termination. Late publishers are rejected by the lease check; the committed corpus remains intact. Active runs are never revoked by an early alarm.
+- No real amendment is required to verify latestness checks: record the successful complete ALIO list time, compare stDate/idate, and separately verify fileNo and fresh-byte SHA. New/changed metadata, same-metadata byte replacements, failed fetches and expired writers are tested with injected fixtures.
+
+Local/CI elapsed times are not deployed CPU measurements. Verify Cloudflare CPU logs after deployment, including a due document run and complete list refresh. Parsing a genuinely changed large PDF/HWP may still exceed the Free plan's CPU budget; the change reduces unchanged-document work and bounds/recoveries, without claiming every newly changed document fits 10ms.
