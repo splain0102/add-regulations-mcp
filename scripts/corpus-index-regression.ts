@@ -136,7 +136,7 @@ await test('A-3 latest-first samples contain build and codes; timeout/fetch/pars
 });
 await test('A-3 coordinator preserves start and finish on early failure, rejects concurrent writer; token absence fails closed',async()=>{
  const values=new Map<string,unknown>();let startReady!:()=>void;const started=new Promise<void>(resolve=>startReady=resolve);let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);
- const storage={get:async(key:string)=>structuredClone(values.get(key)),put:async(key:any,value?:unknown)=>{const entries=typeof key==='string'?[[key,value]]:Object.entries(key);for(const [name,data] of entries){values.set(name,structuredClone(data));if((data as any)?.latest?.status==='running')startReady();}}};
+ const storage={setAlarm:async(_at:number)=>{},get:async(key:string)=>structuredClone(values.get(key)),put:async(key:any,value?:unknown)=>{const entries=typeof key==='string'?[[key,value]]:Object.entries(key);for(const [name,data] of entries){values.set(name,structuredClone(data));if((data as any)?.latest?.status==='running')startReady();}}};
  const badKV={get:async()=>{await gate;throw Error('KV unavailable');}};
  const coordinator=new CorpusIndexCoordinator({storage} as any,{OAUTH_KV:badKV as any});
  const request=()=>new Request('https://internal/begin',{method:'POST',body:JSON.stringify({trigger:'cron'})});
@@ -218,7 +218,7 @@ await test('A-5 expired writer lease cannot mutate or replace a committed snapsh
  assert.equal(store.values.get(INDEX_PREFIX+'state'),previous);assert.equal(store.writes,writes);assert.equal(indexErrorCode(Error('index_lease_expired')),'timeout');
 });
 await test('A-5 deployment change revokes the old build lease and rejects stale publication',async()=>{
- const values=new Map<string,any>(),storage={get:async(key:string)=>structuredClone(values.get(key)),put:async(key:any,value?:any)=>{for(const [name,data] of typeof key==='string'?[[key,value]]:Object.entries(key))values.set(name,structuredClone(data));}};
+ const values=new Map<string,any>(),storage={setAlarm:async(_at:number)=>{},get:async(key:string)=>structuredClone(values.get(key)),put:async(key:any,value?:any)=>{for(const [name,data] of typeof key==='string'?[[key,value]]:Object.entries(key))values.set(name,structuredClone(data));}};
  values.set('lease',{run_id:'obsolete',token:'secret',expires_at:Date.now()+600000,build_version:'old-build'});
  const coordinator=new CorpusIndexCoordinator({storage} as any,{OAUTH_KV:new TestKV().binding()});
  const stale=await coordinator.fetch(new Request('https://internal/assert',{method:'POST',body:JSON.stringify({run_id:'obsolete',lease_token:'secret'})}));assert.equal(stale.status,409);
@@ -227,7 +227,7 @@ await test('A-5 deployment change revokes the old build lease and rejects stale 
 });
 await test('A-5 administrator bootstrap validates all 213 documents before atomic activation and preserves OAuth',async()=>{
  const store=new TestKV();await scheduledRefresh(store.binding(),smallSource,base);const before=store.values.get(INDEX_PREFIX+'state');store.values.set('oauth:sentinel','{"preserved":true}');
- const values=new Map<string,unknown>(),storage={get:async(key:string)=>structuredClone(values.get(key)),put:async(key:string,value:unknown)=>values.set(key,structuredClone(value))} as any;
+ const values=new Map<string,unknown>(),storage={setAlarm:async(_at:number)=>{},get:async(key:string)=>structuredClone(values.get(key)),put:async(key:string,value:unknown)=>values.set(key,structuredClone(value))} as any;
  const send=(path:string,body:any)=>handleBootstrap('/bootstrap/'+path,new Request('https://internal/bootstrap/'+path,{method:'POST',body:JSON.stringify(body)}),storage,store.binding());
  const fresh=items.map(item=>({...item,detailUrl:'https://www.alio.go.kr/item/itemBoard21110.do?idx=1'}));
  assert.equal((await send('begin',{items:fresh,parser_version:'old',source_verified_at:new Date().toISOString()})).status,400);
@@ -242,5 +242,31 @@ await test('A-5 administrator bootstrap validates all 213 documents before atomi
  store.failKey=':state';assert.equal((await send('activate',{session_id})).status,500);assert.equal(store.values.get(INDEX_PREFIX+'state'),before);store.failKey='';
  assert.equal((await send('activate',{session_id})).status,200);assert.equal((await send('activate',{session_id})).status,200);
  const index=await readIndex(store.binding());assert.equal(index.documents.length,213);assert.equal(index.partial,false);assert(index.lastCompletedAt);assert.equal(index.errors.count,0);assert.equal(store.values.get('oauth:sentinel'),'{"preserved":true}');
+});
+await test('A-8 unchanged fresh bytes retain shards and refresh integrity timestamps',async()=>{
+ const store=new TestKV(),item={title:'변경 없음',detailUrl:'https://www.alio.go.kr/test',revisionDate:'2026.01.01'},bytes=new TextEncoder().encode('same'),adapter={list:async()=>[item],load:async()=>({fileNo:'1',text:'제1조(목적)\n원문',bytes,parserVersion:'test'})};
+ await scheduledRefresh(store.binding(),adapter,base,{forceList:true});const before=JSON.parse(store.values.get(INDEX_PREFIX+'state')!),shard=store.values.get(Object.values(before.refs)[0] as string);
+ const fresh=base+MAX_INDEX_AGE+1;await scheduledRefresh(store.binding(),adapter,fresh,{forceList:true,forceDocuments:true});const after=JSON.parse(store.values.get(INDEX_PREFIX+'state')!);
+ assert.deepEqual(after.refs,before.refs);assert.equal(store.values.get(Object.values(after.refs)[0] as string),shard);assert.equal(after.checked[item.title],new Date(fresh).toISOString());assert.equal((await readIndex(store.binding(),fresh)).partial,false);
+ const writes=store.writes,reads=store.reads;await scheduledRefresh(store.binding(),adapter,fresh+1);assert.equal(store.writes,writes);assert.equal(store.reads-reads,1);
+});
+await test('A-8 unchanged PDF bytes reuse cached text without invoking a PDF parser',async()=>{
+ const bytes=new TextEncoder().encode('invalid PDF bytes: parser invocation would fail'),item={title:'감사규정',detailUrl:'https://www.alio.go.kr/item/itemBoard21110.do?idx=cache',revisionDate:'2026.01.01',updatedDate:'2026.01.02'};
+ const previous={...item,fileNo:'1',text:'제1조(목적)\n감사\n부 칙\n이 규정은 2026년 1월 1일부터 시행한다.',sha256:await sha256(bytes),verifiedAt:new Date(base).toISOString(),parserVersion:PARSER_VERSION};
+ let calls=0;const adapter=createCorpusSource(async(url:any)=>{calls++;return String(url).includes('itemBoard')?new Response('<a href="/download/rulefiledown.json?fileNo=1">감사규정(2026년 1월 개정).pdf</a>'):new Response(bytes,{headers:{'content-disposition':'attachment; filename="audit.pdf"'}});});
+ const result=await adapter.load(item,previous);assert.equal(result.text,previous.text);assert.equal(result.fileNo,'1');assert.equal(calls,2);
+ // A changed byte must invalidate cache and exercise the actual parser.
+ const changed={...previous,sha256:'0'.repeat(64)};await assert.rejects(()=>adapter.load(item,changed));
+});
+await test('A-8 watchdog recovers interrupted writer without KV mutation and rejects its late finish',async()=>{
+ const values=new Map<string,any>(),alarms:number[]=[],storage={get:async(k:string)=>structuredClone(values.get(k)),setAlarm:async(at:number)=>{alarms.push(at);},put:async(k:any,v?:any)=>{for(const [a,b]of typeof k==='string'?[[k,v]]:Object.entries(k))values.set(a,structuredClone(b));}};
+ const store=new TestKV(),c=new CorpusIndexCoordinator({storage} as any,{OAUTH_KV:store.binding()}),begin=()=>c.fetch(new Request('https://internal/begin',{method:'POST',body:JSON.stringify({trigger:'cron'})}));
+ const acquired=await (await begin()).json() as any;assert.equal(alarms.length,1);assert.equal((await begin()).status,409);
+ // Alarm racing an active writer must only re-arm, never revoke it.
+ await c.alarm();assert.equal(values.get('runs').latest.status,'running');assert.equal(alarms.length,2);
+ values.get('lease').expires_at=Date.now()-1;await c.alarm();const history=values.get('runs');assert.equal(history.latest.status,'interrupted');assert.equal(history.last_interrupted_run.error_code,'execution_interrupted');assert(history.last_cron_finished_at);assert.equal(store.writes,0);
+ const late=await c.fetch(new Request('https://internal/finish',{method:'POST',body:JSON.stringify({run_id:acquired.run.run_id,lease_token:acquired.lease_token,run:{status:'success'}})}));assert.equal(late.status,409);
+ // Recovery cooldown expires before next scheduled tick.
+ history.latest.finished_at=new Date(Date.now()-2000).toISOString();values.set('runs',history);assert.equal((await begin()).status,200);
 });
 writeFileSync('reports/corpus-index-regression.json',JSON.stringify({passed:true,tests:results,scope:'A only; synthetic failure injection; not live ALIO or deployed Workers'},null,2));

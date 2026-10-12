@@ -25,10 +25,11 @@ export type IndexState = {
   index_build_version?:string;lastVerifiedAt?:string;sourceErrorAt?:string;sourceErrorCode?:string;lastCompletedAt?:string;sourceError?:string;indexedTitles?:string[];garbage:{key:string;after:number}[];
   sourceErrorDetails?:Record<string,unknown>;
 };
-export type CorpusSource = {list(work?:unknown):Promise<CorpusItem[]|{items?:CorpusItem[];work?:unknown}>;load(item:CorpusItem):Promise<{fileNo:string;text:string;bytes:Uint8Array;parserVersion:string;attachments?:IndexedAttachment[];selectedDate?:string|null}>};
+export type CorpusSource = {list(work?:unknown):Promise<CorpusItem[]|{items?:CorpusItem[];work?:unknown}>;load(item:CorpusItem,previous?:CorpusDocument):Promise<{fileNo:string;text:string;bytes:Uint8Array;parserVersion:string;attachments?:IndexedAttachment[];selectedDate?:string|null}>};
 export function shardId(title:string){let hash=2166136261;for(const c of title){hash^=c.charCodeAt(0);hash=Math.imul(hash,16777619);}return (hash>>>0)%INDEX_SHARDS;}
 export async function sha256(bytes:Uint8Array){const hash=await crypto.subtle.digest('SHA-256',bytes as BufferSource);return [...new Uint8Array(hash)].map(v=>v.toString(16).padStart(2,'0')).join('');}
 function sameMetadata(a:CorpusItem,b:CorpusItem){return a.title===b.title&&a.detailUrl===b.detailUrl&&a.revisionDate===b.revisionDate&&a.updatedDate===b.updatedDate;}
+function sameList(a:CorpusItem[],b:CorpusItem[]){return a.length===b.length&&a.every((item,i)=>sameMetadata(item,b[i]));}
 function emptyState():IndexState{return {schema:2,cursor:0,items:[],refs:{},sizes:{},checked:{},errors:{},lastCheckedAt:'',garbage:[]};}
 async function readState(kv:KVNamespace){return await kv.get<IndexState>(INDEX_PREFIX+'state','json');}
 async function readShard(kv:KVNamespace,state:IndexState,id:number):Promise<Shard>{
@@ -57,7 +58,7 @@ function timing(state:IndexState){
 }
 // KV is not a lock: run one Cron writer. Immutable shards + one manifest prevent
 // a failed multi-key write from destroying the preceding committed snapshot.
-export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.now(),options?:{buildVersion?:string;forceList?:boolean;forceDocuments?:boolean;beforeCommit?:()=>Promise<void>}){
+export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.now(),options?:{buildVersion?:string;forceList?:boolean;forceDocuments?:boolean;batchSize?:number;beforeCommit?:()=>Promise<void>}){
   const previous=await readState(kv)??emptyState();
   const buildVersion=options?.buildVersion??previous.index_build_version??'test';
   if(previous.index_build_version!==buildVersion){
@@ -67,9 +68,13 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
     delete previous.listError;delete previous.listRetryAttempts;delete previous.nextListAttemptAt;
     previous.checked={};previous.pending=previous.items.map(item=>item.title);
   }
+  const nextList=previous.nextListAttemptAt?Date.parse(previous.nextListAttemptAt):previous.listWork?0:Date.parse(previous.lastCheckedAt)+LIST_REFRESH_INTERVAL;
+  const documentDue=previous.items.some(item=>{const error=previous.errors[item.title];return error? !error.next_retry_at||now>=Date.parse(error.next_retry_at):previous.pending?.includes(item.title)||!previous.checked[item.title]||now-Date.parse(previous.checked[item.title])>=DOCUMENT_CHECK_INTERVAL;});
+  if(!options?.forceList&&!options?.forceDocuments&&Number.isFinite(nextList)&&now<nextList&&!documentDue&&!previous.garbage.some(g=>g.after<=now))return {processed:0,updated:0,indexedRegulations:previous.indexedTitles?.length??0,next_cursor:previous.cursor||null,errors:errorSummary(previous),lastCheckedAt:previous.lastCheckedAt,lastVerifiedAt:previous.lastVerifiedAt??null,index_build_version:buildVersion,lastCompletedAt:previous.lastCompletedAt??null,...timing(previous)};
   const state:IndexState=structuredClone(previous);
   const timestamp=new Date(now).toISOString();
-  const changed=new Map<number,Shard>();const writtenKeys:string[]=[];let processed=0,updated=0;
+  let catalogChanged=false;
+  const dirty=new Set<number>();const changed=new Map<number,Shard>();const writtenKeys:string[]=[];let processed=0,updated=0;
   try{
     let freshItems:CorpusItem[]|undefined;
     const nextList=state.nextListAttemptAt?Date.parse(state.nextListAttemptAt):state.listWork?0:Date.parse(state.lastCheckedAt)+LIST_REFRESH_INTERVAL;
@@ -112,31 +117,37 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
       // Failed entries rotate with the sweep instead of starving other entries.
       return (state.errors[a.title]?1:priority(a)*2)-(state.errors[b.title]?1:priority(b)*2)||
         (state.checked[a.title]??'').localeCompare(state.checked[b.title]??'')||a.title.localeCompare(b.title);
-    }).slice(0,INDEX_BATCH);
+    }).slice(0,Math.max(1,Math.min(INDEX_BATCH,options?.batchSize??INDEX_BATCH)));
     for(const item of selected){
       processed++;state.checked[item.title]=timestamp;
       try{
         const id=shardId(item.title);
         let shard=changed.get(id);if(!shard){shard=await readShard(kv,state,id);changed.set(id,shard);}
-        const loaded=await source.load(item);
+        const old=shard.documents[item.title];
+        const loaded=await source.load(item,old);
         if(!loaded.fileNo||!loaded.text.trim())throw Error('empty_or_unselected_document');
         const hash=await sha256(loaded.bytes);
+        if(old&&old.text===loaded.text&&old.fileNo===loaded.fileNo&&old.sha256===hash&&old.parserVersion===loaded.parserVersion&&sameMetadata(old,item)&&JSON.stringify(old.attachments)===JSON.stringify(loaded.attachments)&&old.selectedDate===loaded.selectedDate){
+          // Revalidation still checks the fresh bytes; preserve immutable shard and sections.
+          delete state.errors[item.title];state.pending=state.pending.filter(title=>title!==item.title);
+          if(!dirty.has(id))changed.delete(id);
+          continue;
+        }
         const doc:CorpusDocument={...item,fileNo:loaded.fileNo,text:loaded.text,sha256:hash,verifiedAt:timestamp,parserVersion:loaded.parserVersion,searchSections:prepareSearchSections(loaded.text),attachments:loaded.attachments,selectedDate:loaded.selectedDate};
-        const old=shard.documents[item.title];
         const retained=Object.fromEntries(Object.entries(shard.documents).filter(([title])=>titles.has(title)));
         const candidate={documents:{...retained,[item.title]:doc}};
         const size=new TextEncoder().encode(JSON.stringify(candidate)).byteLength;
         if(size>MAX_SHARD_BYTES)throw Error('index_shard_size_limit');
         const total=Object.values(state.sizes).reduce((a,b)=>a+b,0)-(state.sizes[id]??0)+size;
         if(total>MAX_CORPUS_BYTES)throw Error('index_corpus_size_limit');
-        state.sizes[id]=size;shard.documents=candidate.documents;
+        state.sizes[id]=size;shard.documents=candidate.documents;dirty.add(id);catalogChanged=true;
         if(loaded.attachments)(state.attachmentCatalog??={})[item.title]={fileNo:doc.fileNo,selectedDate:doc.selectedDate,attachments:loaded.attachments};
         for(const title of Object.keys(candidate.documents))indexed.add(title);
         if(!old||old.sha256!==hash||old.fileNo!==doc.fileNo||old.parserVersion!==doc.parserVersion||!sameMetadata(old,doc))updated++;
         delete state.errors[item.title];state.pending=state.pending.filter(title=>title!==item.title);
       }catch(error){const attempts=(state.errors[item.title]?.retry_attempts??0)+1;state.errors[item.title]={title:item.title,message:String(error).slice(0,240),checkedAt:timestamp,code:indexErrorCode(error),error_code:indexErrorCode(error),build_version:buildVersion,retry_attempts:attempts,next_retry_at:new Date(now+retryDelay(attempts)).toISOString(),diagnostics:errorDiagnostics(error)};}
     }
-    if(state.attachmentCatalog){state.attachmentCatalog=Object.fromEntries(Object.entries(state.attachmentCatalog).filter(([title])=>titles.has(title)));state.crossEntryWarnings=buildCrossAttachmentWarnings(items.map(i=>i.title),state.attachmentCatalog);}
+    if(state.attachmentCatalog&&(catalogChanged||freshItems&&!sameList(freshItems,previous.items))){state.attachmentCatalog=Object.fromEntries(Object.entries(state.attachmentCatalog).filter(([title])=>titles.has(title)));state.crossEntryWarnings=buildCrossAttachmentWarnings(items.map(i=>i.title),state.attachmentCatalog);}
     // Verify the writer lease before any mutations and again before publication.
     await options?.beforeCommit?.();
     // New keys are written first; referenced old keys stay intact on any failure.
@@ -185,7 +196,7 @@ export async function readIndex(kv:KVNamespace,now=Date.now(),expectedBuildVersi
   }
   const wanted=new Map(state.items.map(i=>[i.title,i]));
   const active=documents.filter(d=>wanted.has(d.title));
-  const fresh=active.filter(d=>sameMetadata(d,wanted.get(d.title)!)&&now-Date.parse(d.verifiedAt)<=MAX_INDEX_AGE);
+  const fresh=active.filter(d=>sameMetadata(d,wanted.get(d.title)!)&&now-Date.parse(state.checked[d.title]??d.verifiedAt)<=MAX_INDEX_AGE);
   const buildMatches=!expectedBuildVersion||state.index_build_version===expectedBuildVersion;
   const errors=buildMatches?errorSummary(state):{count:0,sample:[] as ErrorEntry[],retry_cursor:state.cursor};errors.count+=failures.length;errors.sample=[...errors.sample,...failures].sort((a,b)=>b.checkedAt.localeCompare(a.checkedAt)).slice(0,3);
   if(failures.length)errors.retry_cursor=state.cursor;

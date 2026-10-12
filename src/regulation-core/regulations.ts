@@ -1,7 +1,7 @@
 import {fold,tokenWeights,deletedSection,sectionScore} from './search-ranking';
 import {searchBounds} from './search-sections';
 import {PARSER_VERSION} from "./parser-version";
-import {INDEX_PREFIX,refreshIndex,readIndex,type IndexState,type CorpusItem,indexErrorCode} from './corpus-index';
+import {INDEX_PREFIX,refreshIndex,readIndex,type IndexState,type CorpusItem,type CorpusDocument,sha256,indexErrorCode} from './corpus-index';
 import {extractRevisionSection} from './revision-probe';
 import { unzipSync, strFromU8 } from "fflate";
 import { hwpToText } from "@ssabrojs/hwpxjs/browser";
@@ -888,19 +888,27 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
  return {
   list:()=>listRegulations({fresh:true,request}),
   listBatch:(work?:unknown)=>collectIndexList(request,work),
-  async load(item:CorpusItem){
+  async load(item:CorpusItem,previous?:CorpusDocument){
    // One invocation-local byte cache: selection and SHA use the same fresh file.
    let lastFile:{fileNo:string;value:Awaited<ReturnType<typeof downloadLatestFile>>}|undefined;
    async function download(file:Attachment){if(lastFile?.fileNo===file.fileNo)return lastFile.value;const value=await downloadLatestFile(file,request);if(value.bytes.byteLength>4_000_000)throw Error("index_attachment_size_limit");lastFile={fileNo:file.fileNo,value};return value;}
    let probeError:unknown;
    const detail=await getRegulationDetail(item.detailUrl,item.updatedDate,{request,fallbackRevisionDate:item.revisionDate,requireAttachments:true,probe:async file=>{
-    try{const loaded=await download(file);return await extractRevisionSection(loaded.bytes,loaded.extension);}catch(error){probeError=error;throw error;}
+    try{const loaded=await download(file);if(previous&&previous.fileNo===file.fileNo&&previous.parserVersion===PARSER_VERSION&&await sha256(loaded.bytes)===previous.sha256){
+     // Identical bytes: reuse bounded revision evidence instead of parsing PDF/HWP again.
+     const lines=previous.text.split('\n');let collecting=false;const evidence:string[]=[];
+     for(const line of lines){if(/^\s*부\s*칙/.test(line))collecting=true;else if(/^\s*\[?별\s*(표|지)/.test(line))collecting=false;if(collecting||loaded.extension==='pdf'&&line.includes('개정')&&/20\d{2}/.test(line))evidence.push(line);}
+     return evidence.join('\n').slice(-64000);
+    }return await extractRevisionSection(loaded.bytes,loaded.extension);}catch(error){probeError=error;throw error;}
    }});
    if(!detail.latestAttachment){
     if(probeError&&/fetch|HTTP|subrequest|budget_exhausted|deadline_exhausted|timeout|abort|timed.?out/i.test(String(probeError))){const usage=(request as AlioRequest).usage?.();throw attachmentFailure(attachmentErrorCode(probeError),item.detailUrl,{http_status:usage?.status??null,response_bytes:0,subrequests_used:usage?.used??null,subrequest_limit:usage?.limit??null},probeError);}
     throw Error('selection_error:'+detail.selection_reason.join(','));
    }
    const file=await download(detail.latestAttachment);let text:string;
+   const unchanged=previous&&previous.fileNo===detail.latestAttachment.fileNo&&previous.parserVersion===PARSER_VERSION&&await sha256(file.bytes)===previous.sha256;
+   if(unchanged)text=previous.text;
+   else
    if(file.extension==='hwpx')text=extractHwpxText(file.bytes);
    else if(file.extension==='hwp')text=await hwpToText(file.bytes);
    else if(file.extension==='pdf'){const result=await extractText(file.bytes.slice(),{mergePages:true});text=Array.isArray(result.text)?result.text.join('\n\n'):result.text;}
@@ -909,7 +917,7 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
   }
  };
 }
-export async function refreshCorpusIndex(kv:KVNamespace,buildVersion?:string,request=createIndexRequest(),options?:{forceDocuments?:boolean;beforeCommit?:()=>Promise<void>}){const source=createCorpusSource(request);const result=await refreshIndex(kv,{list:source.listBatch,load:source.load},Date.now(),{buildVersion,...options});return {...result,subrequests_used:request.usage!().used,subrequest_limit:request.usage!().limit};}
+export async function refreshCorpusIndex(kv:KVNamespace,buildVersion?:string,request=createIndexRequest(),options?:{forceDocuments?:boolean;batchSize?:number;beforeCommit?:()=>Promise<void>}){const source=createCorpusSource(request);const result=await refreshIndex(kv,{list:source.listBatch,load:source.load},Date.now(),{buildVersion,...options});return {...result,subrequests_used:request.usage!().used,subrequest_limit:request.usage!().limit};}
 export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace,buildVersion?:string){
  const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
  if(!kv) return {query,limit,offset,results:[],errors:{count:1,sample:[{code:'index_unavailable'}],retry_cursor:null},partial:true,index_status:'unavailable',next_cursor:null};
