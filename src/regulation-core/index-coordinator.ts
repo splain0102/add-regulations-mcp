@@ -131,6 +131,14 @@ async function authorized(request:Request,secret:string){
 export async function handleIndexAdmin(request:Request,env:CoordinatorEnv):Promise<Response|null>{
  const path=new URL(request.url).pathname;
  // Forward raw bodies to the larger-CPU coordinator; OIDC validation occurs there.
+ if(path==='/admin/offline-index/alio'){
+  const url=new URL(request.url),value=url.searchParams.get('url');let target:URL;try{target=new URL(value??'');}catch{return Response.json({error_code:'invalid_alio_target'},{status:400});}
+  if(target.origin!=='https://www.alio.go.kr'||target.username||target.password||!['/item/itemReportListSusi.json','/item/itemBoard21110.do','/download/rulefiledown.json'].includes(target.pathname)||value!.length>4000||!['GET','POST'].includes(request.method)||request.method==='POST'&&target.pathname!=='/item/itemReportListSusi.json')return Response.json({error_code:'invalid_alio_target'},{status:400});
+  const verified=await coordinator(env).fetch('https://index.internal/offline/authorize',{method:'POST',headers:{authorization:request.headers.get('authorization')??''}});if(!verified.ok)return verified;
+  // Only raw I/O here: never decode attachment bytes or forward the JWT to ALIO.
+  const headers=new Headers();for(const name of ['accept','accept-language','content-type','user-agent','x-requested-with','referer','origin']){const v=request.headers.get(name);if(v)headers.set(name,v);}
+  try{return await fetch(target.href,{method:request.method,headers,body:request.method==='POST'?request.body:undefined,redirect:'manual',signal:AbortSignal.timeout(25000)});}catch{return Response.json({error_code:'alio_proxy_fetch_failed'},{status:502});}
+ }
  if(path.startsWith('/admin/offline-index/'))return coordinator(env).fetch(new Request('https://index.internal/offline/'+path.slice('/admin/offline-index/'.length),request));
  if(!['/admin/trigger-index','/admin/index-status','/admin/probe-alio','/admin/bootstrap-index/begin','/admin/bootstrap-index/shard','/admin/bootstrap-index/activate'].includes(path))return null;
  if(!env.INDEX_ADMIN_TOKEN)return Response.json({error_code:'admin_token_not_configured'},{status:503});

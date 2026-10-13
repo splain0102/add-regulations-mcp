@@ -1,6 +1,6 @@
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {BUILD_VERSION} from '../src/build-info';
-import {buildOfflineIndex,type Stage} from './offline-index-build';
+import {buildOfflineIndex,offlineSource,type Stage} from './offline-index-build';
 import {uploadSnapshot} from './bootstrap-index.mjs';
 const origin='https://add-regulations-mcp.splain0102.workers.dev',audience=origin+'/admin/offline-index';
 let cached:{value:string;expires:number}|undefined;
@@ -23,6 +23,11 @@ async function send(path:string,body?:unknown){
 }
 let progressQueue:Promise<unknown>=Promise.resolve();
 const progress=(stage:Stage):Promise<void>=>{console.log('OFFLINE_STAGE',JSON.stringify(stage));if(process.env.OFFLINE_CHECKPOINT)return Promise.resolve();const pending=progressQueue.then(()=>send('progress',stage));progressQueue=pending.catch(()=>{});return pending.then(()=>{});};
+let useWorkerTransport=false;
+const transport:typeof fetch=async(input,init)=>{
+ if(!useWorkerTransport){try{const response=await fetch(input,{...init,signal:AbortSignal.any([AbortSignal.timeout(8000),...(init?.signal?[init.signal]:[])])});if(response.status!==429&&response.status<500)return response;await response.body?.cancel();useWorkerTransport=true;}catch(error){if(init?.signal?.aborted)throw error;useWorkerTransport=true;}console.log('OFFLINE_TRANSPORT','Worker raw-I/O fallback');}
+ const target=new URL(audience+'/alio');target.searchParams.set('url',String(input));const headers=new Headers(init?.headers);headers.set('authorization','Bearer '+await token());return fetch(target,{...init,headers,redirect:'manual'});
+};
 mkdirSync('reports',{recursive:true});let started=false;
 try{
  let entries:[string,string][];let forceDocuments=process.env.OFFLINE_FORCE_DOCUMENTS==='true';
@@ -34,7 +39,7 @@ try{
   if(previous.refresh_requested_at&&Date.parse(previous.refresh_requested_at)>Date.parse(previousState?.lastCompletedAt??''))forceDocuments=true;
   await send('start',{});started=true;
  }
- const {entries:next,report,snapshot}=await buildOfflineIndex(entries,undefined,{forceDocuments,progress});
+ const {entries:next,report,snapshot}=await buildOfflineIndex(entries,process.env.OFFLINE_CHECKPOINT?undefined:offlineSource(transport),{forceDocuments,progress});
  writeFileSync('reports/offline-index-checkpoint.json',JSON.stringify(next));writeFileSync('reports/offline-index-result.json',JSON.stringify(report,null,2));writeFileSync('reports/offline-index-bootstrap.json',JSON.stringify(snapshot));
  if(!process.env.OFFLINE_CHECKPOINT){await progress({stage:'upload',processed:report.loadedDocuments});const activated=await uploadSnapshot(snapshot,(path:string,body:unknown)=>send('bootstrap/'+path,body));writeFileSync('reports/offline-index-published.json',JSON.stringify(activated,null,2));console.log('OFFLINE_PUBLISHED',JSON.stringify(activated));}
  else console.log('OFFLINE_DRY_RUN',JSON.stringify({passed:report.passed,indexed:report.indexed,loadedDocuments:report.loadedDocuments}));

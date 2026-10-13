@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import {refreshIndex,readIndex,INDEX_PREFIX,DOCUMENT_CHECK_INTERVAL,indexErrorCode,type CorpusSource,type CorpusItem,type CorpusDocument} from '../src/regulation-core/corpus-index';
 import {BUILD_VERSION} from '../src/build-info';
 import {PARSER_VERSION} from '../src/regulation-core/parser-version';
-import {createCorpusSource,searchAllRegulations} from '../src/regulation-core/regulations';
+import {createCorpusSource,createIndexRequest,searchAllRegulations} from '../src/regulation-core/regulations';
 import {TestKV} from './corpus-index-test-kv';
 import {exportSnapshot} from './bootstrap-index.mjs';
 export type Stage={stage:string;title?:string;fileNo?:string;processed?:number;error_code?:string;message?:string};
 function metadataEqual(a:CorpusItem,b:CorpusItem){return a.title===b.title&&a.detailUrl===b.detailUrl&&a.revisionDate===b.revisionDate&&a.updatedDate===b.updatedDate;}
-export async function collectOfflineList(){let work:unknown;for(let i=0;i<40;i++){const result=await createCorpusSource().listBatch(work);if(result.items)return result.items;work=result.work;}throw Error('offline_list_incomplete');}
-export const liveOfflineSource:CorpusSource={list:collectOfflineList,load:(item,previous)=>createCorpusSource().load(item,previous)};
+export async function collectOfflineList(request:typeof fetch=fetch){let work:unknown;for(let i=0;i<40;i++){let result;try{result=await createCorpusSource(createIndexRequest(request)).listBatch(work);}catch(error){if(error&&typeof error==='object'&&'listWork' in error)work=error.listWork;if(/index_list_changed|incomplete_index_list|invalid_index_list|invalid_or_empty_regulation_list/.test(String(error)))work=undefined;if(i>=39)throw error;await new Promise(resolve=>setTimeout(resolve,2000));continue;}if(result.items)return result.items;work=result.work;}throw Error('offline_list_incomplete');}
+export function offlineSource(request:typeof fetch=fetch):CorpusSource{return {list:()=>collectOfflineList(request),load:(item,previous)=>createCorpusSource(createIndexRequest(request)).load(item,previous)};}
+export const liveOfflineSource=offlineSource();
 export async function buildOfflineIndex(entries:[string,string][],source:CorpusSource=liveOfflineSource,options:{buildVersion?:string;forceDocuments?:boolean;now?:()=>number;progress?:(stage:Stage)=>Promise<void>}={}){
  const now=options.now??Date.now,build=options.buildVersion??BUILD_VERSION,progress=options.progress??(async()=>{}),kv=new TestKV();kv.values=new Map(entries);
  // Only corpus entries can be restored/exported. OAuth credentials never leave KV.

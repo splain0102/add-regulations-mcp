@@ -28,6 +28,7 @@ export async function offlineTick(storage:DurableObjectStorage,trigger:'cron'|'m
 export async function handleOfflineIndex(path:string,request:Request,storage:DurableObjectStorage,kv:KVNamespace){
  const token=request.headers.get('authorization')?.match(/^Bearer (.+)$/)?.[1];if(!token)return Response.json({error_code:'unauthorized'},{status:401});
  let identity;try{identity=await verifyIndexIdentity(token,BUILD_VERSION);}catch(error){console.error('corpus_offline_auth_failed',{code:String(error).slice(0,160)});return Response.json({error_code:String(error).includes('unavailable')?'oidc_keys_unavailable':'unauthorized'},{status:String(error).includes('unavailable')?503:401});}
+ if(path==='/offline/authorize')return new Response(null,{status:204});
  if(path==='/offline/version'&&request.method==='GET')return Response.json({build_version:BUILD_VERSION,index_mode:OFFLINE_INDEX_MODE});
  const status=await readOfflineStatus(storage),run=status.run,now=Date.now(),timestamp=new Date(now).toISOString();
  if(path==='/offline/snapshot'){

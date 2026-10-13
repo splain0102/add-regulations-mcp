@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {writeFileSync} from 'node:fs';
-import {buildOfflineIndex} from './offline-index-build';
+import {buildOfflineIndex,collectOfflineList} from './offline-index-build';
 import {BUILD_VERSION} from '../src/build-info';
 import {PARSER_VERSION} from '../src/regulation-core/parser-version';
 import {INDEX_PREFIX,type CorpusItem,MAX_INDEX_AGE} from '../src/regulation-core/corpus-index';
@@ -13,6 +13,10 @@ const now=Date.now(),build=BUILD_VERSION;let clock=now;
 let items:CorpusItem[]=['감사규정','민군기술협력사업 보안과제 관리요령','일반규정'].map((title,n)=>({title,detailUrl:'https://www.alio.go.kr/item/itemBoard21110.do?idx='+n,revisionDate:'2026.01.01',updatedDate:'2026.01.02'}));
 let calls=0,revision='original',fail='';const source={list:async()=>structuredClone(items),load:async(item:CorpusItem)=>{calls++;if(item.title===fail)throw Error('ALIO HTTP 522');return {fileNo:'100',bytes:new TextEncoder().encode(revision+item.title),text:item.title.includes('보안과제')?'제8조(외국인 참여)\n외국인 참여에는 승인이 필요하다.':'제1조(목적)\n감사와 일반업무 '+revision,parserVersion:PARSER_VERSION};}};
 let complete:Awaited<ReturnType<typeof buildOfflineIndex>>;
+await test('list collection restarts safely when ALIO count changes mid-page',async()=>{
+ let requests=0;const transport=async(_url:any,init?:RequestInit)=>{const page=JSON.parse(String(init?.body)).pageNo,total=++requests===1?2:3;return Response.json({data:{result:[{title:'page'+page,apbaId:'C0345',idx:String(page),reportFormNo:'21110',tableName:'COMM_RULE',idxName:'RULE_NO',reportGbn:'N',bidType:'',stDate:'2026.01.01',idate:'2026.01.02'}],page:{totalPage:total,totalCount:total}}});};
+ const result=await collectOfflineList(transport);assert.equal(result.length,3);assert(requests>=6);
+});
 await test('initial corpus builds outside Worker and exports all documents',async()=>{complete=await buildOfflineIndex([],source,{buildVersion:build,now:()=>clock});assert.equal(calls,3);assert.equal(complete.report.indexed,3);assert.equal(complete.report.result.partial,false);assert(complete.snapshot.shards.length===16);});
 await test('unchanged list avoids all attachment loads and preserves raw shard references',async()=>{calls=0;clock+=3600000;const second=await buildOfflineIndex(complete.entries,source,{buildVersion:build,now:()=>clock});assert.equal(calls,0);assert.equal(second.report.loadedDocuments,0);const before=JSON.parse(new Map(complete.entries).get(INDEX_PREFIX+'state')!),after=JSON.parse(new Map(second.entries).get(INDEX_PREFIX+'state')!);assert.deepEqual(after.refs,before.refs);complete=second;});
 await test('new regulation and changed stDate/idate load only affected documents',async()=>{calls=0;clock+=3600000;items[2].updatedDate='2026.02.01';items.push({title:'추가규정',detailUrl:'https://www.alio.go.kr/item/itemBoard21110.do?idx=4',revisionDate:'2026.02.01'});const changed=await buildOfflineIndex(complete.entries,source,{buildVersion:build,now:()=>clock});assert.equal(calls,2);assert.equal(changed.report.indexed,4);complete=changed;});
