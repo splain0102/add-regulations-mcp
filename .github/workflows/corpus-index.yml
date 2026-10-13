@@ -34,6 +34,7 @@ jobs:
         run: npm run test:fourth-fixes
         env:
           FOURTH_CHECKPOINT: reports/corpus-index-live-checkpoint.json
+          FOURTH_USE_ACCEPTED_LIST: 'true'
       - name: Export verified initial corpus for administrator bootstrap
         run: node scripts/bootstrap-index.mjs export
       - name: Cold search equivalence and bounded KV performance
