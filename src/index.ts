@@ -1,4 +1,4 @@
-import {handleIndexAdmin,runCoordinatedIndex,getIndexRuntimeStatus} from './regulation-core/index-coordinator';
+import {handleIndexAdmin,runOfflineHeartbeat,getIndexRuntimeStatus} from './regulation-core/index-coordinator';
 export {CorpusIndexCoordinator} from './regulation-core/index-coordinator';
 import {searchRegulationText} from "./regulation-core/text-search";
 import {PARSER_VERSION,normalizeRegulationTitle} from "./regulation-core/regulations";
@@ -14,7 +14,7 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
-const MCP_VERSION = "1.10.12";
+const MCP_VERSION = "1.10.13";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
@@ -4044,7 +4044,7 @@ function createServer(env: Env) {
     },
     async ({query,limit,offset})=>{
       try{
-        const [search,status]=await Promise.all([coreSearchAllRegulations(query,limit,offset,env.OAUTH_KV,BUILD_VERSION),getIndexRuntimeStatus(env)]);
+        const [search,status]=await Promise.all([coreSearchAllRegulations(query,limit,offset,env.OAUTH_KV,BUILD_VERSION,env.CORPUS_INDEX_COORDINATOR),getIndexRuntimeStatus(env)]);
         const data={...search,...status};
         return {structuredContent:data,content:[{type:"text" as const,text:JSON.stringify(data)}]};
       }catch(error){
@@ -4220,7 +4220,7 @@ export default {
  async fetch(request:Request,env:Env,ctx:ExecutionContext){const admin=await handleIndexAdmin(request,env);return admin??oauthProvider.fetch(request,env,ctx);},
  async scheduled(controller:ScheduledController,env:Env,ctx:ExecutionContext){
   const started=Date.now();console.log('corpus_cron_handler_started',{build_version:BUILD_VERSION,cron:controller.cron,scheduledTime:controller.scheduledTime});
-  const job=(async()=>{try{const response=await runCoordinatedIndex(env,'cron');const result=await response.json();console.log('corpus_cron_handler_finished',{build_version:BUILD_VERSION,status:response.status,duration_ms:Date.now()-started,...result as object});}
+  const job=(async()=>{try{const response=await runOfflineHeartbeat(env,'cron');const result=await response.json();console.log('corpus_cron_handler_finished',{build_version:BUILD_VERSION,status:response.status,duration_ms:Date.now()-started,...result as object});}
    catch(error){console.error('corpus_cron_handler_failed',{build_version:BUILD_VERSION,duration_ms:Date.now()-started,message:String(error)});throw error;}})();
   ctx.waitUntil(job);await job;
  }

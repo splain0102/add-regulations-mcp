@@ -1,0 +1,45 @@
+name: Publish offline regulation index
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_documents:
+        description: Recheck every attachment and raw SHA even when ALIO dates are unchanged
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: add-offline-index-production
+  cancel-in-progress: false
+jobs:
+  refresh:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Build, validate and atomically publish the current ALIO index
+        run: node --import ./scripts/test-loader.mjs scripts/offline-index-refresh.ts
+        env:
+          OFFLINE_FORCE_DOCUMENTS: ${{ inputs.force_documents == true && 'true' || 'false' }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-index-evidence
+          path: |
+            reports/offline-index-result.json
+            reports/offline-index-published.json
+            reports/offline-index-checkpoint.json
+            reports/offline-index-bootstrap.json
+          retention-days: 7
+          if-no-files-found: ignore

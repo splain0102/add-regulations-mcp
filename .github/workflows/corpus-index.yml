@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  id-token: write
 jobs:
   index:
     runs-on: ubuntu-latest
@@ -16,12 +17,19 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Verify actual GitHub OIDC issuer and workflow identity claims
+        run: node scripts/github-oidc-ci-probe.mjs
       - run: npm run typecheck:corpus-index
       - run: npm run build:check
       - run: npm run test:corpus-index
+      - run: npm run test:offline-index
       - run: npm run test:corpus-workers
       - name: Actual ALIO whole-corpus acceptance
         run: npm run test:corpus-acceptance
+      - name: Offline incremental rebuild of current ALIO snapshot (no production publish)
+        run: npm run test:offline-build
+        env:
+          OFFLINE_CHECKPOINT: reports/corpus-index-live-checkpoint.json
       - name: Fourth correction live acceptance (N5 N6 cross attachments)
         run: npm run test:fourth-fixes
         env:
@@ -45,4 +53,7 @@ jobs:
             reports/corpus-index-bootstrap.json
             reports/corpus-index-performance.json
             reports/fourth-fixes-regression.json
+            reports/offline-index-result.json
+            reports/offline-index-regression.json
+            reports/oidc-ci-probe.json
           if-no-files-found: ignore

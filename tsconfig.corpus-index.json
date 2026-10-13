@@ -4,5 +4,5 @@
     "strict": true, "skipLibCheck": true, "noEmit": true,
     "lib": ["ES2022"], "types": ["@cloudflare/workers-types"]
   },
-  "files": ["src/regulation-core/corpus-index.ts", "src/regulation-core/index-bootstrap.ts"]
+  "files": ["src/regulation-core/corpus-index.ts", "src/regulation-core/index-bootstrap.ts", "src/regulation-core/offline-index.ts", "src/regulation-core/github-index-auth.ts"]
 }
