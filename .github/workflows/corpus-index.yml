@@ -6,6 +6,9 @@ on:
 permissions:
   contents: read
   id-token: write
+concurrency:
+  group: corpus-index-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   index:
     runs-on: ubuntu-latest
@@ -23,9 +26,25 @@ jobs:
       - run: npm run build:check
       - run: npm run test:corpus-index
       - run: npm run test:offline-index
+      - name: Verify interrupted collection and bounded outage recovery
+        run: node --import ./scripts/test-loader.mjs scripts/live-corpus-recovery-regression.ts
       - run: npm run test:corpus-workers
+      - name: Restore recent raw ALIO downloads for this PR
+        id: raw-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: reports/corpus-index-live-files
+          key: alio-raw-v1-${{ github.event.pull_request.number || github.ref_name }}-${{ hashFiles('src/regulation-core/**', 'package-lock.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            alio-raw-v1-${{ github.event.pull_request.number || github.ref_name }}-${{ hashFiles('src/regulation-core/**', 'package-lock.json') }}-
       - name: Actual ALIO whole-corpus acceptance
         run: npm run test:corpus-acceptance
+      - name: Preserve raw downloads even when ALIO becomes unavailable
+        if: always() && steps.raw-cache.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: reports/corpus-index-live-files
+          key: ${{ steps.raw-cache.outputs.cache-primary-key }}
       - name: Offline incremental rebuild of current ALIO snapshot (no production publish)
         run: npm run test:offline-build
         env:
@@ -57,4 +76,5 @@ jobs:
             reports/offline-index-result.json
             reports/offline-index-regression.json
             reports/oidc-ci-probe.json
+            reports/live-corpus-recovery-regression.json
           if-no-files-found: ignore

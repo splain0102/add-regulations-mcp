@@ -47,6 +47,33 @@ access tokens do not grant administrator access.
 
 ## Manual batch and status
 
+### Resuming live CI after an ALIO outage
+
+The corpus acceptance workflow now uses the same Node offline builder as the
+publisher. It reads a fresh complete ALIO list before and after indexing, requires
+exact full coverage, and verifies that search performs no network downloads.
+It never treats a cached successful report or manifest as current evidence.
+
+Raw documents are saved atomically as each download succeeds. The PR-scoped
+Actions cache includes only these test documents, keyed by parser/source and
+dependency hashes. Entries must match current ALIO metadata and parser version,
+pass a content digest check, and be less than one hour old. The final acceptance
+also checks the oldest download age; an overlong run cannot certify expired
+evidence. Failed runs upload a failure report and retain eligible raw downloads
+for a subsequent run. Cache restoration does not authorize production publication.
+
+List collection retains partial page progress but stops after four failed
+attempts instead of forty; successful pagination does not consume that failure
+budget. After four consecutive network-related document failures, the test
+source stops starting further downloads (already in-flight requests may finish).
+An incomplete corpus still fails CI. This bounds repeated work during an outage;
+it does not guarantee connectivity from a GitHub runner to ALIO. The authenticated
+production fallback retains its existing main-only OIDC policy. PR jobs do not
+gain access to production publication or the authenticated ALIO proxy.
+
+The workflow serializes each PR's acceptance runs and cancels an older run when
+a new commit supersedes it. No automatic failed-job rerun or deployment is added.
+
 With `INDEX_ADMIN_TOKEN` supplied securely in the local environment:
 
 ```sh

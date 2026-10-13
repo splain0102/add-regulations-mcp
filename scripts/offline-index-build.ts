@@ -7,7 +7,25 @@ import {TestKV} from './corpus-index-test-kv';
 import {exportSnapshot} from './bootstrap-index.mjs';
 export type Stage={stage:string;title?:string;fileNo?:string;processed?:number;error_code?:string;message?:string};
 function metadataEqual(a:CorpusItem,b:CorpusItem){return a.title===b.title&&a.detailUrl===b.detailUrl&&a.revisionDate===b.revisionDate&&a.updatedDate===b.updatedDate;}
-export async function collectOfflineList(request:typeof fetch=fetch){let work:unknown;for(let i=0;i<40;i++){let result;try{result=await createCorpusSource(createIndexRequest(request)).listBatch(work);}catch(error){if(error&&typeof error==='object'&&'listWork' in error)work=error.listWork;if(/index_list_changed|incomplete_index_list|invalid_index_list|invalid_or_empty_regulation_list/.test(String(error)))work=undefined;if(i>=39)throw error;await new Promise(resolve=>setTimeout(resolve,2000));continue;}if(result.items)return result.items;work=result.work;}throw Error('offline_list_incomplete');}
+export async function collectOfflineList(request:typeof fetch=fetch,options:{sleep?:(ms:number)=>Promise<void>;maxFailures?:number}={}){
+ let work:unknown,failures=0;const pause=options.sleep??(ms=>new Promise(resolve=>setTimeout(resolve,ms))),maxFailures=options.maxFailures??4;
+ // Successful page batches are not retries. Retain partial pages on transport
+ // errors, but stop a persistent outage rather than spending 40 connect timeouts.
+ for(let batch=0;batch<100;batch++){
+  let result;
+  try{result=await createCorpusSource(createIndexRequest(request)).listBatch(work);}
+  catch(error){
+   if(error&&typeof error==='object'&&'listWork' in error)work=error.listWork;
+   if(/index_list_changed|incomplete_index_list|invalid_index_list|invalid_or_empty_regulation_list/.test(String(error)))work=undefined;
+   console.warn('OFFLINE_LIST_RETRY',JSON.stringify({attempt:failures+1,maxFailures,nextPage:(work as any)?.nextPage,error:String(error)}));
+   if(++failures>=maxFailures)throw error;
+   await pause(2000*failures);continue;
+  }
+  if(result.items)return result.items;work=result.work;
+  console.log('OFFLINE_LIST_PROGRESS',JSON.stringify({nextPage:(work as any)?.nextPage,totalPage:(work as any)?.totalPage}));
+ }
+ throw Error('offline_list_incomplete');
+}
 export function offlineSource(request:typeof fetch=fetch):CorpusSource{return {list:()=>collectOfflineList(request),load:(item,previous)=>createCorpusSource(createIndexRequest(request)).load(item,previous)};}
 export const liveOfflineSource=offlineSource();
 export async function buildOfflineIndex(entries:[string,string][],source:CorpusSource=liveOfflineSource,options:{buildVersion?:string;forceDocuments?:boolean;now?:()=>number;progress?:(stage:Stage)=>Promise<void>}={}){
