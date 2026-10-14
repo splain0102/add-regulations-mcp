@@ -1,3 +1,4 @@
+import {DOCUMENT_INDEX_SCHEMA} from '../src/regulation-core/document-index-codec';
 import assert from 'node:assert/strict';
 import {refreshIndex,readIndex,INDEX_PREFIX,DOCUMENT_CHECK_INTERVAL,indexErrorCode,type CorpusSource,type CorpusItem,type CorpusDocument} from '../src/regulation-core/corpus-index';
 import {BUILD_VERSION} from '../src/build-info';
@@ -26,7 +27,7 @@ export async function collectOfflineList(request:typeof fetch=fetch,options:{sle
  }
  throw Error('offline_list_incomplete');
 }
-export function offlineSource(request:typeof fetch=fetch):CorpusSource{return {list:()=>collectOfflineList(request),load:(item,previous)=>createCorpusSource(createIndexRequest(request)).load(item,previous)};}
+export function offlineSource(request:typeof fetch=fetch):CorpusSource{return {prepareDocumentIndex:true,list:()=>collectOfflineList(request),load:(item,previous)=>createCorpusSource(createIndexRequest(request),{prepareDocument:true}).load(item,previous)};}
 export const liveOfflineSource=offlineSource();
 export async function buildOfflineIndex(entries:[string,string][],source:CorpusSource=liveOfflineSource,options:{buildVersion?:string;forceDocuments?:boolean;now?:()=>number;progress?:(stage:Stage)=>Promise<void>}={}){
  const now=options.now??Date.now,build=options.buildVersion??BUILD_VERSION,progress=options.progress??(async()=>{}),kv=new TestKV();kv.values=new Map(entries);
@@ -37,7 +38,7 @@ export async function buildOfflineIndex(entries:[string,string][],source:CorpusS
  for(const ref of Object.values(old?.refs??{}) as string[]){const value=await kv.get<any>(ref);for(const [title,doc]of Object.entries(value?.documents??{}))docs.set(title,doc as CorpusDocument);}
  const due=items.filter(item=>{
   const doc=docs.get(item.title),previous=oldItems.get(item.title),error=old?.errors[item.title];
-  return options.forceDocuments||!doc||!previous||!metadataEqual(item,previous)||doc.parserVersion!==PARSER_VERSION||old?.index_build_version!==build||old?.pending?.includes(item.title)||error&&(!error.next_retry_at||now()>=Date.parse(error.next_retry_at))||!error&&(!old?.checked[item.title]||now()-Date.parse(old.checked[item.title])>=DOCUMENT_CHECK_INTERVAL);
+  return options.forceDocuments||!doc||source.prepareDocumentIndex&&doc.prepared?.schema!==DOCUMENT_INDEX_SCHEMA||!previous||!metadataEqual(item,previous)||doc.parserVersion!==PARSER_VERSION||old?.index_build_version!==build||old?.pending?.includes(item.title)||error&&(!error.next_retry_at||now()>=Date.parse(error.next_retry_at))||!error&&(!old?.checked[item.title]||now()-Date.parse(old.checked[item.title])>=DOCUMENT_CHECK_INTERVAL);
  });
  type Loaded=Awaited<ReturnType<CorpusSource['load']>>;const loaded=new Map<string,{value?:Loaded;error?:unknown}>();let cursor=0,processed=0;
  // All parser work is in Node. Independent loads are bounded at four.
@@ -50,6 +51,7 @@ export async function buildOfflineIndex(entries:[string,string][],source:CorpusS
   index=await readIndex(kv.binding(),now(),build);
   if(!index.partial)break;if(result.errors.count||!result.processed)throw Object.assign(Error('offline_index_incomplete'),{diagnostics:result.errors});
  }
+ if(source.prepareDocumentIndex)assert(index?.documents.every(d=>d.prepared?.schema===DOCUMENT_INDEX_SCHEMA),'Every document must have a validated table index');
  assert(index&&!index.partial&&index.documents.length===items.length,'Offline corpus must be complete before publication');
  // Confirm the list did not change while changed documents were being parsed.
  const latest=await source.list();assert.deepEqual(latest,items,'ALIO list changed during offline build; retry next run');
@@ -60,3 +62,4 @@ export async function buildOfflineIndex(entries:[string,string][],source:CorpusS
  const snapshot=exportSnapshot([...kv.values],report);
  return {entries:[...kv.values] as [string,string][],report,snapshot};
 }
+

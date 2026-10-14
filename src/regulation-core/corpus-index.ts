@@ -1,3 +1,4 @@
+import type {PreparedDocument} from './document-index-codec';
 import {buildCrossAttachmentWarnings,type AttachmentCatalog,type IndexedAttachment} from './cross-attachments';
 import {prepareSearchSections,type SearchSections} from './search-sections';
 // Only the Cron writer contacts ALIO. Search reads a committed KV manifest.
@@ -13,7 +14,7 @@ export const DOCUMENT_CHECK_INTERVAL = 12 * 60 * 60 * 1000;
 export const RETRY_BASE = 5 * 60 * 1000;
 export function retryDelay(attempt:number){return Math.min(60 * 60 * 1000,RETRY_BASE * 2 ** Math.min(4,Math.max(0,attempt-1)));}
 export type CorpusItem = {title:string;detailUrl:string;revisionDate?:string;updatedDate?:string};
-export type CorpusDocument = CorpusItem & {fileNo:string;text:string;sha256:string;verifiedAt:string;parserVersion:string;searchSections?:SearchSections;attachments?:IndexedAttachment[];selectedDate?:string|null};
+export type CorpusDocument = CorpusItem & {fileNo:string;text:string;sha256:string;verifiedAt:string;parserVersion:string;prepared?:PreparedDocument;searchSections?:SearchSections;attachments?:IndexedAttachment[];selectedDate?:string|null};
 type ErrorEntry = {title:string;message:string;checkedAt:string;code?:string;error_code?:string;build_version?:string;retry_attempts?:number;next_retry_at?:string;diagnostics?:Record<string,unknown>};
 export function errorDiagnostics(error:unknown){return error&&typeof error==='object'&&'diagnostics' in error?error.diagnostics as Record<string,unknown>:undefined;}
 type Shard = {documents:Record<string,CorpusDocument>};
@@ -25,7 +26,7 @@ export type IndexState = {
   index_build_version?:string;lastVerifiedAt?:string;sourceErrorAt?:string;sourceErrorCode?:string;lastCompletedAt?:string;sourceError?:string;indexedTitles?:string[];garbage:{key:string;after:number}[];
   sourceErrorDetails?:Record<string,unknown>;
 };
-export type CorpusSource = {list(work?:unknown):Promise<CorpusItem[]|{items?:CorpusItem[];work?:unknown}>;load(item:CorpusItem,previous?:CorpusDocument):Promise<{fileNo:string;text:string;bytes:Uint8Array;parserVersion:string;attachments?:IndexedAttachment[];selectedDate?:string|null}>};
+export type CorpusSource = {prepareDocumentIndex?:boolean;list(work?:unknown):Promise<CorpusItem[]|{items?:CorpusItem[];work?:unknown}>;load(item:CorpusItem,previous?:CorpusDocument):Promise<{fileNo:string;text:string;bytes:Uint8Array;parserVersion:string;prepared?:PreparedDocument;attachments?:IndexedAttachment[];selectedDate?:string|null}>};
 export function shardId(title:string){let hash=2166136261;for(const c of title){hash^=c.charCodeAt(0);hash=Math.imul(hash,16777619);}return (hash>>>0)%INDEX_SHARDS;}
 export async function sha256(bytes:Uint8Array){const hash=await crypto.subtle.digest('SHA-256',bytes as BufferSource);return [...new Uint8Array(hash)].map(v=>v.toString(16).padStart(2,'0')).join('');}
 function sameMetadata(a:CorpusItem,b:CorpusItem){return a.title===b.title&&a.detailUrl===b.detailUrl&&a.revisionDate===b.revisionDate&&a.updatedDate===b.updatedDate;}
@@ -127,13 +128,13 @@ export async function refreshIndex(kv:KVNamespace,source:CorpusSource,now=Date.n
         const loaded=await source.load(item,old);
         if(!loaded.fileNo||!loaded.text.trim())throw Error('empty_or_unselected_document');
         const hash=await sha256(loaded.bytes);
-        if(old&&old.text===loaded.text&&old.fileNo===loaded.fileNo&&old.sha256===hash&&old.parserVersion===loaded.parserVersion&&sameMetadata(old,item)&&JSON.stringify(old.attachments)===JSON.stringify(loaded.attachments)&&old.selectedDate===loaded.selectedDate){
+        if(old&&JSON.stringify(old.prepared)===JSON.stringify(loaded.prepared)&&old.text===loaded.text&&old.fileNo===loaded.fileNo&&old.sha256===hash&&old.parserVersion===loaded.parserVersion&&sameMetadata(old,item)&&JSON.stringify(old.attachments)===JSON.stringify(loaded.attachments)&&old.selectedDate===loaded.selectedDate){
           // Revalidation still checks the fresh bytes; preserve immutable shard and sections.
           delete state.errors[item.title];state.pending=state.pending.filter(title=>title!==item.title);
           if(!dirty.has(id))changed.delete(id);
           continue;
         }
-        const doc:CorpusDocument={...item,fileNo:loaded.fileNo,text:loaded.text,sha256:hash,verifiedAt:timestamp,parserVersion:loaded.parserVersion,searchSections:prepareSearchSections(loaded.text),attachments:loaded.attachments,selectedDate:loaded.selectedDate};
+        const doc:CorpusDocument={...item,prepared:loaded.prepared,fileNo:loaded.fileNo,text:loaded.text,sha256:hash,verifiedAt:timestamp,parserVersion:loaded.parserVersion,searchSections:prepareSearchSections(loaded.text),attachments:loaded.attachments,selectedDate:loaded.selectedDate};
         const retained=Object.fromEntries(Object.entries(shard.documents).filter(([title])=>titles.has(title)));
         const candidate={documents:{...retained,[item.title]:doc}};
         const size=new TextEncoder().encode(JSON.stringify(candidate)).byteLength;

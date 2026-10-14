@@ -180,6 +180,7 @@ export async function extractPdfLayout(bytes:Uint8Array):Promise<{rows:Structure
  }
  page.cleanup();
  }
- if(!allText.trim())throw new DocumentError('no_text_layer','PDF에 추출 가능한 텍스트 레이어가 없습니다.');const legends=parseLegends(allText);for(const row of rows){row.legend=legends[row.symbol];if(row.suffix){const declaredAlias=row.suffix==='책임원'&&/(?:^|\n)\s*책임원\s+재무책임원(?=\s|$)/.test(allText);row.effective_approver=declaredAlias?'재무책임원':row.suffix;row.approver_basis={type:declaredAlias?'document_glossary_and_symbol_suffix':'symbol_suffix',header_column:row.approver,suffix:row.suffix,glossary:declaredAlias?'책임원 → 재무책임원':null};}else{row.effective_approver=row.approver;row.approver_basis={type:'header_column'};}}return {rows,pages:pdf.numPages,text:allText,debug};
+ if(!allText.trim())throw new DocumentError('no_text_layer','PDF에 추출 가능한 텍스트 레이어가 없습니다.');const legends=parseLegends(allText);for(const row of rows){row.legend=row.symbol?legends[row.symbol]:null;if(row.suffix){const declaredAlias=row.suffix==='책임원'&&/(?:^|\n)\s*책임원\s+재무책임원(?=\s|$)/.test(allText);row.effective_approver=declaredAlias?'재무책임원':row.suffix;row.approver_basis={type:declaredAlias?'document_glossary_and_symbol_suffix':'symbol_suffix',header_column:row.approver,suffix:row.suffix,glossary:declaredAlias?'책임원 → 재무책임원':null};}else{row.effective_approver=row.approver;row.approver_basis={type:'header_column'};}}return {rows,pages:pdf.numPages,text:allText,debug};
  }catch(error){if(error instanceof DocumentError)throw error;throw new DocumentError('layout_error',error instanceof Error?error.message:String(error));}finally{await pdf.loadingTask.destroy();}
 }
+

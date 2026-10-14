@@ -1,3 +1,4 @@
+import {indexedDocumentTool} from './indexed-document-tools';
 import {handleOfflineIndex,offlineTick,readOfflineStatus,OFFLINE_INDEX_MODE,withOfflineHealth,offlineRefreshError} from './offline-index';
 import {BUILD_VERSION} from '../build-info';
 import {createIndexRequest,refreshCorpusIndex,searchAllRegulations} from './regulations';
@@ -34,6 +35,7 @@ export class CorpusIndexCoordinator {
  }
  async fetch(request:Request):Promise<Response>{
   const path=new URL(request.url).pathname;
+  if(path==='/document-tool'&&request.method==='POST'){const raw=await request.text();if(raw.length>10000)return Response.json({error_code:'query_too_large'},{status:413});const {tool,input}=JSON.parse(raw);return Response.json(await indexedDocumentTool(this.env.OAUTH_KV,tool,input,offlineRefreshError(await readOfflineStatus(this.state.storage))));}
   if(path.startsWith('/offline/')){try{return await handleOfflineIndex(path,request,this.state.storage,this.env.OAUTH_KV);}catch(error){return Response.json({error_code:'offline_request_failed',message:String(error).slice(0,200)},{status:500});}}
   if(path==='/search'){
    if(request.method!=='POST')return new Response('Method not allowed',{status:405});const raw=await request.text();if(raw.length>10000)return Response.json({error_code:'query_too_large'},{status:413});const input=JSON.parse(raw) as {query:string;limit:number;offset:number};

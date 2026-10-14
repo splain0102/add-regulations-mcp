@@ -19,7 +19,7 @@ export function resumableSource(source:CorpusSource,directory:string,options:{no
   const path=join(directory,createHash('sha256').update(item.title).digest('hex')+'.json');
   if(existsSync(path))try{
    const saved=JSON.parse(readFileSync(path,'utf8')),age=now()-Date.parse(saved.downloadedAt);
-   if(saved.schema===1&&Number.isFinite(age)&&age>=0&&age<60*60*1000&&saved.document?.parserVersion===PARSER_VERSION&&JSON.stringify(saved.item)===JSON.stringify(item)){
+   if(saved.schema===1&&(!source.prepareDocumentIndex||saved.document?.prepared?.schema===1)&&Number.isFinite(age)&&age>=0&&age<60*60*1000&&saved.document?.parserVersion===PARSER_VERSION&&JSON.stringify(saved.item)===JSON.stringify(item)){
     const bytes=new Uint8Array(Buffer.from(saved.document.bytes,'base64'));
     const digest=createHash('sha256').update(JSON.stringify({item:saved.item,document:saved.document,downloadedAt:saved.downloadedAt})).digest('hex');
     if(bytes.length&&digest===saved.digest){stats.reused++;observed(saved.downloadedAt);return {...saved.document,bytes};}
@@ -37,5 +37,6 @@ export function resumableSource(source:CorpusSource,directory:string,options:{no
    throw error;
   }
  };
- return {source:{list:source.list,load} as CorpusSource,stats};
+ return {source:{prepareDocumentIndex:source.prepareDocumentIndex,list:source.list,load} as CorpusSource,stats};
 }
+

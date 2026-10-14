@@ -1,8 +1,24 @@
 {
   "compilerOptions": {
-    "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler",
-    "strict": true, "skipLibCheck": true, "noEmit": true,
-    "lib": ["ES2022"], "types": ["@cloudflare/workers-types"]
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "@cloudflare/workers-types"
+    ]
   },
-  "files": ["src/regulation-core/corpus-index.ts", "src/regulation-core/index-bootstrap.ts", "src/regulation-core/offline-index.ts", "src/regulation-core/github-index-auth.ts"]
+  "files": [
+    "src/regulation-core/corpus-index.ts",
+    "src/regulation-core/index-bootstrap.ts",
+    "src/regulation-core/offline-index.ts",
+    "src/regulation-core/github-index-auth.ts",
+    "src/types/hwpxjs-browser.d.ts",
+    "src/regulation-core/indexed-document-tools.ts"
+  ]
 }

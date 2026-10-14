@@ -1,3 +1,4 @@
+import {callIndexedDocumentTool} from './regulation-core/indexed-document-tools';
 import {handleIndexAdmin,runOfflineHeartbeat,getIndexRuntimeStatus} from './regulation-core/index-coordinator';
 export {CorpusIndexCoordinator} from './regulation-core/index-coordinator';
 import {searchRegulationText} from "./regulation-core/text-search";
@@ -14,7 +15,7 @@ import { HwpxReader, hwpToMarkdown, hwpToText, parseHwp } from "@ssabrojs/hwpxjs
 import { extractText, extractTextItems, getDocumentProxy } from "unpdf";
 import { handleAccessRequest, type Env } from "./access-handler";
 
-const MCP_VERSION = "1.10.13";
+const MCP_VERSION = "1.10.14";
 
 const ALIO_BASE = "https://www.alio.go.kr";
 const ADD_APBA_ID = "C0345";
@@ -3977,6 +3978,7 @@ function createServer(env: Env) {
       },
     },
     async ({ name }) => {
+      if(env.CORPUS_INDEX_COORDINATOR)return callIndexedDocumentTool(env.CORPUS_INDEX_COORDINATOR,"get_regulation_text",{name});
       try {
         const result =
           await loadTextWithToolRetry(
@@ -4071,7 +4073,7 @@ function createServer(env: Env) {
       },
     },
     async ({ name, query, compact, offset, include_history }) =>
-      searchRegulationText(name,query,{compact,offset,include_history}),
+      env.CORPUS_INDEX_COORDINATOR?callIndexedDocumentTool(env.CORPUS_INDEX_COORDINATOR,"search_regulation_text",{name,query,compact,offset,include_history}):searchRegulationText(name,query,{compact,offset,include_history}),
   );
 
   server.registerTool(
@@ -4089,6 +4091,7 @@ function createServer(env: Env) {
       },
     },
     async ({ name, query, limit, includeRegion, compact, offset, include_text_box }) => {
+      if(env.CORPUS_INDEX_COORDINATOR)return callIndexedDocumentTool(env.CORPUS_INDEX_COORDINATOR,"search_regulation_table",{name,query,limit,includeRegion,compact,offset,include_text_box});
       try {
         const result = await searchLatestRegulationTable(name, query);
         const { rows, ...meta } = result;

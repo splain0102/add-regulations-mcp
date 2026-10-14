@@ -1,3 +1,4 @@
+import {packDocument,unpackDocument,DOCUMENT_INDEX_SCHEMA} from './document-index-codec';
 import {fold,tokenWeights,deletedSection,sectionScore} from './search-ranking';
 import {searchBounds} from './search-sections';
 import {PARSER_VERSION} from "./parser-version";
@@ -884,7 +885,7 @@ async function collectIndexList(request:typeof fetchWithRetry,work?:unknown){
  return {items,work:undefined};
  }catch(error){throw Object.assign(error instanceof Error?error:Error(String(error)),{listWork:stage});}
 }
-export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequest()){
+export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequest(),options:{prepareDocument?:boolean}={}){
  return {
   list:()=>listRegulations({fresh:true,request}),
   listBatch:(work?:unknown)=>collectIndexList(request,work),
@@ -913,7 +914,13 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
    else if(file.extension==='hwp')text=await hwpToText(file.bytes);
    else if(file.extension==='pdf'){const result=await extractText(file.bytes.slice(),{mergePages:true});text=Array.isArray(result.text)?result.text.join('\n\n'):result.text;}
    else throw Error('unsupported_index_format:'+file.extension);
-   return {fileNo:detail.latestAttachment.fileNo,text,bytes:file.bytes,parserVersion:PARSER_VERSION,selectedDate:detail.latestAttachment.detectedDate??normalizeDate(item.revisionDate),attachments:detail.attachments.map(({name,fileNo,detectedDate})=>({name,fileNo,detectedDate}))};
+   let prepared=unchanged?previous.prepared:undefined;
+   if(options.prepareDocument){
+    const loaded={match:item,detail:{...detail,title:item.title},attachment:detail.latestAttachment,document:{file,text} as DocumentEntry,cache:{key:`${PARSER_VERSION}:${detail.latestAttachment.fileNo}:${item.updatedDate??''}`,hit:false,scope:'offline-index',metadataRevalidated:true}};
+    if(prepared?.schema!==DOCUMENT_INDEX_SCHEMA)prepared=await prepareDocumentIndex(loaded);
+    else if(previous?.revisionDate!==item.revisionDate||previous?.updatedDate!==item.updatedDate)prepared=packDocument({...unpackDocument(prepared),meta:documentMeta(loaded)});
+   }
+   return {prepared,fileNo:detail.latestAttachment.fileNo,text,bytes:file.bytes,parserVersion:PARSER_VERSION,selectedDate:detail.latestAttachment.detectedDate??normalizeDate(item.revisionDate),attachments:detail.attachments.map(({name,fileNo,detectedDate})=>({name,fileNo,detectedDate}))};
   }
  };
 }
@@ -955,7 +962,7 @@ export async function getLatestRegulationText(name:string) {
  const loaded=await loadLatestDocument(name);
  return {...documentMeta(loaded),text:loaded.document.text};
 }
-async function layoutFromLoaded(loaded:Awaited<ReturnType<typeof loadLatestDocument>>) {
+export async function layoutFromLoaded(loaded:Awaited<ReturnType<typeof loadLatestDocument>>) {
  const {document}=loaded;
  if(!document.rows){
  if(!document.layoutPending)document.layoutPending=(async()=>{
@@ -974,17 +981,23 @@ async function layoutFromLoaded(loaded:Awaited<ReturnType<typeof loadLatestDocum
 }
 
 
+export async function prepareDocumentIndex(loaded:Awaited<ReturnType<typeof loadLatestDocument>>){
+ await layoutFromLoaded(loaded);
+ if(loaded.document.file.extension==='pdf')await searchLatestRegulationTable(loaded.match.title,'__prepare_document__',loaded);
+ return packDocument({meta:documentMeta(loaded),tables:loaded.document.tables,rows:loaded.document.rows,pdfPages:loaded.document.pdfPages,layoutDebug:loaded.document.layoutDebug});
+}
+
 export async function getLatestRegulationLayout(name:string){return layoutFromLoaded(await loadLatestDocument(name));}
 
 /** Same cached download and latest-file selection as all original tools. */
-export async function searchLatestRegulationTable(name:string,query:string){
- const loaded=await loadLatestDocument(name),{document}=loaded,meta=documentMeta(loaded);
+export async function searchLatestRegulationTable(name:string,query:string,prepared?:Awaited<ReturnType<typeof loadLatestDocument>>,preparedMeta?:ReturnType<typeof documentMeta>){
+ const loaded=prepared??await loadLatestDocument(name),{document}=loaded,meta=preparedMeta??documentMeta(loaded);
  if(document.file.extension==='pdf'){
   if(!document.pdfPages){
    if(!document.pdfPending)document.pdfPending=(async()=>{const parsed=await extractPdfRichContent(document.file.bytes);if(parsed.layoutSkippedReason)throw new DocumentError('layout_error',parsed.layoutSkippedReason);document.pdfPages=parsed.pages;})();
    try{await document.pdfPending;}finally{document.pdfPending=undefined;}
   }
-  const priorLayout=await layoutFromLoaded(loaded);
+  const priorLayout=preparedMeta?{rows:document.rows??[],layout_debug:document.layoutDebug}:await layoutFromLoaded(loaded);
   const terms=query.trim().split(/\s+/).map(normalizeTableSearch);
   const matches=searchPdfLayoutRows(document.pdfPages!,query,Number.MAX_SAFE_INTEGER);
   const rows=matches.flatMap<SearchTableRow>(({page,row,mode})=>{
@@ -1008,7 +1021,7 @@ export async function searchLatestRegulationTable(name:string,query:string){
   }
   return {...meta,rows,layout_debug:priorLayout.layout_debug??[],layout_debug_coordinate_space:'pdf-points-top-left',limitations:['PDF y is the original PDF.js baseline in points from the bottom-left; not a HWP cell address.','Compound text-run symbol widths are marked estimated and require review.']};
  }
- const layout=await layoutFromLoaded(loaded);
+ const layout=preparedMeta?{cache:loaded.cache,limitations:['HWP/HWPX 좌표는 실제 셀 주소 기준입니다.']}:await layoutFromLoaded(loaded);
  return {...meta,cache:layout.cache,rows:searchGeneralTables(document.tables??[],query,document.rows??[],document.file.extension).map(row=>({...row,version_warning:meta.version_warning})),layout_debug:[],limitations:layout.limitations};
 }
 

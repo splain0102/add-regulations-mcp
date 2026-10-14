@@ -94,6 +94,18 @@ try{
  const helloResponse=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:99,method:'tools/call',params:{name:'hello',arguments:{}}})});assert.equal(helloResponse.status,200);const helloText=await helloResponse.text();assert(helloText.includes(BUILD_VERSION));assert.equal(manualRun.build_version,BUILD_VERSION);
  const beforeSearch=outbound;
  const search=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'search_all_regulations',arguments:{query:'외국인'}}})});assert.equal(search.status,200);const response=await search.text();assert(response.includes('"partial":false'));assert(response.includes('제8조'));assert.equal(outbound,beforeSearch);
+ if(process.env.DOCUMENT_INDEX_FIXTURE){
+  const fixture=JSON.parse(readFileSync(process.env.DOCUMENT_INDEX_FIXTURE,'utf8')),saved=await kv.get('add:corpus:v2:state','text');
+  await kv.put(fixture.ref,JSON.stringify({documents:{[fixture.doc.title]:fixture.doc}}));await new Promise(resolve=>setTimeout(resolve,1100));await kv.put('add:corpus:v2:state',JSON.stringify(fixture.state));
+  const evidence:any[]=[];const before=outbound;
+  for(const [tool,args] of [['search_regulation_table',{name:'위임전결규정',query:'전문가'}],['search_regulation_table',{name:'위임전결규정',query:'전문가'}],['search_regulation_table',{name:'위임전결규정',query:'내부승인'}],['search_regulation_text',{name:'위임전결규정',query:'전문가활용'}],['get_regulation_text',{name:'위임전결규정'}]] as const){
+   const t=performance.now();const reply=await mf.dispatchFetch('https://add-regulations-mcp.splain0102.workers.dev/mcp',{method:'POST',headers:rpcHeaders,body:JSON.stringify({jsonrpc:'2.0',id:88,method:'tools/call',params:{name:tool,arguments:args}})});const raw=await reply.text();assert.equal(reply.status,200,raw.slice(0,300));
+   const payload=JSON.parse(raw.includes('data:')?raw.split('\n').find(line=>line.startsWith('data:'))!.slice(5):raw);assert(!payload.error,raw.slice(0,300));assert(!payload.result?.isError,raw.slice(0,300));assert.equal(payload.result.structuredContent.metrics.document_parses,0);if('query' in args&&args.query==='전문가')assert.equal(payload.result.structuredContent.totalMatches,2);
+   evidence.push({tool,args,elapsed_ms:performance.now()-t,metrics:payload.result.structuredContent.metrics});
+  }
+  assert.equal(outbound,before);writeFileSync('reports/indexed-document-workers.json',JSON.stringify({passed:true,evidence,outbound:outbound-before},null,2));
+  await new Promise(resolve=>setTimeout(resolve,1100));await kv.put('add:corpus:v2:state',saved!);
+ }
  const offlineOrigin='https://add-regulations-mcp.splain0102.workers.dev/admin/offline-index/';
  const missingIdentity=await mf.dispatchFetch(offlineOrigin+'snapshot');assert.equal(missingIdentity.status,401);
  let oidc=await indexToken();const external=async(path:string,body?:any)=>mf.dispatchFetch(offlineOrigin+path,{method:body===undefined?'GET':'POST',headers:{authorization:'Bearer '+oidc,'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
@@ -110,3 +122,4 @@ try{
  for(const key of oauthBefore)assert(await kv.get(key));
  writeFileSync('reports/corpus-index-workers.json',JSON.stringify({passed:true,runtime:'workerd + Miniflare actual Worker bundle, local KV, mocked ALIO',oauthDiscovery:discovery.status,dynamicRegistration:register.status,unauthenticatedMcpBefore:protectedResponse.status,unauthenticatedMcpAfter:after.status,cron:state,outbound,pkceTokenExchange:tokenResponse.status,authenticatedSearchStatus:search.status,searchResponse:response,liveSnapshot:process.env.CORPUS_LIVE_CHECKPOINT??null,adminManualRun:manualRun,runStatus,offlineOidc:{passed:true,missingIdentity:missingIdentity.status,completeStatus}},null,2));console.log('CORPUS_WORKERS_PASS',JSON.stringify({outbound,oauthKeysPreserved:oauthBefore.length}));
 }finally{await mf.dispose();}
+
