@@ -5,10 +5,13 @@ import {searchAllRegulations} from '../src/regulation-core/regulations';
 import {buildOfflineIndex,offlineSource,type Stage} from './offline-index-build';
 import {resumableSource,writeJsonAtomic} from './live-corpus-cache';
 import {TestKV} from './corpus-index-test-kv';
+import {httpEvidence} from './alio-http-evidence';
 
 mkdirSync('reports',{recursive:true});
 const startedAt=new Date().toISOString();
-const {source,stats}=resumableSource(offlineSource(),'reports/corpus-index-live-files');
+const evidenceRun=BUILD_VERSION+':'+(process.env.GITHUB_RUN_ID??'local')+':'+(process.env.GITHUB_RUN_ATTEMPT??'1');
+const http=httpEvidence('reports/alio-http-evidence',evidenceRun,'record');
+const {source,stats}=resumableSource(offlineSource(http.request),'reports/corpus-index-live-files');
 let lastStage:Stage={stage:'starting'};
 const progress=async(stage:Stage)=>{lastStage=stage;console.log('LIVE_CORPUS_STAGE',JSON.stringify(stage));};
 try{
@@ -24,7 +27,7 @@ try{
  // within the original one-hour test cache window at acceptance time.
  assert(stats.oldestDownloadAt&&Date.now()-Date.parse(stats.oldestDownloadAt)<60*60*1000,'Raw evidence expired during acceptance; rerun required');
  writeJsonAtomic('reports/corpus-index-live-checkpoint.json',entries);
- const evidence={...report,startedAt,finishedAt:new Date().toISOString(),build_version:BUILD_VERSION,execution:'Live ALIO list checked at both ends; raw downloads may resume within one hour; all documents reindexed; request-time network forbidden; no production publish',cache:stats,result};
+ const evidence={...report,startedAt,finishedAt:new Date().toISOString(),build_version:BUILD_VERSION,evidenceRun,http:http.stats,execution:'Live ALIO list checked at both ends; raw downloads may resume within one hour; all documents reindexed; request-time network forbidden; no production publish',cache:stats,result};
  writeJsonAtomic('reports/corpus-index-acceptance.json',evidence);
  console.log('LIVE_CORPUS_RESULT',JSON.stringify({passed:true,total:report.total,indexed:report.indexed,cache:stats}));
 }catch(error){

@@ -74,6 +74,16 @@ gain access to production publication or the authenticated ALIO proxy.
 The workflow serializes each PR's acceptance runs and cancels an older run when
 a new commit supersedes it. No automatic failed-job rerun or deployment is added.
 
+The fourth correction regressions can reuse exact ALIO detail/download HTTP
+responses recorded during the successful full-corpus acceptance in the same job.
+This is test-only transport replay, not fabricated attachment metadata: the
+registered handlers, selection, parsing, and cross-entry warning assertions still
+execute. Response bytes are digest-checked and restricted to the same build/run/
+attempt and a 30-minute window. These HTTP records are not restored from Actions
+cache. Missing responses still go to ALIO live, while stale/corrupt records fail.
+The regression report states how many requests were replayed versus live. Cookie
+and authorization headers are never saved in the HTTP evidence.
+
 With `INDEX_ADMIN_TOKEN` supplied securely in the local environment:
 
 ```sh

@@ -6,6 +6,7 @@ import {PARSER_VERSION} from '../src/regulation-core/parser-version';
 import type {CorpusItem,CorpusSource} from '../src/regulation-core/corpus-index';
 import {collectOfflineList} from './offline-index-build';
 import {resumableSource} from './live-corpus-cache';
+import {httpEvidence} from './alio-http-evidence';
 
 const directory=mkdtempSync(join(tmpdir(),'alio-recovery-')),tests:string[]=[];
 const item:CorpusItem={title:'감사규정',detailUrl:'https://www.alio.go.kr/item/itemBoard21110.do?idx=1',updatedDate:'2026.10.13'};
@@ -31,6 +32,18 @@ try{
   return Response.json({data:{result:[{title:'page'+page,apbaId:'C0345',idx:String(page),reportFormNo:'21110',tableName:'COMM_RULE',idxName:'RULE_NO',stDate:'2026.10.13'}],page:{totalPage:3,totalCount:3}}});
  },{sleep:async()=>{}});
  assert.equal(list.length,3);assert.deepEqual(pages,[1,2,2,3,1]);tests.push('transient list failure resumes failed page and revalidates page one');
+ const httpDir=join(directory,'http'),url='https://www.alio.go.kr/download/rulefiledown.json?fileNo=123';
+ let network=0;const transport:typeof fetch=async()=>{network++;return new Response(new Uint8Array([0,255,1]),{headers:{'content-type':'application/octet-stream','set-cookie':'not-evidence'}});};
+ const capture=httpEvidence(httpDir,'same-run','record',transport,()=>clock);await capture.request(url);
+ const replay=httpEvidence(httpDir,'same-run','replay',transport,()=>clock);
+ const response=await replay.request(url);assert.deepEqual([...new Uint8Array(await response.arrayBuffer())],[0,255,1]);assert.equal(network,1);assert.equal(response.headers.get('set-cookie'),null);
+ tests.push('same-run ALIO binary response replays exactly without network or cookies');
+ await replay.request(url+'&other=1');assert.equal(network,2);tests.push('missing exact HTTP evidence falls back to live request');
+ await assert.rejects(()=>httpEvidence(httpDir,'other-run','replay',transport,()=>clock).request(url),/another run/);
+ await assert.rejects(()=>httpEvidence(httpDir,'same-run','replay',transport,()=>clock+31*60000).request(url),/stale/);tests.push('foreign-run and expired HTTP evidence cannot satisfy regressions');
+ const httpPath=join(httpDir,readdirSync(httpDir)[0]),httpRecord=JSON.parse(readFileSync(httpPath,'utf8'));httpRecord.body='AAAA';writeFileSync(httpPath,JSON.stringify(httpRecord));
+ await assert.rejects(()=>replay.request(url),/digest mismatch/);tests.push('modified HTTP evidence fails loudly instead of silently passing');
+ const failed=httpEvidence(join(directory,'http-failure'),'same-run','record',async()=>new Response('unavailable',{status:503}),()=>clock);await failed.request(url);assert.equal(failed.stats.recorded,0);tests.push('upstream failure responses are never reusable success evidence');
  mkdirSync('reports',{recursive:true});writeFileSync('reports/live-corpus-recovery-regression.json',JSON.stringify({passed:true,tests},null,2));
  console.log('RECOVERY_PASS',tests.length,JSON.stringify(tests));
 }finally{rmSync(directory,{recursive:true,force:true});}
