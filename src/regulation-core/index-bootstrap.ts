@@ -1,3 +1,4 @@
+import {unpackDocument} from './document-index-codec';
 import {buildCrossAttachmentWarnings,type AttachmentCatalog} from './cross-attachments';
 import {BUILD_VERSION} from '../build-info';
 import {PARSER_VERSION} from './parser-version';
@@ -12,6 +13,7 @@ function validateDocuments(documents:Record<string,CorpusDocument>,id:number,ses
  if(!documents||typeof documents!=='object'||Array.isArray(documents))throw Error('invalid_documents');
  const wanted=new Map(session.items.map(item=>[item.title,item]));
  for(const [title,doc] of Object.entries(documents)){
+  if(doc.prepared){const value=unpackDocument(doc.prepared);if(value.meta.fileNo!==doc.fileNo||value.meta.regulationName!==doc.title||value.meta.parser_version!==doc.parserVersion)throw Error('document_index_identity_mismatch:'+title);}
   const item=wanted.get(title);const verified=Date.parse(doc.verifiedAt);
   if(!item||shardId(title)!==id||doc.title!==title||doc.detailUrl!==item.detailUrl||doc.revisionDate!==item.revisionDate||doc.updatedDate!==item.updatedDate||!/^\d+$/.test(doc.fileNo)||!/^([a-f0-9]{64})$/.test(doc.sha256)||doc.parserVersion!==PARSER_VERSION||typeof doc.text!=='string'||!doc.text.trim()||!Number.isFinite(verified)||verified>Date.now()+300000||Date.now()-verified>24*3600000)throw Error('invalid_document:'+title);
  }
