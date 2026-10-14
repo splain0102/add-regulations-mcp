@@ -40,7 +40,7 @@ export async function indexedDocumentTool(kv:KVNamespace,tool:string,input:Recor
    result=await searchRegulationText(item.title,input.query,input,{text,table,metadata:async()=>meta as any,history:async()=>{throw Object.assign(Error('과거 첨부는 사전 색인에 포함되지 않습니다.'),{code:'history_not_indexed'});}});
   }else{
    const body=doc.text.length>40000?doc.text.slice(0,40000)+'\n\n[본문이 길어 일부 생략됨]':doc.text;
-   result={structuredContent:{...meta,text:body},content:[{type:'text',text:[`규정명: ${item.title}`,`제·개정일: ${doc.revisionDate??'확인 필요'}`,`최신파일: ${meta.filename}`,`fileNo: ${doc.fileNo}`,`version_check: ${JSON.stringify(meta.version_check)}`,`ALIO: ${doc.detailUrl}`,...(stale?['주의: 이전 검증본이며 현재 최신성은 확인되지 않았습니다.']:[]),'----- 최신 규정 본문 -----',body].join('\n')}]};
+   result={structuredContent:{...meta,truncated:doc.text.length>40000},content:[{type:'text',text:[`규정명: ${item.title}`,`제·개정일: ${doc.revisionDate??'확인 필요'}`,`최신파일: ${meta.filename}`,`fileNo: ${doc.fileNo}`,`version_check: ${JSON.stringify(meta.version_check)}`,`ALIO: ${doc.detailUrl}`,...(stale?['주의: 이전 검증본이며 현재 최신성은 확인되지 않았습니다.']:[]),'----- 최신 규정 본문 -----',body].join('\n')}]};
   }
   const metrics={elapsed_ms:Date.now()-started,kv_reads:reads,alio_requests:0,document_parses:0,cache_hit:hit};
   result.structuredContent={...result.structuredContent,...health,partial:!!stale||!!result.structuredContent?.partial,metrics};

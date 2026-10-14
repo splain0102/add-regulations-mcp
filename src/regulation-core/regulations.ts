@@ -1,4 +1,4 @@
-import {packDocument,DOCUMENT_INDEX_SCHEMA} from './document-index-codec';
+import {packDocument,unpackDocument,DOCUMENT_INDEX_SCHEMA} from './document-index-codec';
 import {fold,tokenWeights,deletedSection,sectionScore} from './search-ranking';
 import {searchBounds} from './search-sections';
 import {PARSER_VERSION} from "./parser-version";
@@ -915,9 +915,10 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
    else if(file.extension==='pdf'){const result=await extractText(file.bytes.slice(),{mergePages:true});text=Array.isArray(result.text)?result.text.join('\n\n'):result.text;}
    else throw Error('unsupported_index_format:'+file.extension);
    let prepared=unchanged?previous.prepared:undefined;
-   if(options.prepareDocument&&prepared?.schema!==DOCUMENT_INDEX_SCHEMA){
+   if(options.prepareDocument){
     const loaded={match:item,detail:{...detail,title:item.title},attachment:detail.latestAttachment,document:{file,text} as DocumentEntry,cache:{key:`${PARSER_VERSION}:${detail.latestAttachment.fileNo}:${item.updatedDate??''}`,hit:false,scope:'offline-index',metadataRevalidated:true}};
-    prepared=await prepareDocumentIndex(loaded);
+    if(prepared?.schema!==DOCUMENT_INDEX_SCHEMA)prepared=await prepareDocumentIndex(loaded);
+    else if(previous?.revisionDate!==item.revisionDate||previous?.updatedDate!==item.updatedDate)prepared=packDocument({...unpackDocument(prepared),meta:documentMeta(loaded)});
    }
    return {prepared,fileNo:detail.latestAttachment.fileNo,text,bytes:file.bytes,parserVersion:PARSER_VERSION,selectedDate:detail.latestAttachment.detectedDate??normalizeDate(item.revisionDate),attachments:detail.attachments.map(({name,fileNo,detectedDate})=>({name,fileNo,detectedDate}))};
   }

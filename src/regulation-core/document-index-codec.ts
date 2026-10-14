@@ -17,5 +17,5 @@ export function unpackDocument(value:PreparedDocument):DocumentEvidence{
  // Gzip ISIZE bounds allocation before decompression; exact length checked after.
  if(bytes.length<18||new DataView(bytes.buffer).getUint32(bytes.length-4,true)!==value.uncompressedBytes)throw Error('document_index_corrupt');
  const raw=gunzipSync(bytes,{out:new Uint8Array(value.uncompressedBytes)});if(raw.length!==value.uncompressedBytes)throw Error('document_index_corrupt');
- const result=JSON.parse(strFromU8(raw));if(!result.meta||!Array.isArray(result.rows))throw Error('document_index_corrupt');return result;
+ const result=JSON.parse(strFromU8(raw));if(!result.meta||!Array.isArray(result.rows)||(['hwp','hwpx'].includes(result.meta.extension)&&!Array.isArray(result.tables))||(result.meta.extension==='pdf'&&!Array.isArray(result.pdfPages)))throw Error('document_index_corrupt');return result;
 }

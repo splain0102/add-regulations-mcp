@@ -30,12 +30,12 @@ writeFileSync('reports/indexed-document-fixture.json',JSON.stringify({state,doc,
 const original=globalThis.fetch;let outbound=0;globalThis.fetch=async()=>{outbound++;throw Error('Request-time network forbidden');};
 const tests:any[]=[];
 try{
- for(const query of ['전문가','내부승인','300만','전문가 300','외화 300']){
-  const expected=await searchLatestRegulationTable(item.title,query,loaded);const t=performance.now();const result=await indexedDocumentTool(kv.binding(),'search_regulation_table',{name:item.title,query,compact:false});
+ for(const query of ['전문가','내부승인','300만','전문가 300','외화 300','계약 승인','국내 출장','병가']){
+  const expected=await searchLatestRegulationTable(item.title,query,loaded);const t=performance.now(),queryCpu=process.cpuUsage();const result=await indexedDocumentTool(kv.binding(),'search_regulation_table',{name:item.title,query,compact:false});
   assert(!result.isError,JSON.stringify(result));assert.equal(result.structuredContent.totalMatches,expected.rows.length,query);
   if(query==='전문가')assert.equal(expected.rows.length,2);
-  for(const row of result.structuredContent.rows){const exact=expected.rows.find(r=>r.table_id===row.table_id&&r.row===row.row&&r.symbol===row.symbol);assert(exact);assert.equal(row.approver,exact.approver);assert.equal(row.symbol,exact.symbol);}
-  tests.push({query,ms:performance.now()-t,matches:expected.rows.length,metrics:result.structuredContent.metrics});
+  for(const row of result.structuredContent.rows){const exact=expected.rows.find(r=>r.table_id===row.table_id&&r.row===row.row&&r.symbol===row.symbol);assert(exact);assert.equal(row.approver,exact.approver);assert.equal(row.symbol,exact.symbol);if(exact.footnotes)assert.deepEqual(row.footnotes,exact.footnotes);}
+  tests.push({query,ms:performance.now()-t,matches:expected.rows.length,metrics:result.structuredContent.metrics,cpu:process.cpuUsage(queryCpu),memory:process.memoryUsage()});
  }
  for(const tool of ['get_regulation_text','search_regulation_text']){const t=performance.now();const r=await indexedDocumentTool(kv.binding(),tool,{name:item.title,query:'전문가활용'});assert(!r.isError);tests.push({tool,ms:performance.now()-t,metrics:r.structuredContent.metrics});}
  const stale=await indexedDocumentTool(kv.binding(),'search_regulation_table',{name:item.title,query:'전문가'},{error_code:'fetch_failed'});assert.equal(stale.structuredContent.partial,true);assert.equal(stale.structuredContent.index_status,'stale');assert.equal(stale.structuredContent.totalMatches,2);
