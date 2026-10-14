@@ -47,6 +47,43 @@ access tokens do not grant administrator access.
 
 ## Manual batch and status
 
+### Resuming live CI after an ALIO outage
+
+The corpus acceptance workflow now uses the same Node offline builder as the
+publisher. It reads a fresh complete ALIO list before and after indexing, requires
+exact full coverage, and verifies that search performs no network downloads.
+It never treats a cached successful report or manifest as current evidence.
+
+Raw documents are saved atomically as each download succeeds. The PR-scoped
+Actions cache includes only these test documents, keyed by parser/source and
+dependency hashes. Entries must match current ALIO metadata and parser version,
+pass a content digest check, and be less than one hour old. The final acceptance
+also checks the oldest download age; an overlong run cannot certify expired
+evidence. Failed runs upload a failure report and retain eligible raw downloads
+for a subsequent run. Cache restoration does not authorize production publication.
+
+List collection retains partial page progress but stops after four failed
+attempts instead of forty; successful pagination does not consume that failure
+budget. After four consecutive network-related document failures, the test
+source stops starting further downloads (already in-flight requests may finish).
+An incomplete corpus still fails CI. This bounds repeated work during an outage;
+it does not guarantee connectivity from a GitHub runner to ALIO. The authenticated
+production fallback retains its existing main-only OIDC policy. PR jobs do not
+gain access to production publication or the authenticated ALIO proxy.
+
+The workflow serializes each PR's acceptance runs and cancels an older run when
+a new commit supersedes it. No automatic failed-job rerun or deployment is added.
+
+The fourth correction regressions can reuse exact ALIO detail/download HTTP
+responses recorded during the successful full-corpus acceptance in the same job.
+This is test-only transport replay, not fabricated attachment metadata: the
+registered handlers, selection, parsing, and cross-entry warning assertions still
+execute. Response bytes are digest-checked and restricted to the same build/run/
+attempt and a 30-minute window. These HTTP records are not restored from Actions
+cache. Missing responses still go to ALIO live, while stale/corrupt records fail.
+The regression report states how many requests were replayed versus live. Cookie
+and authorization headers are never saved in the HTTP evidence.
+
 With `INDEX_ADMIN_TOKEN` supplied securely in the local environment:
 
 ```sh
@@ -181,3 +218,27 @@ The Cloudflare event `outcome: exceededCpu` is a platform termination; `scriptVe
 - No real amendment is required to verify latestness checks: record the successful complete ALIO list time, compare stDate/idate, and separately verify fileNo and fresh-byte SHA. New/changed metadata, same-metadata byte replacements, failed fetches and expired writers are tested with injected fixtures.
 
 Local/CI elapsed times are not deployed CPU measurements. Verify Cloudflare CPU logs after deployment, including a due document run and complete list refresh. Parsing a genuinely changed large PDF/HWP may still exceed the Free plan's CPU budget; the change reduces unchanged-document work and bounds/recoveries, without claiming every newly changed document fits 10ms.
+
+## v1.10.13: offline producer and lightweight Worker gateway
+
+`exceededCpu` still occurred at 18ms on v1.10.12. The production scheduled handler now performs only an internal coordinator heartbeat. It performs no ALIO calls, PDF/HWP parsing, raw hashing, shard reconstruction or corpus GC. `/admin/trigger-index` still requires the administrator token, but returns **202 queued_external** and records a full-verification request for the next Actions run. It does not synchronously parse documents. For an immediate run, use **Run workflow** at https://github.com/splain0102/add-regulations-mcp/actions/workflows/corpus-refresh.yml.
+
+The `Publish offline regulation index` workflow runs on each main push, hourly at minute 17, or workflow_dispatch. GitHub schedules are best effort and can be delayed; they are not a precise one-hour SLA. The runner waits for its exact deployed build, obtains the committed corpus (only `add:corpus:v2:` entries, never OAuth keys), retrieves a consistent fresh ALIO list, and loads only new/changed/pending/due documents. Unchanged metadata still receives periodic fresh-byte SHA verification at the existing 12-hour interval; changed bytes use the shared parser. Four independent loaders run in Node. List consistency, full coverage, audit inclusion and the security Article 8 search are checked before publication. A list/attachment/parse failure does not replace the previous committed snapshot.
+
+### Authentication without a new long-lived token
+
+Actions has `id-token: write`; the receiver verifies GitHub's RS256 signature using only `https://token.actions.githubusercontent.com/.well-known/jwks`. It pins issuer, audience, expiration, repository ID `1401470477`, owner ID `40254573`, `refs/heads/main`, `.github/workflows/corpus-refresh.yml`, and both source/workflow SHA to the deployed build. PRs, forks, other workflows and old builds cannot publish. The short-lived token is renewed when necessary and is never printed. OIDC verification and all corpus import validation execute inside the existing Durable Object; the Worker forwards raw requests/responses. No GitHub PAT or new Actions secret is required. Repo/owner transfers or renaming the publishing workflow require updating the explicit trust policy.
+
+### Durable coordinator and atomic publication
+
+The existing bootstrap validates all item metadata, fileNo, SHA-256, parser version, proof timestamps and all 16 shards before replacing the manifest. The signed workflow run is bound to its own bootstrap session. Identical, server-hashed committed shards are reused; a quiet hourly publication writes only the manifest. GC is bounded, protects active/fallback refs and the propagation grace period, and cleans abandoned uncommitted sessions. Full-index search and admin status computation also execute in the coordinator; ranking and response fields remain compatible. The HTTP Worker handles OAuth and bounded result serialization.
+
+Status now includes `index_mode`, `index_refresh_status`, `index_refresh_error`, `offline_run_url`, `refresh_requested_at` and `last_offline_success_at`. The external run persists a phase, regulation/file identifiers, processing count and the Actions run URL. A failed refresh remains an error with `partial:true` until complete successful publication. A cancelled producer without a finish record is marked interrupted after 55 minutes. Existing documents remain searchable. These fields distinguish a successful lightweight Cron heartbeat from a successful index publication.
+
+### Acceptance before production
+
+CI checks actual GitHub OIDC issuance/claims/signature without publishing, signed policy-rejection fixtures, incremental/new/same-date byte replacement, failure preservation, 16-shard reuse, real workerd OIDC/atomic activation, OAuth key preservation, and actual ALIO corpus/Article 8 search. PR validation never publishes to production. After main merge, verify the first push producer's successful OIDC publication, `indexedRegulations == totalRegulations`, `partial:false`, and two lightweight Cron events without CPU exhaustion. CI's workerd tests do not impose the production Free-plan CPU quota. Monitor Actions minutes, KV quotas and schedule delays; a producer outage will eventually mark the committed index stale instead of silently claiming current coverage.
+
+### ALIO connectivity fallback
+
+When a runner cannot reach ALIO directly, the producer switches to the authenticated `/admin/offline-index/alio` raw-I/O proxy. The same pinned GitHub workflow identity is verified in the coordinator. The HTTP Worker allows only the three ALIO listing/detail/download paths on `https://www.alio.go.kr`, strips the publishing Authorization header, preserves ALIO status/download headers, and streams bytes without parsing. Redirects remain manual and the shared ALIO client enforces the original-origin boundary. This does not reintroduce corpus work into Cron; each proxy invocation only authorizes and performs bounded I/O. The CI list collector also retries bounded transport failures while retaining partial page work. Connection outages can still cause a producer run to fail; the previously committed snapshot remains active and the next scheduled run retries.

@@ -1,6 +1,6 @@
 {
   "name": "add-regulations-mcp",
-  "version": "1.10.12",
+  "version": "1.10.13",
   "private": true,
   "scripts": {
     "prepare": "node scripts/stamp-build.mjs",
@@ -20,6 +20,8 @@
     "test:corpus-workers": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-workers.ts",
     "test:corpus-acceptance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-acceptance.ts",
     "test:corpus-performance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-performance.ts",
+    "test:offline-index": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/offline-index-regression.ts",
+    "test:offline-build": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/offline-index-refresh.ts",
     "test:fourth-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/fourth-fixes-regression.ts"
   },
   "dependencies": {

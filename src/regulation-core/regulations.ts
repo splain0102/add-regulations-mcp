@@ -918,7 +918,11 @@ export function createCorpusSource(request:typeof fetchWithRetry=createIndexRequ
  };
 }
 export async function refreshCorpusIndex(kv:KVNamespace,buildVersion?:string,request=createIndexRequest(),options?:{forceDocuments?:boolean;batchSize?:number;beforeCommit?:()=>Promise<void>}){const source=createCorpusSource(request);const result=await refreshIndex(kv,{list:source.listBatch,load:source.load},Date.now(),{buildVersion,...options});return {...result,subrequests_used:request.usage!().used,subrequest_limit:request.usage!().limit};}
-export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace,buildVersion?:string){
+export async function searchAllRegulations(query:string,limit=10,offset=0,kv?:KVNamespace,buildVersion?:string,namespace?:DurableObjectNamespace){
+ if(namespace){const stub=namespace.get(namespace.idFromName('add-corpus-index'));const response=await stub.fetch('https://index.internal/search',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,limit,offset})});if(!response.ok)throw Error('index_search_failed:HTTP '+response.status);return await response.json() as Awaited<ReturnType<typeof searchAllRegulationsLocal>>;}
+ return searchAllRegulationsLocal(query,limit,offset,kv,buildVersion);
+}
+async function searchAllRegulationsLocal(query:string,limit=10,offset=0,kv?:KVNamespace,buildVersion?:string){
  const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
  if(!kv) return {query,limit,offset,results:[],errors:{count:1,sample:[{code:'index_unavailable'}],retry_cursor:null},partial:true,index_status:'unavailable',next_cursor:null};
  const index=await readIndex(kv,Date.now(),buildVersion);const docs=index.documents;

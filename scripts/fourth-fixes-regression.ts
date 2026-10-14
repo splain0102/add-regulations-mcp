@@ -8,13 +8,33 @@ import {wordWeight,deletedSection,sectionScore} from '../src/regulation-core/sea
 import {getRegulationMetadata,searchAllRegulations} from '../src/regulation-core/regulations';
 import {CorpusIndexCoordinator} from '../src/regulation-core/index-coordinator';
 import {TestKV} from './corpus-index-test-kv';
+import {httpEvidence} from './alio-http-evidence';
 const kv=new TestKV();const path=process.env.FOURTH_CHECKPOINT;
 if(path)kv.values=new Map(JSON.parse(readFileSync(path,'utf8')));
 else{
  const s=JSON.parse(readFileSync('reports/a6-ci/corpus-index-bootstrap.json','utf8')),refs:any={};for(const shard of s.shards){refs[shard.id]=INDEX_PREFIX+'fourth:'+shard.id;await kv.put(refs[shard.id],JSON.stringify({documents:shard.documents}));}
  await kv.put(INDEX_PREFIX+'state',JSON.stringify({schema:2,items:s.items,refs,errors:{},checked:{},pending:[],cursor:0,sizes:{},garbage:[],lastCheckedAt:new Date().toISOString(),index_build_version:BUILD_VERSION}));
 }
+// Name-resolution regressions use the exact list accepted earlier in this run.
+// Details/files may replay exact HTTP evidence from the same accepted run.
+// Missing responses remain live; production behavior is unchanged.
+let acceptedListReplay=false;
+if(process.env.FOURTH_USE_ACCEPTED_LIST==='true'){
+ assert(path,'Accepted-list replay requires a current full-corpus checkpoint');
+ const state=JSON.parse(kv.values.get(INDEX_PREFIX+'state')!);assert.equal(state.index_build_version,BUILD_VERSION);assert(Date.now()-Date.parse(state.lastCheckedAt)<30*60000,'Accepted ALIO list must be fresh');
+ const rows=state.items.map((item:any)=>{const params=new URL(item.detailUrl).searchParams;return {title:item.title,apbaId:params.get('apbaId'),idx:params.get('idx'),reportFormNo:params.get('reportFormNo'),tableName:params.get('table_name'),idxName:params.get('idx_name'),reportGbn:params.get('reportGbn'),bidType:params.get('bid_type'),stDate:item.revisionDate,idate:item.updatedDate};});
+ const liveFetch=globalThis.fetch;globalThis.fetch=async(input:any,init?:RequestInit)=>{const url=new URL(input instanceof Request?input.url:String(input));if(url.origin==='https://www.alio.go.kr'&&url.pathname==='/item/itemReportListSusi.json'){const page=JSON.parse(String(init?.body)).pageNo;return Response.json({data:{result:rows.slice((page-1)*10,page*10),page:{totalPage:Math.ceil(rows.length/10),totalCount:rows.length}}});}return liveFetch(input,init);};acceptedListReplay=true;
+ console.log('FOURTH_ACCEPTED_LIST_REPLAY',JSON.stringify({count:rows.length,lastCheckedAt:state.lastCheckedAt,detailsAndFiles:'live ALIO'}));
+}
 const checks:any[]=[];
+let acceptedHttp:ReturnType<typeof httpEvidence>|undefined;
+if(process.env.FOURTH_USE_ACCEPTED_HTTP==='true'){
+ assert(acceptedListReplay,'HTTP evidence requires the accepted current list');
+ const report=JSON.parse(readFileSync('reports/corpus-index-acceptance.json','utf8'));
+ const run=BUILD_VERSION+':'+(process.env.GITHUB_RUN_ID??'local')+':'+(process.env.GITHUB_RUN_ATTEMPT??'1');
+ assert(report.passed&&report.evidenceRun===run,'HTTP evidence requires successful acceptance in this run');
+ acceptedHttp=httpEvidence('reports/alio-http-evidence',run,'replay',globalThis.fetch);globalThis.fetch=acceptedHttp.request;
+}
 async function check(name:string,run:()=>Promise<any>){try{const evidence=await run();checks.push({name,passed:true,evidence});console.log('FOURTH_PASS',name,JSON.stringify(evidence));}catch(error){checks.push({name,passed:false,error:String(error)});console.error('FOURTH_FAIL',name,String(error));}}
 await check('1 사고 보고 ranking',async()=>{const r=await searchAllRegulations('사고 보고',5,0,kv.binding(),BUILD_VERSION);assert.equal(r.partial,false);assert.deepEqual(r.results.slice(0,2).map((x:any)=>x.regulationName),['연구소차량 관리방침','안전보건관리규정']);assert(r.results[0].matches[0].label.startsWith('제15조'));assert(r.results[1].matches[0].label.startsWith('제42조'));assert(!r.results.some((x:any)=>x.regulationName==='보고서 작성 및 관리요령'));return r.results.map((x:any)=>({name:x.regulationName,matches:x.matches.map((m:any)=>m.label)}));});
 await check('2 외국인 deleted/forms',async()=>{const r=await searchAllRegulations('외국인',10,0,kv.binding(),BUILD_VERSION);assert.equal(r.partial,false);assert(!r.results.some((x:any)=>x.regulationName==='여비규정'&&x.matches.some((m:any)=>m.label.startsWith('제21조'))));assert(!r.results.some((x:any)=>x.matches.some((m:any)=>/신고서|신고처리부|서식/.test(m.label)&&/신고/.test(x.regulationName))));assert(r.results.some((x:any)=>x.regulationName.endsWith('보안과제 관리요령')&&x.matches.some((m:any)=>m.label.startsWith('제8조'))));return r.results.map((x:any)=>({name:x.regulationName,matches:x.matches.map((m:any)=>m.label)}));});
@@ -30,4 +50,5 @@ await check('3/4 exact cross attachment and both warnings',async()=>{
 await check('5 mismatched build aborts before KV mutation',async()=>{const records=new Map<string,any>();const state={storage:{get:async(k:string)=>records.get(k),put:async(k:any,v:any)=>{if(typeof k==='string')records.set(k,v);else for(const [a,b]of Object.entries(k))records.set(a,b);}}};const writes=kv.writes;const c=new CorpusIndexCoordinator(state as any,{OAUTH_KV:kv.binding()});const r=await c.fetch(new Request('https://internal/begin',{method:'POST',body:JSON.stringify({trigger:'cron',build_version:'obsolete-build'})}));assert.equal(r.status,409);const run=records.get('runs').latest;assert.equal(run.status,'build_mismatch');assert.equal(run.processed,0);assert.equal(run.result.hello_build_version,BUILD_VERSION);assert.equal(kv.writes,writes);assert(!records.has('lease'));return run;});
 // Existing handler regressions are exercised by Direct MCP CI, not duplicated here.
 await check('6 existing name and text regressions',async()=>{const items=(await kv.get<any>(INDEX_PREFIX+'state')).items;assert.equal(items.filter((i:any)=>i.title.replace(/[·ㆍ\s]/g,'').includes('민군')).length,7);if(!path)return {fixtureOnly:true,titles:7};const titles=await call('search_regulations',{query:'민·군'});assert.equal((titles.content[0].text.match(/^\d+\./gm)??[]).length,7);const ambiguous=await call('search_regulation_text',{name:'직제',query:'부소장'}).catch(e=>({error:String(e)}));assert(JSON.stringify(ambiguous).includes('ambiguous_name'));const missing=await call('search_regulation_text',{name:'보안업무규정',query:'보안'}).catch(e=>({error:String(e)}));assert(JSON.stringify(missing).includes('not_found'));const car=await call('search_regulation_text',{name:'연구소차량 관리방침',query:'사고 보험'});assert(car.structuredContent.matches.some((m:any)=>m.label.startsWith('제15조')));return {titles:7,ambiguous:'ambiguous_name',missing:'not_found',car:car.structuredContent.matches.map((m:any)=>m.label)};});
-writeFileSync('reports/fourth-fixes-regression.json',JSON.stringify({build_version:BUILD_VERSION,live:!!path,checks},null,2));assert(checks.every(c=>c.passed!==false));
+console.log('FOURTH_HTTP_EVIDENCE',JSON.stringify(acceptedHttp?.stats??{enabled:false}));
+writeFileSync('reports/fourth-fixes-regression.json',JSON.stringify({build_version:BUILD_VERSION,live:!!path,acceptedListReplay,httpEvidence:acceptedHttp?.stats,checks},null,2));assert(checks.every(c=>c.passed!==false));
