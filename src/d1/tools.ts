@@ -1,6 +1,6 @@
 import {normalizeName,queryTerms,normalize} from './normalize';
 import {tableToolResponse} from '../regulation-core/table-response';
-export type Input={name?:string;query?:string;limit?:number;offset?:number;scope?:'body'|'table'|'pdf'|'all';compact?:boolean;include_history?:boolean;includeRegion?:boolean;include_text_box?:boolean};
+export type Input={name?:string;query?:string;limit?:number;offset?:number;scope?:'body'|'table'|'pdf'|'all';compact?:boolean;include_history?:boolean;includeRegion?:boolean;include_text_box?:boolean;reg_id?:string;include_repealed?:boolean};
 export const envelope=(data:any,isError=false)=>({...isError?{isError:true}:{},structuredContent:data,content:[{type:'text' as const,text:JSON.stringify(data)}]});
 export async function runD1Tool(db:D1Database,tool:string,input:Input={},build='unstamped'){
  if((input.query?.length??0)>256)return envelope({warning:{code:'query_too_long',message:'검색어는 256자 이내로 입력하세요.'},results:[],totalMatches:0});

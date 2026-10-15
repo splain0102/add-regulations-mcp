@@ -28,7 +28,7 @@ function sync(scenario:object){
  writeFileSync(join(dir,'scenario.json'),JSON.stringify(scenario));rmSync(join(dir,'requests.log'),{force:true});rmSync(join(dir,'acceptance.log'),{force:true});
  const run=spawnSync(process.execPath,['--import','./scripts/test-loader.mjs','--import','./scripts/r2/lifecycle-mock.mjs','scripts/r2/sync.ts'],{env:{...process.env,LIFECYCLE_DIR:dir,CLOUDFLARE_ACCOUNT_ID:'lifecycle',R2_BUCKET:'lifecycle',R2_ACCESS_KEY_ID:'x',R2_SECRET_ACCESS_KEY:'x',R2_FORCE_SHA:'false',R2_BOOTSTRAP_ONLY:'false',GITHUB_STEP_SUMMARY:''},encoding:'utf8',timeout:300000});
  const out=run.stdout+run.stderr,requests=existsSync(join(dir,'requests.log'))?readFileSync(join(dir,'requests.log'),'utf8').trim().split('\n').filter(Boolean).map(l=>JSON.parse(l)):[];
- return {code:run.status,published:/R2_SYNC_PUBLISHED/.test(out),unchanged:/R2_METADATA_UNCHANGED/.test(out),failed:out.match(/R2_SYNC_FAILED (.*)/)?.[1],downloads:requests.filter((r:any)=>r.alio==='download').length,acceptance:existsSync(join(dir,'acceptance.log'))?readFileSync(join(dir,'acceptance.log'),'utf8').trim():''};
+ return {code:run.status,published:/R2_SYNC_PUBLISHED/.test(out),unchanged:/R2_METADATA_UNCHANGED/.test(out),failed:out.match(/R2_SYNC_FAILED (.*)/)?.[1],downloads:requests.filter((r:any)=>r.alio==='download').length,downloadedFiles:requests.filter((r:any)=>r.alio==='download').map((r:any)=>r.fileNo),acceptance:existsSync(join(dir,'acceptance.log'))?readFileSync(join(dir,'acceptance.log'),'utf8').trim():''};
 }
 const names=async()=>(await tool('list_regulations',{limit:500})).results?.map((r:any)=>r.regulationName)??[];
 const idxOf=(r:any)=>r?.sourceUrl?new URL(r.sourceUrl).searchParams.get('idx'):r?.error?.code;
@@ -44,9 +44,8 @@ try{
  s=sync({rows:[A,B2,C,N]});
  const renamed=await tool('get_regulation',{name:'국내외 여비규정'}),oldName=await tool('get_regulation',{name:'여비규정'}),oldSearch=await tool('search_regulations',{query:'여비규정'});
  check('명칭변경','새 이름으로 조회, 같은 idx 유지','idx=25281',{published:s.published,idx:idxOf(renamed)},s.published&&idxOf(renamed)==='25281');
- check('명칭변경','옛 이름 조회(aliases)','옛 이름 → idx 25281',{idx:idxOf(oldName)},idxOf(oldName)==='25281');
+ check('명칭변경','옛 이름 조회(aliases)','옛 이름 → idx 25281, aliases에 옛 이름',{idx:idxOf(oldName),aliases:renamed.aliases},idxOf(oldName)==='25281'&&renamed.aliases?.includes('여비규정'));
  check('명칭변경','search_regulations 옛 이름','옛 이름으로 1건',{total:oldSearch.totalMatches,names:oldSearch.results?.map((r:any)=>r.regulationName)},oldSearch.results?.some((r:any)=>idxOf(r)==='25281'));
- check('명칭변경','본문 재사용(재다운로드 불필요)','다운로드 0',{downloads:s.downloads},s.downloads===0);
  s=sync({rows:[A,B2,C2,N]});
  const revised=await tool('get_regulation',{name:'기술용역 관리규정'}),revisedOld=await tool('get_regulation',{name:'기술용역 업무규정'});
  check('명칭변경+개정','새 이름·새 file_no, 같은 idx','idx=24708, fileNo=990002',{published:s.published,idx:idxOf(revised),fileNo:revised.fileNo},s.published&&idxOf(revised)==='24708'&&revised.fileNo==='990002');
@@ -55,22 +54,31 @@ try{
  check('명칭변경+개정','이전 버전 원본 보관','raw/228379/… 유지',{retained:archived},archived);
  s=sync({rows:[A,B2,C2]});
  const gone1=await tool('get_regulation',{name:'신설 시험규정'});
- check('폐지(1회 미검출)','한 번 빠진 규정은 유지(일시누락 대비)','조회 가능, 2회 연속 미검출 전까지 active',{published:s.published,result:idxOf(gone1),count:(await names()).length},idxOf(gone1)==='990001');
+ check('폐지(1회 미검출)','한 번 빠진 규정은 유지(일시누락 대비)','조회 가능, active, missing_count=1',{published:s.published,result:idxOf(gone1),status:gone1.status,missing:gone1.missing_count,source:gone1.source_latest_status},idxOf(gone1)==='990001'&&gone1.status==='active'&&gone1.missing_count===1);
  s=sync({rows:[A,B2,C2]});
  const gone2=await tool('get_regulation',{name:'신설 시험규정'}),listed=await names();
- check('폐지(2회 미검출)','status=repealed로 보존, 기본 목록에서 제외','repealed 표시, 물리 삭제 없음',{result:gone2.error?.code??gone2.status,listed:listed.includes('신설 시험규정')},gone2.status==='repealed'&&!listed.includes('신설 시험규정'));
+ check('폐지(2회 미검출)','status=repealed로 보존, 기본 목록에서 제외','repealed 표시, 물리 삭제 없음',{result:gone2.error?.code??gone2.status,repealed_at:gone2.repealed_at,listed:listed.includes('신설 시험규정')},gone2.status==='repealed'&&Boolean(gone2.repealed_at)&&!listed.includes('신설 시험규정'));
+ const withRepealed=(await tool('list_regulations',{limit:500,include_repealed:true})).results.map((r:any)=>r.regulationName),globalDefault=await tool('search_all_regulations',{query:'여비',limit:100}),globalAll=await tool('search_all_regulations',{query:'여비',limit:100,include_repealed:true}),diag=await tool('diagnose_alio_list');
+ check('폐지(2회 미검출)','include_repealed=true일 때만 포함','목록·전체검색 모두 옵트인',{list:withRepealed.includes('신설 시험규정'),global_default:globalDefault.results.some((r:any)=>r.reg_id==='990001'),global_opt_in:globalAll.results.some((r:any)=>r.reg_id==='990001')},withRepealed.includes('신설 시험규정')&&!globalDefault.results.some((r:any)=>r.reg_id==='990001')&&globalAll.results.some((r:any)=>r.reg_id==='990001'));
+ check('폐지(2회 미검출)','diagnose_alio_list에 폐지 내역','repealed 1건, last_changes.repealed',{repealed:diag.repealed_regulations,changes:diag.last_changes?.repealed},diag.repealed_regulations?.length===1&&diag.last_changes?.repealed?.includes('신설 시험규정'));
  s=sync({rows:[A,B2,C2,N]});
  const back=await tool('get_regulation',{name:'신설 시험규정'});
- check('일시누락 후 복귀','같은 idx로 복귀, 재다운로드 없음','idx=990001, 다운로드 0',{published:s.published,idx:idxOf(back),downloads:s.downloads},idxOf(back)==='990001'&&s.downloads===0);
+ check('폐지 후 재등장','같은 idx로 active 복귀, 재다운로드 없음','idx=990001, active, 다운로드 0',{published:s.published,idx:idxOf(back),status:back.status,downloaded:s.downloadedFiles},idxOf(back)==='990001'&&back.status==='active'&&!s.downloadedFiles.includes('990001'));
+ s=sync({rows:[A,B2,C2]});s=sync({rows:[A,B2,C2,N]});
+ const blip=await tool('get_regulation',{name:'신설 시험규정'});
+ check('일시누락(1회) 후 복귀','계속 검색 가능, 복귀 후 missing_count=0','active, missing_count 0',{status:blip.status,missing:blip.missing_count,downloaded:s.downloadedFiles},blip.status==='active'&&blip.missing_count===0&&!s.downloadedFiles.includes('990001'));
  const before=await names();s=sync({rows:[A,B2,C2,N],returnedRows:2,totalCount:4});
  check('목록 부분응답','반영 중단, 기존 유지','sync 실패, 4건 유지',{failed:s.failed,count:(await names()).length},!s.published&&(await names()).length===before.length);
  s=sync({rows:[A,B2,C2,N],listStatus:522});
  check('목록 조회 실패(522)','반영 중단, 기존 유지','sync 실패, 4건 유지',{failed:s.failed,count:(await names()).length},!s.published&&(await names()).length===before.length);
  s=sync({rows:[A]});
- check('목록 급감(4→1)','반영 중단(누락 5% 초과)','게시 안 함, 4건 유지',{published:s.published,count:(await names()).length,production_acceptance:s.acceptance||'(통과)'},!s.published&&(await names()).length===before.length);
+ const shrinkDiag=await tool('diagnose_alio_list');
+ check('목록 급감(4→1)','반영 중단(누락 5% 초과)·경고','게시 안 함, 4건 유지, list_shrink_guard',{published:s.published,failed:s.failed,count:(await names()).length,warning:shrinkDiag.warnings?.[0]?.code},!s.published&&(await names()).length===before.length&&shrinkDiag.warnings?.[0]?.code==='list_shrink_guard');
  s=sync({rows:[A,B2,C2,N,{...N,idx:'990003',attachments:[{name:'신설 시험규정(2024년도 2월 16일 개정).hwp',fileNo:'990001'}]}]});
  const same=await tool('search_regulations',{query:'신설 시험규정'});
  check('동명규정(서로 다른 idx)','두 규정 모두 색인','같은 이름 2건(idx 990001, 990003)',{published:s.published,failed:s.failed,ids:same.results?.map(idxOf)},s.published&&same.results?.length===2);
+ const ambiguous=await tool('get_regulation',{name:'신설 시험규정'}),byId=await tool('get_regulation',{name:'신설 시험규정',reg_id:'990003'});
+ check('동명규정(서로 다른 idx)','이름 조회는 후보 안내, reg_id로 지정','ambiguous_name + reg_id 990003 조회',{error:ambiguous.error?.code,candidates:ambiguous.error?.candidates?.map((c:any)=>c.reg_id),by_id:idxOf(byId)},ambiguous.error?.code==='ambiguous_name'&&idxOf(byId)==='990003');
 }catch(error){check('harness','예외 없음','',String(error),false);}
 mkdirSync('reports',{recursive:true});writeFileSync('reports/r2-lifecycle.json',JSON.stringify({scope:'unmodified scripts/r2/sync.ts with scripted ALIO and file-backed R2; production acceptance gate recorded but bypassed (fixture corpus lacks its named regulations)',results},null,1));
 console.table(results.map(r=>({scenario:r.scenario,check:r.check,pass:r.pass?'PASS':'FAIL',actual:r.actual.slice(0,90)})));

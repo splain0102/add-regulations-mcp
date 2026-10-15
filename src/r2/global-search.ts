@@ -15,7 +15,7 @@ export function searchBodies(docs:any[],query:string){
    const label=article.match(/^\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)[^\]\n]*\])/)?.[1]??snippet.label;
    found.push({label,snippet:snippet.snippet,score:sectionScore(article,label,query,weights)});
   }
-  if(found.length)results.push({regulationName:doc.title,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,sourceUrl:doc.sourceUrl,indexedAt:doc.verifiedAt,sha256:doc.sha256,score:Math.max(...found.map(m=>m.score))+0.1*found.map(m=>m.score).sort((a,b)=>b-a).slice(0,3).reduce((sum,n)=>sum+n,0),matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+  if(found.length)results.push({regulationName:doc.title,reg_id:doc.regulation_id,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,sourceUrl:doc.sourceUrl,indexedAt:doc.verifiedAt,sha256:doc.sha256,score:Math.max(...found.map(m=>m.score))+0.1*found.map(m=>m.score).sort((a,b)=>b-a).slice(0,3).reduce((sum,n)=>sum+n,0),matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
  }
  return results.sort((a,b)=>b.score-a.score||b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
 }
