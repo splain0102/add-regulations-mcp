@@ -29,10 +29,10 @@ A request pins one active catalog; old immutable data is retained for concurrent
 
 ## Deployment sequence
 
-1. Merge preparation code with the existing production entrypoint unchanged. D1 has manual experimental opt-in only.
-2. `R2 hourly regulation sync` automatically imports/completes snapshots and builds the R2 catalog using existing Variables/Secrets. The schedule is minute 37 of each hour (approximate).
+1. Build/test preparation on feat/r2-first-serving with main production untouched. D1 will have manual experimental opt-in only after promotion.
+2. The named preparation branch may bootstrap the first unused R2 catalog using existing Variables/Secrets. After promotion, main runs R2 hourly regulation sync at minute 37 of each hour (approximate).
 3. Confirm R2_SYNC_PUBLISHED, current regulation count, shared selected fileNo, representative searches and read-back SHA validation.
-4. Run CI/local OAuth R2/DO regression and inspect actual Cloudflare limits. Then replace wrangler.jsonc with wrangler.r2.jsonc in a separate promotion commit. main automatically deploys.
+4. Run all CI/local OAuth R2/DO regressions and the read-only actual-R2 corpus acceptance job. Merge the complete production PR containing preparation and wrangler.r2.jsonc promotion together. main automatically deploys 2.0.1 once. Inspect actual Cloudflare limits separately.
 5. Verify actual production MCP and Worker/DO logs. On failure restore the previous production config; old OAuth KV and corpus are retained.
 
 Commands: npm run sync:r2; R2_FORCE_SHA=true npm run sync:r2; npm run test:r2; npm run typecheck:r2; npm run build:r2.
