@@ -6,6 +6,7 @@ const commonKeys=['table_id','row','analysis_type','needs_review'];
 const delegationKeys=['category','task','condition','approver','approvers','symbol','suffix','legend','footnotes','confidence','multi_approver','approver_type'];
 function compactRow(row:SearchTableRow){
  const value:Record<string,unknown>=Object.fromEntries(commonKeys.map(k=>[k,row[k]??null]));
+ if(row.review_reason)value.review_reason=row.review_reason;
  if(row.analysis_type==='delegation_table'){
   for(const key of delegationKeys)value[key]=row[key]??(key==='footnotes'||key==='approvers'?[]:key==='multi_approver'?false:null);
   if(Array.isArray(row.related_regulations)&&row.related_regulations.length)value.related_regulations=row.related_regulations;

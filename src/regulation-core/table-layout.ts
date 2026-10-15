@@ -14,7 +14,10 @@ export type SymbolPosition={symbol:string;x0:number;x1:number;x_center:number;su
 export type StructuredRow={page:number|null;table_id:string;category:string|null;task:string|null;condition:string|null;approver:string|null;approver_type?:'symbol'|'text';approvers?:Array<{name:string|null;symbol:string|null;legend:string|null;suffix?:string|null}>;multi_approver?:boolean;footnotes?:Footnote[];related_regulations?:string[];symbol:string|null;symbol_x_center:number;suffix:string|null;legend:string|null;confidence:number;version_warning:unknown;symbol_coordinates:SymbolPosition|null;bounding_box:Box;coordinate_space:string;header_evidence:unknown;raw_cells:unknown;needs_review:boolean;coordinate_type?:'logical_cell'|'pdf_point';row?:number;col?:number;x_center?:number;y?:number;column_detection?:'vertical_lines'|'header_midpoints'|null;confidence_basis?:string[];fill_down?:unknown;debug?:unknown;effective_approver?:string|null;approver_basis?:unknown};
 const compact=(s:string)=>s.replace(/\s+/g,'');
 const roles=['사책/과책','운영','실장','부장(센터장)','사업기구장','부소장','소장'];
-const textApproverName=(text:string)=>{const v=compact(text).replace(/[（]/g,'(').replace(/[）]/g,')');for(const r of ['직상위자','책임원','부서장','사업기구장','부소장','실장','운영','소장'])if(v===r||v===r+'전결')return r;return null;};
+const textRole=(v:string)=>{for(const r of ['직상위자','책임원','부서장','사업기구장','부소장','실장','운영','소장','PM'])if(v===r||v===r+'전결')return r;return null;};
+// A written approver is one role, or alternatives such as "직상위자 또는 PM";
+// every alternative must be a known role, otherwise the cell is not an approver.
+const textApproverNames=(text:string)=>{const v=compact(text).replace(/[（]/g,'(').replace(/[）]/g,')'),single=textRole(v);if(single)return [single];const parts=v.split(/또는|,|，|\//).filter(Boolean),names=parts.map(textRole);return parts.length>1&&names.every(Boolean)?names as string[]:[];};
 export function roleName(text:string):string|null {
  const v=compact(text).replace(/[（]/g,'(').replace(/[）]/g,')');
  if(/사책.*과책|과책.*사책/.test(v))return roles[0];
@@ -139,8 +142,7 @@ export function structureTables(tables:Table[],text:string):StructuredRow[] {
        approvals.push({name:header?.name??null,symbol:symbol.symbol,legend:legends[symbol.symbol],suffix:symbol.suffix,cell:c,position:symbol,type:'symbol',header});
      }
    } else {
-     const textName=textApproverName(cellText(c));
-     if(textName) approvals.push({name:textName,symbol:null,legend:null,suffix:null,cell:c,position:null,type:'text',header:null});
+     for(const textName of textApproverNames(cellText(c)))approvals.push({name:textName,symbol:null,legend:null,suffix:null,cell:c,position:null,type:'text',header:null});
    }
  }
  if(approvals.length){
