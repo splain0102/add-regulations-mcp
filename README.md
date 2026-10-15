@@ -1,4 +1,14 @@
-# R2 사전 색인 검색: 2.0.1
+# R2 사전 색인 검색: 2.1.0
+
+## 2.1.0 — 규정 신설·명칭변경·폐지 대응
+
+- **규정 식별자는 ALIO 고유번호(idx, 응답의 `reg_id`)입니다.** 이름이 같은 규정이 여러 개 있어도 각각 색인합니다. 이름으로 조회했을 때 후보가 여럿이면 `ambiguous_name`과 후보별 `reg_id`를 돌려주며, 이름 조회 도구에 선택 파라미터 `reg_id`를 함께 넘겨 지정합니다.
+- **명칭변경**: 같은 idx의 이름이 바뀌면 이전 이름을 `aliases`에 보관합니다. `get_regulation`·`search_regulations`는 이전 이름으로도 찾습니다(`matched_alias`).
+- **폐지**: ALIO 목록에서 한 번 빠진 규정은 계속 검색되며 `missing_count=1`, `source_latest_status=missing_from_source`로 표시됩니다. 두 번 연속 빠지면 `status=repealed`, `repealed_at`이 기록되고 삭제하지 않고 보관합니다. 폐지 규정은 기본 목록·전체 검색에서 빠지며 `include_repealed=true`로 포함합니다. 다시 나타나면 같은 idx로 복귀합니다.
+- **안전장치**: ALIO 목록에서 활성 규정의 5%(최소 1건)를 넘게 빠지면 `list_shrink_guard`로 반영을 멈추고 기존 색인을 유지합니다. 실제 대량 폐지라면 Actions의 *R2 hourly regulation sync*를 수동 실행하면서 `allow_list_shrink`를 켭니다.
+- `diagnose_alio_list`는 마지막 반영의 신설·개정·명칭변경·일시누락·폐지·복귀 내역(`last_changes`), 폐지·일시누락 규정 목록, 경고를 함께 반환합니다.
+- 검증: `npm run test:r2-lifecycle`은 실제 `scripts/r2/sync.ts`를 가짜 ALIO 응답과 파일 기반 R2로 실행해 신설·명칭변경·명칭변경+개정·폐지·일시누락·목록 부분응답·목록 급감·동명규정 21개 항목을 확인합니다. R2 regression CI에서 함께 실행됩니다.
+
 
 D1 자동 적재는 보류했습니다. R2 원본·파싱 결과와 사전 검색 파일을 먼저 사용합니다. 검색 요청은 R2 사전 색인을 조회하며 ALIO 다운로드·HWP/PDF 파싱을 실행하지 않습니다. 수집은 GitHub Actions에서 1시간마다 진행하고, 검증된 전체 색인만 원자적으로 교체합니다. 기존 Worker Cron과 KV 발행은 중지합니다. 신규 규정·개정·실패 복구·스케줄·검증 절차는 [R2 운영 설계](docs/r2-serving.md)를 참고하세요. 아래 D1 설명은 보류된 실험 경로입니다.
 

@@ -18,12 +18,15 @@ jobs:
       - run: npm run typecheck:r2
       - run: npm run build:r2
       - run: npm run test:r2
+      - run: npm run test:r2-lifecycle
       - run: node --import ./scripts/test-loader.mjs scripts/d1/remote-regression.ts
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: r2-regression
-          path: reports/r2-regression.json
+          path: |
+            reports/r2-regression.json
+            reports/r2-lifecycle.json
           if-no-files-found: ignore
 
   actual-r2:

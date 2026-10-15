@@ -282,8 +282,10 @@ export function dedupeLatestRegulations(
 ): RegulationItem[] {
   const map = new Map<string, RegulationItem>();
 
+  // One ALIO entry (idx) is one regulation. Distinct entries that share a
+  // title are distinct regulations and must not collapse into one.
   for (const item of items) {
-    const key = normalizeRegulationTitle(item.title);
+    const key = new URL(item.detailUrl).searchParams.get('idx') ?? normalizeRegulationTitle(item.title);
 
     const old = map.get(key);
 
