@@ -11,11 +11,17 @@ export async function loadDocument(db:Database,records:any){
  try{
   for(let i=0;i<records.sections.length;i+=20)await db.batch(records.sections.slice(i,i+20).map((s:any)=>statement('sections',{document_id:d.document_id,...s})));
   const keys=[...new Set(records.rows.map((r:any)=>r.table_key))];
-  for(const key of keys){const rows=records.rows.filter((r:any)=>r.table_key===key),r=rows[0];
-   await db.batch([statement('table_definitions',{document_id:d.document_id,table_key:key,analysis_type:r.analysis_type,coordinate_space:r.coordinate_space,header_evidence_json:JSON.stringify(r.headers??{})})]);
-   const [table]=await db.query('SELECT table_pk FROM table_definitions WHERE document_id=? AND table_key=?',[d.document_id,key]);
-   for(let i=0;i<rows.length;i+=10)await db.batch(rows.slice(i,i+10).map((r:any,j:number)=>statement('table_rows',{table_pk:table.table_pk,record_number:i+j,source_row_number:r.source_row_number,page_number:r.page_number,text_original:r.text_original,text_normalized:r.match.row,match_json:JSON.stringify(r.match),grams:r.grams,task:r.result.task??null,condition_text:r.result.condition??null,amount_evidence_json:JSON.stringify({condition:r.result.condition??null}),approval_evidence_json:JSON.stringify(r.result.approvers??[]),raw_cells_json:JSON.stringify(r.result.raw_cells??[]),footnotes_json:JSON.stringify(r.result.footnotes??[]),parser_result_json:JSON.stringify(r.result),needs_review:r.result.needs_review?1:0})));
+  for(let i=0;i<keys.length;i+=20)await db.batch(keys.slice(i,i+20).map(key=>{const r=records.rows.find((r:any)=>r.table_key===key);return statement('table_definitions',{document_id:d.document_id,table_key:key,analysis_type:r.analysis_type,coordinate_space:r.coordinate_space,header_evidence_json:JSON.stringify(r.headers??{})});}));
+  const tables=keys.length?await db.query('SELECT table_pk,table_key FROM table_definitions WHERE document_id=?',[d.document_id]):[];
+  const tableIds=new Map(tables.map(t=>[t.table_key,t.table_pk])),numbers=new Map<string,number>();
+  let pending:ReturnType<typeof statement>[]=[],bytes=0;
+  for(const r of records.rows){const i=numbers.get(r.table_key)??0;numbers.set(r.table_key,i+1);
+   const row=statement('table_rows',{table_pk:tableIds.get(r.table_key),record_number:i,source_row_number:r.source_row_number,page_number:r.page_number,text_original:r.text_original,text_normalized:r.match.row,match_json:JSON.stringify(r.match),grams:r.grams,task:r.result.task??null,condition_text:r.result.condition??null,amount_evidence_json:JSON.stringify({condition:r.result.condition??null}),approval_evidence_json:JSON.stringify(r.result.approvers??[]),raw_cells_json:JSON.stringify(r.result.raw_cells??[]),footnotes_json:JSON.stringify(r.result.footnotes??[]),parser_result_json:JSON.stringify(r.result),needs_review:r.result.needs_review?1:0});
+   const size=new TextEncoder().encode(JSON.stringify(row)).byteLength;
+   if(pending.length&&(pending.length>=40||bytes+size>600000)){await db.batch(pending);pending=[];bytes=0;}
+   pending.push(row);bytes+=size;
   }
+  if(pending.length)await db.batch(pending);
   const [counts]=await db.query('SELECT (SELECT count(*) FROM sections WHERE document_id=?) AS sections,(SELECT count(*) FROM table_rows r JOIN table_definitions t ON t.table_pk=r.table_pk WHERE t.document_id=?) AS rows',[d.document_id,d.document_id]);
   if(counts.sections!==records.sections.length||counts.rows!==records.rows.length)throw Error('document_count_mismatch');
   await db.batch([{sql:'UPDATE documents SET indexed_at=?,expected_sections=?,expected_rows=? WHERE document_id=?',params:[new Date().toISOString(),records.sections.length,records.rows.length,d.document_id]}]);
