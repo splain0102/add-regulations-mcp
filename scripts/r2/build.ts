@@ -19,9 +19,10 @@ export function buildR2Catalog(stored:StoredDocument[],build:string,now=new Date
   const flush=()=>{if(!pending.length)return;const ref=put(pending.map(p=>p.payload));pending.forEach((p,i)=>summaries.push({...p.summary,evidence:ref,evidence_index:i}));pending.length=0;evidenceBytes=2;};
   const add=(summary:any,payload:any)=>{const size=Buffer.byteLength(JSON.stringify(payload))+1;if(pending.length&&evidenceBytes+size>300_000)flush();pending.push({summary,payload});evidenceBytes+=size;};
   for(const s of sections)add({id:s.ordinal,kind:'body',ordinal:s.ordinal,label:s.section_label,n:s.text_normalized},{text:s.text_original});
-  rows.forEach((r:any,i:number)=>add({id:i,kind:'table',ordinal:i,label:r.table_key+':'+r.source_row_number,match:r.match,analysis_type:r.analysis_type},{result:r.result}));flush();
+  // group links the sub-rows of one delegation task for group_by='task'.
+  rows.forEach((r:any,i:number)=>add({id:i,kind:'table',ordinal:i,label:r.table_key+':'+r.source_row_number,match:r.match,analysis_type:r.analysis_type,...r.result?.task?{group:r.table_key+':'+normalize(String(r.result.task))}:{}},{result:r.result}));flush();
   const repealed=d.status==='repealed';
-  for(const r of summaries.filter(r=>r.kind==='table'))(repealed?repealedRows:tableRows).push({document_id:d.document_id,label:r.label,match:r.match,analysis_type:r.analysis_type});
+  for(const r of summaries.filter(r=>r.kind==='table'))(repealed?repealedRows:tableRows).push({document_id:d.document_id,label:r.label,match:r.match,analysis_type:r.analysis_type,text:String(rows[r.ordinal]?.text_original??'').slice(0,850)});
   documents.push({...d,verified_at:saved.verified_at??now,search:chunks(summaries)});
   const text=String(saved.loaded.text??'');if(!text.trim())throw Error('missing_parsed_body:'+d.title);
   (repealed?repealedBodies:bodies).push({regulation_id:d.regulation_id,title:d.title,fileNo:d.file_no,revisionDate:d.st_date,updatedDate:d.i_date,sourceUrl:d.source_url,sha256:d.sha256,text,searchSections:prepareSearchSections(text)});

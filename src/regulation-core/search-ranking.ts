@@ -4,10 +4,13 @@ const suffix=/^(?:(?:을|를|이|가|은|는|의|에|로|으로|와|과|도|만|
 export function wordWeight(word:string,term:string){
  return normalizedWeight(fold(word),fold(term));
 }
+// A term of four or more syllables may also open a compound word
+// ("전문가활용" in "전문가활용경비") at a lower weight. Shorter terms stay strict
+// so "사고" never matches "사고방식".
 function normalizedWeight(word:string,term:string){let best=0;
  for(let at=word.indexOf(term);at>=0;at=word.indexOf(term,at+1)){
   const tail=word.slice(at+term.length);
-  if(tail&&!suffix.test(tail))continue;
+  if(tail&&!suffix.test(tail)){if(at===0&&Array.from(term).length>=4)best=Math.max(best,0.5);continue;}
   best=Math.max(best,at===0?1:0.3);
  }return best;
 }
