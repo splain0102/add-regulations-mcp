@@ -25,3 +25,23 @@ jobs:
           name: r2-regression
           path: reports/r2-regression.json
           if-no-files-found: ignore
+
+  actual-r2:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feat/r2-production-serving'
+    needs: r2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Verify actual R2 catalog without publishing or querying ALIO/D1
+        run: node scripts/stamp-build.mjs && node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/remote-acceptance.ts
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
