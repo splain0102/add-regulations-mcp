@@ -1,3 +1,4 @@
+import {normalize} from '../../src/d1/normalize';
 import {bloom} from '../../src/r2/bloom';
 import {hash} from '../d1/records';
 import {PARSER_VERSION} from '../../src/regulation-core/parser-version';
@@ -10,6 +11,7 @@ export function buildR2Catalog(stored:StoredDocument[],build:string,now=new Date
  const chunks=(values:any[],target=200_000,filter=false)=>{const refs:ObjectRef[]=[];let part:any[]=[],bytes=2;const flush=()=>{const ref=put(part);refs.push(filter?{...ref,bloom:bloom(part.map(v=>[v.match.row,...v.match.cells,...v.match.aliases,...v.match.paths].join(' ')).join(' '))}:ref);};for(const v of values){const size=Buffer.byteLength(JSON.stringify(v))+1;if(part.length&&bytes+size>target){flush();part=[];bytes=2;}part.push(v);bytes+=size;}if(part.length)flush();return refs;};
  const documents:R2Document[]=[],bodies:any[]=[],tableRows:any[]=[];
  for(const saved of stored){const {document:d,sections,rows}=saved.records;if(!d?.document_id||d.parser_version!==PARSER_VERSION||!Array.isArray(sections)||!Array.isArray(rows))throw Error('invalid_parsed_snapshot');
+  if(sections.some((s:any)=>normalize(s.text_original)!==s.text_normalized||!String(saved.loaded.text??'').includes(s.text_original)))throw Error('parsed_body_validation_failed:'+d.title);
   const summaries:SearchRecord[]=[];let evidenceBytes=2;
   const pending:{summary:any;payload:any}[]=[];
   const flush=()=>{if(!pending.length)return;const ref=put(pending.map(p=>p.payload));pending.forEach((p,i)=>summaries.push({...p.summary,evidence:ref,evidence_index:i}));pending.length=0;evidenceBytes=2;};

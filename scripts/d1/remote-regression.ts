@@ -17,7 +17,7 @@ try{
  };
  const r2=r2Store();await assert.rejects(()=>r2('PUT','new.bin',new Uint8Array(101)),/r2_bucket_budget_reached/);assert.equal(puts,0);
  await r2('PUT','old.bin',new Uint8Array(50));await r2('PUT','new.bin',new Uint8Array(950));assert.equal(puts,2);await assert.rejects(()=>r2('PUT','more.bin',new Uint8Array(1)),/r2_bucket_budget_reached/);
- assert.deepEqual(await r2.list('old'),['old.bin']);await r2('PUT','old.bin',new Uint8Array(50),{ifMatch:'test-etag'});assert.equal(lastHeaders.get('if-match'),'test-etag');assert.equal(r2.etag('old.bin'),'test-etag');
+ assert.deepEqual(await r2.list('old'),['old.bin']);await r2('PUT','old.bin',new Uint8Array(50),{ifMatch:'test-etag'});assert.equal(lastHeaders.get('if-match'),'test-etag');assert.equal(r2.etag('old.bin'),'test-etag');assert(lastHeaders.get('authorization')?.includes('SignedHeaders=host;if-match;'));
  const db=remoteDatabase('test');assert.equal((await db.query('SELECT 1'))[0].n,1);await db.batch([{sql:'UPDATE example SET value=?',params:[1]}]);assert(queries>=5);
  console.log('D1_REMOTE_MOCK_PASS R2 budget includes existing objects; overwrite reservations; D1 batch protocol. Not a real Cloudflare call.');
 }finally{globalThis.fetch=original;for(const name of names){if(saved[name]===undefined)delete process.env[name];else process.env[name]=saved[name];}}
