@@ -1,4 +1,5 @@
 import {lease,release} from './lease';
+import {collectCatalog} from './collect';
 import {zipSync,strToU8} from 'fflate';
 import {searchRegulationText} from '../../src/regulation-core/text-search';
 import {createHash} from 'node:crypto';
@@ -24,6 +25,9 @@ const db=await mf.getD1Database('REGULATIONS_DB');let writtenRows=0;const adapte
 const report:any={passed:false,scope:'Local workerd D1; stored actual ALIO files, not current-source or production CPU evidence',comparison:[],tests:[]};
 try{
  await db.exec(readFileSync('migrations/0001_regulation_index.sql','utf8').split('\n').filter(l=>!l.startsWith('--')).join(' '));
+ const deferred=await collectCatalog({prior:[],shouldStop:()=>true,request:async()=>Response.json({data:{result:[{title:'중단 시험규정',apbaId:'C0345',idx:'999998',reportFormNo:'21110',tableName:'COMM_RULE',idxName:'RULE_NO',reportGbn:'N',bidType:'',stDate:'2026.01.01',idate:'2026.01.02'}],page:{totalPage:1,totalCount:1}}}),save:async()=>{throw Error('Budget-exhausted collector must not download/parse/save');}});
+ assert.equal(deferred.complete,false);assert.equal(deferred.processed,0);assert.equal(deferred.documents.length,0);report.tests.push('time-budget checkpoint stops before new documents and cannot publish a partial catalog');
+
  const samples=JSON.parse(gunzipSync(Buffer.from(readFileSync('scripts/fixtures/d1-samples.json.gz.b64','utf8'),'base64')).toString('utf8')),wanted=['기술용역 업무규정','여비규정','위임전결규정'];const catalog:any={items:[],documents:[],verified_at:new Date().toISOString()};
  await adapter.batch([{sql:"INSERT INTO sync_runs(run_id,build_sha,started_at,status) VALUES('test','test',?,'running')",params:[catalog.verified_at]}]);
  const baselines=new Map();
