@@ -6,7 +6,8 @@ import {collectCatalog,type Prior} from '../d1/collect';
 import {hash} from '../d1/records';
 import {BUILD_VERSION} from '../../src/build-info';
 import {R2Reader} from '../../src/r2/read';
-import {runR2Tool} from '../../src/r2/tools';
+import {runR2Tool,rowMatches} from '../../src/r2/tools';
+import {queryTerms,normalize} from '../../src/d1/normalize';
 import {ROOT,STATUS,type R2Head} from '../../src/r2/types';
 import {buildCrossAttachmentWarnings} from '../../src/regulation-core/cross-attachments';
 import {buildR2Catalog,type StoredDocument} from './build';
@@ -49,7 +50,8 @@ try{
   const reader=new R2Reader({get:async key=>{try{const bytes=await store('GET',key);return {size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer};}catch(error){if(String(error).includes('HTTP 404'))return null;throw error;}}});
   const head=await publishR2(store,built,previous,etag,async candidate=>{
    for(const name of ['기술용역 업무규정','여비규정','위임전결규정','감사규정']){const answer:any=await runR2Tool(reader,'get_regulation',{name},BUILD_VERSION,candidate);if(answer.isError||!answer.structuredContent.fileNo)throw Error('metadata_acceptance_failed:'+name);}
-   for(const query of ['전문가','내부승인']){const answer:any=await runR2Tool(reader,'search_regulation_table',{name:'위임전결규정',query},BUILD_VERSION,candidate);if(answer.isError||!answer.structuredContent.totalMatches)throw Error('table_acceptance_failed:'+query);}
+   const delegation=documents.find(d=>d.records.document.title==='위임전결규정')!;
+   for(const query of ['전문가','내부승인']){const expected=delegation.records.rows.filter((r:any)=>r.analysis_type!=='text_box'&&rowMatches({kind:'table',match:r.match} as any,queryTerms(query))).length,source_phrase_present=normalize(delegation.loaded.text).includes(normalize(query)),answer:any=await runR2Tool(reader,'search_regulation_table',{name:'위임전결규정',query},BUILD_VERSION,candidate);if(answer.isError||answer.structuredContent.totalMatches!==expected||query==='전문가'&&!expected||!expected&&source_phrase_present)throw Error('table_acceptance_failed:'+query);console.log('R2_TABLE_ACCEPTANCE',JSON.stringify({query,totalMatches:expected,source_phrase_present,...!expected?{zero_reason:'phrase_absent_from_original_document'}:{}}));}
    const global:any=await runR2Tool(reader,'search_all_regulations',{query:'외국인',limit:10},BUILD_VERSION,candidate);if(global.isError||global.structuredContent.partial||!global.structuredContent.results.some((r:any)=>r.regulationName.endsWith('보안과제 관리요령')&&r.matches.some((m:any)=>m.label.includes('제8조'))))throw Error('global_acceptance_failed');
   });pending_titles=[];removed_titles=[];await status({status:'published',finished_at:new Date().toISOString(),count:head.count});console.log('R2_SYNC_PUBLISHED',JSON.stringify(head));
  }

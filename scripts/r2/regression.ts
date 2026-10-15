@@ -40,6 +40,7 @@ try{
   for(const row of answer.structuredContent.rows){const old=expected.find((r:any)=>r.table_id===row.table_id&&r.row===row.row);assert(old);const serialized=(tableToolResponse({rows:[old]},query,{compact:false,limit:1}).structuredContent.rows as any[])[0];for(const key of ['raw_cells','approvers','symbol','footnotes','header_evidence'])assert.deepEqual(row[key],serialized[key],name+'/'+query+'/'+key);}
  }
  report.tests.push('21 real-HWP table comparisons including original cells, spans, approvers, symbols and footnotes');
+ const delegationSample=stored.find(s=>s.records.document.title==='위임전결규정')!;assert.equal(delegationSample.loaded.fileNo,'239154');assert(!delegationSample.loaded.text.replace(/\s/g,'').includes('내부승인'));report.tests.push('internal-approval zero matches confirmed absent from actual fileNo 239154 body, not a parser timeout');
  for(const s of stored)for(const query of ['식비','비고','제10조']){const expected=s.records.sections.filter((r:any)=>r.text_normalized.includes(query)).length;const answer=await call('search_regulation_text',{name:s.records.document.title,query,scope:'body',limit:100});assert.equal(answer.structuredContent.totalMatches,expected);}
  report.tests.push('body section matches and normalized queries');
  const filter=bloom('전문가 내부승인 300만 원');assert(mightMatch(filter,['전문가','내부승인']));assert(!mightMatch(filter,['매우희귀없는단어']));assert.equal(queryTerms('민·군').warning,null);
