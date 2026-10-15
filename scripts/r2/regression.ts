@@ -10,6 +10,8 @@ import {extractHwpTables,structureTables} from '../../src/regulation-core/table-
 import {tableToolResponse} from '../../src/regulation-core/table-response';
 import {searchGeneralTables} from '../../src/regulation-core/general-table-search';
 import {normalizeName,queryTerms} from '../../src/d1/normalize';
+import {bloom,mightMatch} from '../../src/r2/bloom';
+import {searchBodies} from '../../src/r2/global-search';
 import {R2Reader} from '../../src/r2/read';
 import {runR2Tool} from '../../src/r2/tools';
 import {ROOT,STATUS,type R2Head} from '../../src/r2/types';
@@ -40,6 +42,10 @@ try{
  report.tests.push('21 real-HWP table comparisons including original cells, spans, approvers, symbols and footnotes');
  for(const s of stored)for(const query of ['식비','비고','제10조']){const expected=s.records.sections.filter((r:any)=>r.text_normalized.includes(query)).length;const answer=await call('search_regulation_text',{name:s.records.document.title,query,scope:'body',limit:100});assert.equal(answer.structuredContent.totalMatches,expected);}
  report.tests.push('body section matches and normalized queries');
+ const filter=bloom('전문가 내부승인 300만 원');assert(mightMatch(filter,['전문가','내부승인']));assert(!mightMatch(filter,['매우희귀없는단어']));assert.equal(queryTerms('민·군').warning,null);
+ for(const query of ['전문가','비고','300만 원']){const answer=await call('search_all_regulations',{query,scope:'table',limit:100});const expected=stored.filter(s=>s.records.rows.some((r:any)=>r.analysis_type!=='text_box'&&(queryTerms(query).terms.length===1?[...r.match.cells,...r.match.aliases].some((v:string)=>v.includes(queryTerms(query).joined)):r.match.row.includes(queryTerms(query).joined)||queryTerms(query).terms.every(t=>r.match.row.includes(t))||r.match.paths.some((v:string)=>queryTerms(query).terms.every(t=>v.includes(t))))));assert.equal(answer.structuredContent.totalMatches,expected.length);}
+ assert.equal(searchBodies([{title:'견본',text:'[별지 제2호]\n사고방식 보고서 견본',fileNo:'1'}],'사고 보고').length,0);assert.equal(searchBodies([{title:'여비규정',text:'제21조(외국인대동)\n(삭제 2023. 4. 21.)',fileNo:'1'}],'외국인').length,0);report.tests.push('global table Bloom prefilter has no lost hits; N5/N6 and middot query guard preserved');
+
  const items=stored.map(s=>({title:s.records.document.title,detailUrl:s.records.document.source_url,revisionDate:s.records.document.st_date,updatedDate:s.records.document.i_date})),checkpoint={entries:Object.fromEntries(stored.map(s=>[s.records.document.document_id,{raw_checked_at:new Date().toISOString()}]))};
  assert(metadataUnchanged(built.catalog,checkpoint,items));assert(!metadataUnchanged(built.catalog,checkpoint,[...items,{...items[0],title:'새 규정',detailUrl:items[0].detailUrl+'1'}]));assert(!metadataUnchanged(built.catalog,checkpoint,[{...items[0],updatedDate:'2099.01.01'},...items.slice(1)]));assert(!metadataUnchanged(built.catalog,checkpoint,items,Date.now()+8*86400000));assert(!metadataUnchanged(built.catalog,checkpoint,items,Date.now(),true));report.tests.push('hourly unchanged list skips collection; new rules, revision changes and expired/forced SHA do not');
  const changed=structuredClone(stored[0]);changed.records.document.document_id=hash('new-revision');changed.records.document.st_date='2026.10.15';changed.records.document.file_no='999999';changed.records.sections[0].text_original+='\n개정 시험';changed.records.sections[0].text_normalized+='개정시험';changed.loaded.text+='\n개정 시험';

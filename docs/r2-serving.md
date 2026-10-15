@@ -38,3 +38,5 @@ A request pins one active catalog; old immutable data is retained for concurrent
 Commands: npm run sync:r2; R2_FORCE_SHA=true npm run sync:r2; npm run test:r2; npm run typecheck:r2; npm run build:r2.
 
 The local regression covers three fixed actual ALIO HWP samples, 21 table-query comparisons, body normalization, original evidence, new-rule addition, atomic revision replacement, failed upload/validation and stale-writer preservation, previous-catalog fallback, unchanged-list fast path and expired raw checks, and all nine OAuth MCP calls through local workerd/R2/DO. Synthetic changes do not establish that a real ALIO revision has occurred. Remote catalog publication and production MCP/CPU checks are separate evidence.
+
+Global table search uses separately packed normalized row summaries. Per-shard Bloom filters only eliminate definite non-matches; real row predicates verify every positive candidate. Reads are bounded to four concurrent immutable objects. The legacy ranked body-only default of search_all_regulations is retained, while explicit scope=table/all adds table searches. Named search_regulation_text continues to search body and table by default.
