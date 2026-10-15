@@ -3,6 +3,7 @@ on:
   push:
     branches: [main, feat/r2-first-serving]
     paths:
+      - 'package.json'
       - 'scripts/r2/**'
       - 'scripts/d1/collect.ts'
       - 'scripts/d1/records.ts'
