@@ -8,6 +8,8 @@ on:
       - 'scripts/d1/collect.ts'
       - 'scripts/d1/records.ts'
       - 'scripts/d1/remote.ts'
+      - 'scripts/d1/mirror*.ts'
+      - 'migrations/**'
       - 'src/r2/**'
       - 'src/regulation-core/regulations.ts'
       - '.github/workflows/r2-sync.yml'
@@ -50,3 +52,38 @@ jobs:
           R2_BOOTSTRAP_ONLY: ${{ github.ref != 'refs/heads/main' && 'true' || 'false' }}
           R2_FORCE_SHA: ${{ inputs.force_sha == true && 'true' || 'false' }}
           R2_ALLOW_LIST_SHRINK: ${{ inputs.allow_list_shrink == true && 'true' || 'false' }}
+
+  # Derived D1 copy of the published R2 catalog (docs/d1-derived-index.md).
+  # Cheap when nothing changed: two reads and no writes.
+  d1-mirror:
+    needs: sync
+    if: github.ref == 'refs/heads/main' && vars.D1_DATABASE_ID != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: add-d1-mirror-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Apply D1 migrations
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+        run: |
+          node -e 'const id=process.env.D1_DATABASE_ID;if(!/^[a-f0-9-]{36}$/.test(id))throw Error("Set a real D1_DATABASE_ID");require("fs").writeFileSync("wrangler.d1.generated.jsonc",JSON.stringify({name:"add-regulations-d1",compatibility_date:"2026-10-01",d1_databases:[{binding:"REGULATIONS_DB",database_name:"add-regulations",database_id:id,migrations_dir:"migrations"}]}))'
+          npx wrangler d1 migrations apply REGULATIONS_DB --remote --config wrangler.d1.generated.jsonc
+      - name: Mirror the R2 catalog into D1
+        run: npm run mirror:d1
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+          CLOUDFLARE_D1_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

@@ -1,5 +1,5 @@
 import {createHash,createHmac} from 'node:crypto';
-import type {Database} from './load';
+import type {Database} from './mirror';
 const required=(name:string)=>{const v=process.env[name];if(!v)throw Error('Missing secret/config: '+name);return v;};
 export function remoteDatabase(runId:string):Database{
  const account=required('CLOUDFLARE_ACCOUNT_ID'),id=required('D1_DATABASE_ID'),token=required('CLOUDFLARE_D1_TOKEN');
