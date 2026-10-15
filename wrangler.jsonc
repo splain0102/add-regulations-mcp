@@ -1,51 +1,16 @@
 {
   "name": "add-regulations-mcp",
-  "main": "src/index.ts",
-  "build": {
-    "command": "node scripts/stamp-build.mjs"
-  },
-  "durable_objects": {"bindings": [{"name": "CORPUS_INDEX_COORDINATOR", "class_name": "CorpusIndexCoordinator"}]},
-  "migrations": [{"tag": "corpus-index-coordinator-v1", "new_sqlite_classes": ["CorpusIndexCoordinator"]}],
+  "main": "src/r2-worker.ts",
+  "build": {"command":"node scripts/stamp-build.mjs"},
   "compatibility_date": "2026-10-01",
-  "compatibility_flags": [
-    "global_fetch_strictly_public"
-  ],
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "keep_vars": true,
-  "secrets": {
-    "required": [
-      "ACCESS_CLIENT_SECRET",
-      "COOKIE_ENCRYPTION_KEY"
-    ]
-  },
-  "kv_namespaces": [
-    {
-      "binding": "OAUTH_KV",
-      "id": "d62377aa75e141c89930e4a47ad54502"
-    }
-  ],
-  "previews": {
-    "kv_namespaces": [
-      {
-        "binding": "OAUTH_KV",
-        "id": "9d1edd2663b14487a1d5eade64e2c445"
-      }
-    ],
-    "durable_objects": {
-      "bindings": [
-        {
-          "name": "CORPUS_INDEX_COORDINATOR",
-          "class_name": "CorpusIndexCoordinator"
-        }
-      ]
-    }
-  },
-  "observability": {
-    "enabled": true
-  },
-  "triggers": {
-    "crons": [
-      "*/5 * * * *"
-    ]
-  }
+  "secrets": {"required":["ACCESS_CLIENT_SECRET","COOKIE_ENCRYPTION_KEY"]},
+  "observability": {"enabled":true},
+  "r2_buckets": [{"binding":"REGULATIONS_ARCHIVE","bucket_name":"add-regulations-archive"}],
+  "kv_namespaces": [{"binding":"OAUTH_KV","id":"d62377aa75e141c89930e4a47ad54502"}],
+  "durable_objects": {"bindings":[{"name":"CORPUS_INDEX_COORDINATOR","class_name":"CorpusIndexCoordinator"}]},
+  "migrations": [{"tag":"corpus-index-coordinator-v1","new_sqlite_classes":["CorpusIndexCoordinator"]}],
+  "previews": {"kv_namespaces":[{"binding":"OAUTH_KV","id":"9d1edd2663b14487a1d5eade64e2c445"}]},
+  "triggers": {"crons":[]}
 }
-
