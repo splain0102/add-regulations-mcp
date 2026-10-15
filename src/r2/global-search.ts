@@ -3,25 +3,21 @@ import {normalizeName} from '../d1/normalize';
 import {deletedSection,fold,tokenWeights,wordsWeight,sectionScore} from '../regulation-core/search-ranking';
 import {extractArticleSnippet} from '../regulation-core/article-snippet';
 
-type Section={at:number;supplement?:string;labelCache?:string;labelFolded?:string;text:string;folded:string;compact?:string;words?:string[];skip:boolean};
+type Section={at:number;supplement?:string;labelCache?:string;labelFolded?:string;text:string;foldedCache?:string;mayFold?:boolean;mayFoldDigits?:boolean;compact?:string;words?:string[];skip:boolean};
 // Labels are derived on first use: most sections never match and never need one.
 const labelOf=(s:Section)=>s.labelCache??=s.supplement??s.text.match(LABEL)?.[1]??extractArticleSnippet(s.text,0,0,true).label;
 const labelFoldedOf=(s:Section)=>s.labelFolded??=fold(labelOf(s));
 type Prepared={sections:Section[];title:string};
 // Body shard objects are immutable and cached by R2Reader, so their section split,
-// labels and folded text are computed once per isolate, not once per query.
+// labels and folded text are computed at most once per isolate, not once per query.
 const prepared=new WeakMap<object,Prepared>();
 const LABEL=/^\s*(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^\n)]*\))?|부\s*칙(?:\s*<[^\n>]+>)?|\[(?:별표|별지)[^\]\n]*\])/;
 const squeeze=(s:string)=>s.replace(/[\s,]+/g,'');
 export function prepareDocument(doc:any):Prepared{
  let p=prepared.get(doc);if(p)return p;
  const content=String(doc.text??''),bounds=searchBounds(content,doc.searchSections),supplements=supplementLabels(content,bounds),excluded=bounds===doc.searchSections?.bounds?doc.searchSections.excluded??[]:[],sections:Section[]=[];
- // Folded sections are kept as slices of one string per document: far fewer
- // retained objects, so a cold call spends less time in garbage collection.
- const texts:string[]=[];for(let i=0;i<bounds.length-1;i++)texts.push(content.slice(bounds[i],bounds[i+1]));
- const parts=texts.map(fold),joined=parts.join('\n');let at=0;
- for(let i=0;i<texts.length;i++){const text=texts[i],end=at+parts[i].length;
-  sections.push({at:bounds[i],text,folded:joined.slice(at,end),supplement:supplements.get(bounds[i]),skip:excluded.includes(bounds[i])||deletedSection(text)});at=end+1;}
+ for(let i=0;i<bounds.length-1;i++){const text=content.slice(bounds[i],bounds[i+1]);
+  sections.push({at:bounds[i],text,supplement:supplements.get(bounds[i]),skip:excluded.includes(bounds[i])||deletedSection(text)});}
  p={sections,title:normalizeName(String(doc.title??''))};prepared.set(doc,p);return p;
 }
 const meta=(doc:any)=>({regulationName:doc.title,reg_id:doc.regulation_id,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,sourceUrl:doc.sourceUrl,indexedAt:doc.verifiedAt,sha256:doc.sha256});
@@ -29,9 +25,18 @@ const meta=(doc:any)=>({regulationName:doc.title,reg_id:doc.regulation_id,fileNo
 const hasNumber=(t:string)=>/\d/.test(t);
 // The squeezed copy is made only for number terms, keeping the cached corpus small.
 const folds=new Map<string,string>(),folded=(t:string)=>{let f=folds.get(t);if(f===undefined){f=fold(t);if(folds.size>256)folds.clear();folds.set(t,f);}return f;};
-function present(s:Section,t:string){return hasNumber(t)?(s.compact??=squeeze(s.folded)).includes(squeeze(folded(t))):s.folded.includes(folded(t));}
+// Folding (NFKC, lower case, middle dots removed) is done only for sections that
+// might match: a term found in the raw text is found in the folded text, and a
+// term absent from raw text can appear after folding only if the section holds a
+// character folding changes (middle dot, Latin capital, full-width or
+// compatibility form; circled digits only matter for terms with digits).
+const MAY_FOLD=/[·ㆍ･‧A-Z\u00C0-\u024F\u2150-\u218F\u24B6-\u24FF\u3200-\u33FF\uF900-\uFAFF\uFB00-\uFB4F\uFE30-\uFE4F\uFF00-\uFFEF]/,MAY_FOLD_DIGITS=/[\u2460-\u24B5\u2776-\u2793\u3251-\u325F\u32B1-\u32BF\u00B2\u00B3\u00B9\u00BC-\u00BE\u2070-\u209F]/;
+const foldedOf=(s:Section)=>s.foldedCache??=fold(s.text);
+export function present(s:Section,t:string){const ft=folded(t);
+ if(hasNumber(t)){const digits=ft.match(/\d+/)![0];if(!s.text.includes(digits)&&!(s.mayFold??=MAY_FOLD.test(s.text))&&!(s.mayFoldDigits??=MAY_FOLD_DIGITS.test(s.text)))return false;return (s.compact??=squeeze(foldedOf(s))).includes(squeeze(ft));}
+ if(s.text.includes(ft))return true;if(!(s.mayFold??=MAY_FOLD.test(s.text))&&!(/\d/.test(ft)&&(s.mayFoldDigits??=MAY_FOLD_DIGITS.test(s.text))))return false;return foldedOf(s).includes(ft);}
 // Word split is cached per section; the weight rule is tokenWeights' own.
-function weightsFor(s:Section,terms:string[]){return terms.map(t=>hasNumber(t)?(present(s,t)?1:0):wordsWeight(s.words??=s.folded.match(/[\p{L}\p{N}]+/gu)??[],t));}
+function weightsFor(s:Section,terms:string[]){return terms.map(t=>hasNumber(t)?(present(s,t)?1:0):wordsWeight(s.words??=foldedOf(s).match(/[\p{L}\p{N}]+/gu)??[],t));}
 function rank(found:any[]){return Math.max(...found.map(m=>m.score))+0.1*found.map(m=>m.score).sort((a,b)=>b-a).slice(0,3).reduce((sum,n)=>sum+n,0);}
 
 // Identical word-boundary, deleted-article and form ranking rules to the
@@ -39,7 +44,7 @@ function rank(found:any[]){return Math.max(...found.map(m=>m.score))+0.1*found.m
 export function searchBodies(docs:any[],query:string){
  const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean),results:any[]=[],nameQuery=normalizeName(query);
  if(terms.length)for(const doc of docs){const p=prepareDocument(doc),found:any[]=[];
-  for(const s of p.sections){if(s.skip||!terms.every(t=>s.folded.includes(fold(t))))continue;const weights=tokenWeights(s.text,terms);if(weights.some(w=>!w))continue;
+  for(const s of p.sections){if(s.skip||!terms.every(t=>present(s,t)))continue;const weights=tokenWeights(s.text,terms);if(weights.some(w=>!w))continue;
    const at=Math.max(0,s.text.toLowerCase().indexOf(terms[0]));found.push({label:labelOf(s),snippet:extractArticleSnippet(s.text,at,query.length,true).snippet,score:sectionScore(s.text,labelOf(s),query,weights)});}
   // A regulation whose name contains the query ranks ahead of passing mentions.
   const titleBonus=nameQuery.length>=2&&p.title.includes(nameQuery)?30:0;
@@ -53,7 +58,7 @@ export function searchBodies(docs:any[],query:string){
 export function paragraphSnippet(s:Section,terms:string[],max=700){
  const parts=s.text.split(/(?=[①-⑳])/);
  if(parts.length<2){const lower=s.text.toLowerCase(),at=Math.max(0,...terms.map(t=>lower.indexOf(t.toLowerCase())).filter(n=>n>=0).slice(0,1));return {snippet:extractArticleSnippet(s.text,at,terms[0]?.length??0,true).snippet,paragraph:null};}
- let best=parts[0],bestScore=-1;for(const part of parts){const sec={...s,text:part,folded:fold(part),compact:undefined,words:undefined},hits=terms.filter(t=>present(sec,t)).length,score=hits*10+weightsFor(sec,terms).reduce((a,b)=>a+b,0);if(score>bestScore){best=part;bestScore=score;}}
+ let best=parts[0],bestScore=-1;for(const part of parts){const sec:Section={...s,text:part,foldedCache:undefined,mayFold:undefined,mayFoldDigits:undefined,compact:undefined,words:undefined},hits=terms.filter(t=>present(sec,t)).length,score=hits*10+weightsFor(sec,terms).reduce((a,b)=>a+b,0);if(score>bestScore){best=part;bestScore=score;}}
  const symbol=/^[①-⑳]/.test(best)?best[0]:null,body=best.trim();
  return {snippet:(symbol&&best!==parts[0]?`${labelOf(s)} … ${body}`:body).slice(0,max),paragraph:symbol};
 }
@@ -71,8 +76,8 @@ export function unifiedSearch(docs:any[],query:string,limit=5):Unified{
  let terms=raw.filter(t=>!INTENT[t]);if(!terms.length)terms=raw;
  const preparedDocs=docs.map(d=>({doc:d,p:prepareDocument(d)})),resolved:Record<string,string>={};
  // A compound absent from every regulation falls back to its stem ("국외출장비" → "국외출장").
- terms=terms.map(t=>{if(hasNumber(t)||preparedDocs.some(({p})=>p.sections.some(s=>s.folded.includes(t))))return t;
-  for(const suffix of SUFFIXES)if(t.endsWith(suffix)&&Array.from(t).length-Array.from(suffix).length>=2){const stem=t.slice(0,-suffix.length);if(preparedDocs.some(({p})=>p.sections.some(s=>s.folded.includes(stem)))){resolved[t]=stem;return stem;}}
+ terms=terms.map(t=>{if(hasNumber(t)||preparedDocs.some(({p})=>p.sections.some(s=>present(s,t))))return t;
+  for(const suffix of SUFFIXES)if(t.endsWith(suffix)&&Array.from(t).length-Array.from(suffix).length>=2){const stem=t.slice(0,-suffix.length);if(preparedDocs.some(({p})=>p.sections.some(s=>present(s,stem)))){resolved[t]=stem;return stem;}}
   return t;});
  const full:any[]=[],nameQuery=normalizeName(terms.join(''));
  for(const {doc,p} of preparedDocs){

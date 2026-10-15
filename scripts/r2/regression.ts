@@ -11,7 +11,8 @@ import {tableToolResponse} from '../../src/regulation-core/table-response';
 import {searchGeneralTables} from '../../src/regulation-core/general-table-search';
 import {normalizeName,queryTerms,normalize} from '../../src/d1/normalize';
 import {bloom,mightMatch} from '../../src/r2/bloom';
-import {searchBodies} from '../../src/r2/global-search';
+import {searchBodies,prepareDocument,present} from '../../src/r2/global-search';
+import {fold} from '../../src/regulation-core/search-ranking';
 import {R2Reader} from '../../src/r2/read';
 import {runR2Tool} from '../../src/r2/tools';
 import {ROOT,STATUS,type R2Head} from '../../src/r2/types';
@@ -33,6 +34,9 @@ try{
  assert.equal((await call('get_regulation',{name:'위임전결규정'})).structuredContent.error.code,'index_preparing');
  const samples=JSON.parse(gunzipSync(Buffer.from(readFileSync('scripts/fixtures/d1-samples.json.gz.b64','utf8'),'base64')).toString()),stored:StoredDocument[]=[],original=new Map();
  for(const sample of samples){const loaded={...sample.document,bytes:new Uint8Array(Buffer.from(sample.document.bytes,'base64'))};assert.equal(hash(loaded.bytes),sample.raw_sha256);loaded.text=await hwpToText(loaded.bytes);const records=await documentRecords(sample.item,loaded);stored.push({records,loaded});const tables=extractHwpTables(loaded.bytes);original.set(sample.item.title,{tables,rows:structureTables(tables,loaded.text)});}
+ // Lazy folding gives the same containment as folding every section (terms with
+ // middle dots, Latin, circled digits, amounts and plain Korean).
+ {let n=0;for(const {loaded} of stored)for(const t of ['민군','국외출장','300만원','10억','전결','pdf','a','1','①','제23조','5천만','기술용역','ii'])for(const sec of prepareDocument({text:loaded.text,title:loaded.title}).sections){const f=fold(sec.text),ft=fold(t),want=/\d/.test(t)?f.replace(/[\s,]+/g,'').includes(ft.replace(/[\s,]+/g,'')):f.includes(ft);assert.equal(present(sec as any,t),want,t+' '+sec.text.slice(0,60));n++;}report.tests.push(`lazy folding matches full folding on ${n} section×term checks`);}
  const built=buildR2Catalog(stored,'test'),first=await publishR2(store,built,undefined,undefined,async head=>{assert.equal((await call('list_regulations',{limit:500},head)).structuredContent.totalMatches,3);});
  report.tests.push('initial publication and preparing state');
  const reverified=buildR2Catalog(stored,'another-build','2027-01-01T00:00:00Z');assert.deepEqual(reverified.catalog.body_shards,built.catalog.body_shards);assert.deepEqual(reverified.catalog.table_shards,built.catalog.table_shards);report.tests.push('unchanged body and table shards reuse identical keys across builds and verification timestamps');
