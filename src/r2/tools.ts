@@ -33,7 +33,7 @@ export async function runR2Tool(reader:R2Reader,tool:string,input:Input={},build
   async function summaries(d:R2Document){const rows:SearchRecord[]=[];for(let i=0;i<d.search.length;i+=4)for(const part of await Promise.all(d.search.slice(i,i+4).map(ref=>reader.ref(ref))))rows.push(...part);return rows;}
   const page=(all:any[],size=limit)=>({totalMatches:all.length,limit,offset,has_more:offset+size<all.length,next_offset:offset+size<all.length?offset+size:null,next_cursor:offset+size<all.length?offset+size:null});
   if(tool==='search_all_regulations'){
-   const bodies:any[]=[];if(input.scope!=='table')for(let i=0;i<catalog.body_shards.length;i+=4)for(const part of await Promise.all(catalog.body_shards.slice(i,i+4).map(ref=>reader.ref(ref))))bodies.push(...part);let all=searchBodies(bodies,input.query!);bodies.length=0;
+   const bodies:any[]=[];if(input.scope!=='table')for(let i=0;i<catalog.body_shards.length;i+=4)for(const part of await Promise.all(catalog.body_shards.slice(i,i+4).map(ref=>reader.ref(ref))))bodies.push(...part);let all=searchBodies(bodies,input.query!).map(r=>({...r,indexedAt:catalog.documents.find(d=>d.title===r.regulationName)?.verified_at??catalog.verified_at}));bodies.length=0;
    // Preserve existing body ranking, then include table matches by default.
    // Explicit body scope excludes tables. Search precomputed row summaries; no document parser.
    if(!input.scope||input.scope==='table'||input.scope==='all'){

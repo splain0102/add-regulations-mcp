@@ -21,7 +21,7 @@ export function buildR2Catalog(stored:StoredDocument[],build:string,now=new Date
   for(const r of summaries.filter(r=>r.kind==='table'))tableRows.push({document_id:d.document_id,label:r.label,match:r.match,analysis_type:r.analysis_type});
   documents.push({...d,verified_at:saved.verified_at??now,search:chunks(summaries)});
   const text=String(saved.loaded.text??'');if(!text.trim())throw Error('missing_parsed_body:'+d.title);
-  bodies.push({title:d.title,fileNo:d.file_no,revisionDate:d.st_date,updatedDate:d.i_date,sourceUrl:d.source_url,verifiedAt:saved.verified_at??now,sha256:d.sha256,text,searchSections:prepareSearchSections(text)});
+  bodies.push({title:d.title,fileNo:d.file_no,revisionDate:d.st_date,updatedDate:d.i_date,sourceUrl:d.source_url,sha256:d.sha256,text,searchSections:prepareSearchSections(text)});
  }
  documents.sort((a,b)=>a.title.localeCompare(b.title,'ko'));if(!documents.length||new Set(documents.map(d=>d.regulation_id)).size!==documents.length)throw Error('invalid_catalog_identity');
  if(Buffer.byteLength(JSON.stringify(bodies))>16_000_000)throw Error('r2_body_corpus_size_limit');
