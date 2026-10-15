@@ -16,6 +16,7 @@ const saved=new Map<string,StoredDocument>(),details=new Map<string,any>();let p
 const status=(data:any)=>store('PUT',STATUS,new TextEncoder().encode(JSON.stringify({run,started_at,build_version:BUILD_VERSION,pending_titles,processed,total,...data})));
 try{
  const previous:R2Head|undefined=await optionalObject(store,ROOT),etag=store.etag(ROOT),checkpoint=await optionalObject(store,checkpointKey)??{entries:{}};
+ if(process.env.R2_BOOTSTRAP_ONLY==='true'&&previous){console.log('R2_BOOTSTRAP_ALREADY_PUBLISHED',JSON.stringify({count:previous.count,snapshot:previous.catalog.sha256}));process.exit(0);}
  const entries:Record<string,{snapshot_key:string;raw_checked_at?:string}>=checkpoint.entries??{};
  await status({status:'building'});
  let skip=false;if(previous){const current=await optionalObject(store,previous.catalog.key),items=await collectOfflineList();total=items.length;skip=metadataUnchanged(current,checkpoint,items,Date.now(),process.env.R2_FORCE_SHA==='true');}
