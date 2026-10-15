@@ -19,6 +19,7 @@ jobs:
       - run: npm run build:r2
       - run: npm run test:r2
       - run: npm run test:r2-lifecycle
+      - run: npm run test:r2-sixth
       - run: node --import ./scripts/test-loader.mjs scripts/d1/remote-regression.ts
       - if: always()
         uses: actions/upload-artifact@v4
@@ -27,6 +28,7 @@ jobs:
           path: |
             reports/r2-regression.json
             reports/r2-lifecycle.json
+            reports/r2-sixth-fixes.json
           if-no-files-found: ignore
 
   actual-r2:

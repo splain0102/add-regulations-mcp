@@ -21,7 +21,7 @@ const N:Row={title:'신설 시험규정',idx:'990001',stDate:'2024.02.16',idate:
 const B2={...B,title:'국내외 여비규정'};
 const C2:Row={...C,title:'기술용역 관리규정',idate:'2026.10.15',attachments:[...C.attachments,{name:'기술용역 관리규정(2025년도 12월 31일 개정).hwp',fileNo:'990002'}]};
 const bucket={get:async(key:string)=>{const f=join(dir,'r2',encodeURIComponent(key));if(!existsSync(f))return null;const b=readFileSync(f);return {size:b.length,arrayBuffer:async()=>b.buffer.slice(b.byteOffset,b.byteOffset+b.length) as ArrayBuffer};}};
-const tool=async(name:string,input:any={})=>((await runR2Tool(new R2Reader(bucket),name,input,'lifecycle')) as any).structuredContent;
+const tool=async(name:string,input:any={})=>((await runR2Tool(new R2Reader(bucket),name,{compact:false,...input},'lifecycle')) as any).structuredContent;
 const results:{scenario:string;check:string;expected:string;actual:string;pass:boolean}[]=[];
 const check=(scenario:string,name:string,expected:string,actual:unknown,pass:boolean)=>{results.push({scenario,check:name,expected,actual:typeof actual==='string'?actual:JSON.stringify(actual),pass});};
 function sync(scenario:object){
