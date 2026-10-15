@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   refresh:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.D1_ENABLED != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -43,3 +43,4 @@ jobs:
             reports/offline-index-bootstrap.json
           retention-days: 7
           if-no-files-found: ignore
+

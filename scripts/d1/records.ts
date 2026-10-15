@@ -4,7 +4,7 @@ import {extractHwpTables,extractHwpxTables,structureTables,extractPdfLayout,vers
 import {extractPdfRichContent,buildPdfStructuredMatches,detectKnownPdfHeader} from '../../src/regulation-core/pdf-regression-layout';
 import {searchLatestRegulationTable} from '../../src/regulation-core/regulations';
 import {searchGeneralTables} from '../../src/regulation-core/general-table-search';
-import {normalize,normalizeName,grams,INDEX_SCHEMA_VERSION} from '../../src/d1/normalize';
+import {normalize,normalizeWithMap,normalizeName,grams,INDEX_SCHEMA_VERSION} from '../../src/d1/normalize';
 import {PARSER_VERSION} from '../../src/regulation-core/parser-version';
 export const hash=(v:string|Uint8Array)=>createHash('sha256').update(v).digest('hex');
 export type RecordRow={table_key:string;analysis_type:string;coordinate_space:string;headers:unknown;source_row_number:number;page_number:number|null;text_original:string;match:Record<string,any>;result:Record<string,any>};
@@ -20,7 +20,7 @@ export async function documentRecords(item:any,loaded:any){
   const text=loaded.text.slice(at,bounds.bounds[bounds.bounds.indexOf(at)+1]),label=text.trim().split('\n')[0]||'전문';
   const kind=/서식/.test(label)?'form':/별[표지]/.test(label)?'annex':/^부\s*칙/.test(label)?'supplement':/^제\s*\d+\s*조/.test(label)?'article':'preamble';
   if(Buffer.byteLength(text)>500000)throw Error('section_record_size_limit');
-  return {ordinal:i,kind,section_label:label,article_number:label.match(/^제\s*\d+\s*조(?:의\s*\d+)?/)?.[0].replace(/\s/g,'')??null,part_number:0,text_original:text,text_normalized:normalize(text),grams:grams(label+' '+text).join(' '),evidence_json:JSON.stringify({start:at,end:at+text.length})};
+  return {ordinal:i,kind,section_label:label,article_number:label.match(/^제\s*\d+\s*조(?:의\s*\d+)?/)?.[0].replace(/\s/g,'')??null,part_number:0,text_original:text,text_normalized:normalize(text),grams:grams(label+' '+text).join(' '),evidence_json:JSON.stringify({start:at,end:at+text.length,normalization_map:normalizeWithMap(text)})};
  });
  const rows:RecordRow[]=[];
  if(extension!=='pdf'){
@@ -31,8 +31,8 @@ export async function documentRecords(item:any,loaded:any){
    const dataRows=[...new Set(table.cells.map(c=>c.row))].filter(r=>!headerRows.includes(r)).slice(0,20);
    const headerAliases=dataRows.includes(row.row)?table.cells.filter(c=>headerRows.includes(c.row)).map(c=>normalize(c.text)):[];
    const isHeader=headerRows.includes(row.row),suppressHeader=isHeader&&dataRows.length>0;
-   const paths=physical.map((c:any)=>normalize([...(c.header_path??[]).map((h:any)=>h.text),c.text].join(' ')));
-   rows.push({table_key:row.table_id,analysis_type:String(row.analysis_type),coordinate_space:row.coordinate_space,headers:evidence,source_row_number:row.row,page_number:row.page,text_original:physical.map((c:any)=>c.text).join(' '),match:{cells:suppressHeader?[]:physical.map((c:any)=>normalize(c.text)),row:normalize(physical.map((c:any)=>c.text).join(' ')),aliases:headerAliases,paths:isHeader?paths:[]},result:row});
+   const paths=((row.cells as any[])??physical).map((c:any)=>normalize([...(c.header_path??[]).map((h:any)=>h.text),c.text].join(' ')));
+   rows.push({table_key:row.table_id,analysis_type:String(row.analysis_type),coordinate_space:row.coordinate_space,headers:evidence,source_row_number:row.row,page_number:row.page,text_original:physical.map((c:any)=>c.text).join(' '),match:{cells:suppressHeader?[]:physical.filter((c:any)=>c.row===row.row).map((c:any)=>normalize(c.text)),row:normalize(physical.map((c:any)=>c.text).join(' ')),aliases:headerAliases,paths:isHeader?paths:[]},result:row});
   }
  }else{
   const [layout,rich]=await Promise.all([extractPdfLayout(bytes),extractPdfRichContent(bytes)]);if(rich.layoutSkippedReason)throw Error(rich.layoutSkippedReason);

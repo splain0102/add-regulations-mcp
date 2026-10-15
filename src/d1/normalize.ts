@@ -12,3 +12,9 @@ export function queryTerms(query:string){
  const indexed=terms.flatMap(grams);if(!indexed.length)indexed.push(...grams(joined));
  return {warning:null,terms,joined,fts:[...new Set(indexed)].map(g=>'"'+g+'"').join(' AND ')};
 }
+
+export function normalizeWithMap(text:string){
+ const map:number[]=[],parts:string[]=[];let originalPosition=0;
+ for(const char of text){originalPosition++;const value=normalize(char);parts.push(value);for(const _ of value)map.push(originalPosition);}
+ if(parts.join('')!==normalize(text))throw Error('normalization_mapping_unsupported');return map;
+}

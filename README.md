@@ -316,3 +316,50 @@ ALIO 목록의 제·개정일과 첨부파일명에 적힌 날짜가 서로 다�
 향후 다른 MCP 호스팅 환경이나 ChatGPT Site-hosted MCP로 이식할 때도 ALIO 및 HWP/PDF 처리 로직을 최대한 재사용하는 것이 목표입니다.
 
 
+
+
+## D1 preindexed search (v1.11.0, staged migration)
+
+The D1 serving entrypoint is `src/d1-worker.ts`. It has no ALIO client or HWP/HWPX/PDF parser imports. OAuth continues using the existing provider and OAuth KV namespace. All nine MCP tool names are retained. Search results default to five records, with `limit`/`offset` pagination; `scope=body|table|pdf|all` filters the current-document catalog. Historical PDF attachments are excluded; requesting `include_history` reports an explicit partial/unavailable status until such attachments are separately indexed.
+
+The producer runs in Node/GitHub Actions, checks ALIO every hour (`17 * * * *` UTC), and processes at most three documents concurrently. It uses the original latest-attachment selector and parsers. Unchanged metadata plus fileNo reuses immutable document records. A weekly/forced raw SHA verification detects silent file replacement and reuses prior parsed text when bytes match. Each publication verifies the ALIO list again. Public serving requests never perform collection or parsing.
+
+D1 stores versioned metadata, article/annex/form sections, original table evidence and row records. Offline two-character grams feed separate FTS5 indexes. Candidates are verified against normalized content. A stored normalization-to-original offset map permits original-text snippets even when a query matches spaces/commas removed during normalization. Original cell row/col/spans, headers, footnotes and approval symbols remain in detailed evidence; merged display values do not create additional single-token origin-cell matches.
+
+R2 stores immutable originals under `raw/<fileNo>/<SHA-256>/<filename>` and parsed snapshots under `parsed/<documentId>.json`. The producer verifies uploaded bytes. D1 loading uses bounded transactions and an `indexed_at` completion marker. Only fully loaded documents enter a validated catalog. A guarded publication transaction swaps one active snapshot pointer and retains the previous pointer. Failed or interrupted runs leave the preceding serving catalog intact. Unfinished documents are safely removed/reloaded on retry; completed unpublished documents are reusable. Diagnostic tools return D1 sync state, not live ALIO HTML.
+
+### Provision and configure
+
+Cloudflare account authentication and real D1/R2 resources are required. They are not provisioned by a dry-run. The checked-in `wrangler.d1.jsonc` is a preview/local configuration with a deliberately invalid production database placeholder; existing `wrangler.jsonc` is kept on the current production entrypoint until remote acceptance is complete.
+
+```sh
+npx wrangler login
+npx wrangler d1 create add-regulations
+npx wrangler r2 bucket create add-regulations-archive
+# Set D1_DATABASE_ID from the created database, then generate a preview config:
+node scripts/d1/configure.mjs preview
+npx wrangler d1 migrations apply REGULATIONS_DB --remote --config wrangler.d1.generated.jsonc
+```
+
+Configure GitHub Actions Variables: `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`, `R2_BUCKET`. Configure GitHub Secrets: `CLOUDFLARE_D1_TOKEN` (scoped D1 write access), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (the archive bucket only). Keep tokens outside source files and logs. The existing OAuth secrets remain in Wrangler secrets. Local sync reads the same environment variable names.
+
+```sh
+npm run sync:d1
+FORCE_SHA=true npm run sync:d1
+# Remote rollback to the retained previous catalog must be performed as a
+# guarded D1 transaction by an authenticated operator, never by a public tool.
+```
+
+The Actions variable `D1_ENABLED=true` enables hourly D1 sync and disables the old KV refresh workflow. Do this only after resources/secrets and the initial catalog are validated. `workflow_dispatch` provides manual reindexing. Actions scheduling is approximate, not a guarantee of an exact hourly start. `D1_WRITE_BUDGET` defaults to 80,000 accounted writes/day for this producer; FTS and index writes count too. Quota failures are visible and preserve the active catalog. Account-wide competing usage and storage/R2 retention require operational monitoring; this draft does not claim they were remotely verified.
+
+### Verify and promote
+
+```sh
+npm run typecheck:d1
+npm run build:d1
+npm run test:d1
+```
+
+Tests load three fixed actual ALIO HWP fixtures (SHA verified) into local workerd D1, compare table/body queries for 기술용역 업무규정/여비규정/위임전결규정, test paging and transactional publication conflict, and call all nine tools through local OAuth PKCE. Fixture tests are deterministic parser/serving evidence; they do not prove current ALIO freshness or production CPU time. The evidence report is `reports/d1-regression.json`. Worker logs record elapsed time, query counts and rows read; Cloudflare event logs must provide actual CPU time for remote acceptance.
+
+Before promotion, run a fresh remote sync, compare current selected attachments, verify authenticated preview MCP responses and p95/CPU on Cloudflare. Then `D1_VALIDATED_SNAPSHOT=true node scripts/d1/configure.mjs production` produces the candidate production config. Replace the production config only in a final reviewed promotion commit; merging main automatically deploys. Do not merge this draft or replace production config while resource IDs/secrets, freshness, limits or accuracy are unverified. To undo a serving deployment, restore the prior Worker deployment/config; OAuth KV and the old corpus are not deleted by this migration.

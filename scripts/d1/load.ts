@@ -26,6 +26,8 @@ export async function discardUnpublished(db:Database,id:string){
  await db.batch([{sql:'DELETE FROM table_rows WHERE table_pk IN(SELECT table_pk FROM table_definitions WHERE document_id=?)',params:[id]},{sql:'DELETE FROM table_definitions WHERE document_id=?',params:[id]},{sql:'DELETE FROM sections WHERE document_id=?',params:[id]},{sql:'DELETE FROM documents WHERE document_id=?',params:[id]}]);
 }
 export async function publishCatalog(db:Database,runId:string,catalog:any,previous:string|null){
+ if(new Set(catalog.documents.map((d:any)=>d.document_id)).size!==catalog.items.length)throw Error('duplicate_catalog_document');
+ for(let i=0;i<catalog.documents.length;i+=40){const ids=catalog.documents.slice(i,i+40).map((d:any)=>d.document_id);const ready=await db.query(`SELECT document_id FROM documents d WHERE document_id IN (${ids.map(()=>'?').join(',')}) AND indexed_at IS NOT NULL AND expected_sections=(SELECT count(*) FROM sections WHERE document_id=d.document_id) AND expected_rows=(SELECT count(*) FROM table_rows r JOIN table_definitions t ON r.table_pk=t.table_pk WHERE t.document_id=d.document_id)`,ids);if(ready.length!==ids.length)throw Error('catalog_document_not_ready');}
  const snapshot=hash(JSON.stringify([runId,catalog.documents.map((d:any)=>d.document_id)]));
  await db.batch([{sql:'INSERT INTO catalog_snapshots(snapshot_id,run_id,created_at) VALUES(?,?,?)',params:[snapshot,runId,catalog.verified_at]}]);
  for(let i=0;i<catalog.documents.length;i+=40)await db.batch(catalog.documents.slice(i,i+40).map((d:any)=>statement('catalog_entries',{snapshot_id:snapshot,regulation_id:new URL(d.item.detailUrl).searchParams.get('idx'),document_id:d.document_id,is_current:1,verified_at:d.verified_at})));

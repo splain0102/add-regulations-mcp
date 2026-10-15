@@ -1,6 +1,6 @@
 {
   "name": "add-regulations-mcp",
-  "version": "1.10.13",
+  "version": "1.11.0",
   "private": true,
   "scripts": {
     "prepare": "node scripts/stamp-build.mjs",
@@ -22,7 +22,11 @@
     "test:corpus-performance": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/corpus-index-performance.ts",
     "test:offline-index": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/offline-index-regression.ts",
     "test:offline-build": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/offline-index-refresh.ts",
-    "test:fourth-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/fourth-fixes-regression.ts"
+    "test:fourth-fixes": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/fourth-fixes-regression.ts",
+    "sync:d1": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/d1/sync.ts",
+    "test:d1": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/d1/regression.ts",
+    "build:d1": "node scripts/stamp-build.mjs && wrangler deploy --dry-run --config wrangler.d1.jsonc --outdir .build-d1",
+    "typecheck:d1": "tsc -p tsconfig.d1.json"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.0.0",
