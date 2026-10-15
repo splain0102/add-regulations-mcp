@@ -1,3 +1,7 @@
+# R2-first 전환 준비: 2.0.1
+
+D1 자동 적재는 보류했습니다. R2 원본·파싱 결과와 사전 검색 파일을 먼저 사용합니다. 현재 운영 실행 파일은 검증된 R2 카탈로그가 완성된 후 별도 커밋으로 전환합니다. 신규 규정·개정·실패 복구·스케줄·검증 절차는 [R2 운영 설계](docs/r2-serving.md)를 참고하세요. 아래 D1 설명은 보류된 실험 경로입니다.
+
 ## 1.10.1 — second validation fixes (draft)
 
 - Metadata lookup uses a bounded, cached supplementary-provision scan instead of the full document/table parser. Cache identity includes fileNo and idate. Probe failures are isolated as `parse_failed`.

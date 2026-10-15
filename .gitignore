@@ -5,3 +5,6 @@ node_modules
 wrangler.d1.generated.jsonc
 .env
 .env.*
+
+.r2-types/
+.build-r2/

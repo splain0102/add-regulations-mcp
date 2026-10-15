@@ -14,14 +14,14 @@ export function r2Store(){
  const digest=(s:string|Uint8Array)=>createHash('sha256').update(s).digest('hex');const hmac=(key:string|Uint8Array,s:string)=>createHmac('sha256',key).update(s).digest();
  const encode=(s:string)=>encodeURIComponent(s).replace(/[!'()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase());
  const budget=Number(process.env.R2_BUCKET_BUDGET_BYTES??1000000000);if(!Number.isFinite(budget)||budget<1||budget>1000000000)throw Error('invalid_r2_bucket_budget');
- const objects=new Map<string,number>();let used=0,inventory:Promise<void>|undefined;
- const request=async(method:'PUT'|'GET',key:string,body=new Uint8Array(),query:Record<string,string>={})=>{
+ const objects=new Map<string,number>(),etags=new Map<string,string>();let used=0,inventory:Promise<void>|undefined;
+ const request=async(method:'PUT'|'GET',key:string,body=new Uint8Array(),query:Record<string,string>={},condition:{ifMatch?:string;ifNoneMatch?:string}={})=>{
   const url=new URL(`https://${account}.r2.cloudflarestorage.com/${encode(bucket)}/${key.split('/').map(encode).join('/')}`);
   const canonicalQuery=Object.keys(query).sort().map(k=>encode(k)+'='+encode(query[k])).join('&');url.search=canonicalQuery;
   const date=new Date().toISOString().replace(/[:-]|\.\d{3}/g,''),day=date.slice(0,8),payload=digest(body),scope=`${day}/auto/s3/aws4_request`;
   const headers=`host:${url.host}\nx-amz-content-sha256:${payload}\nx-amz-date:${date}\n`,names='host;x-amz-content-sha256;x-amz-date',canonical=[method,url.pathname,canonicalQuery,headers,names,payload].join('\n');
   const signed=hmac(hmac(hmac(hmac('AWS4'+secret,day),'auto'),'s3'),'aws4_request');const signature=createHmac('sha256',signed).update(['AWS4-HMAC-SHA256',date,scope,digest(canonical)].join('\n')).digest('hex');
-  const response=await fetch(url,{method,headers:{'x-amz-date':date,'x-amz-content-sha256':payload,authorization:`AWS4-HMAC-SHA256 Credential=${access}/${scope}, SignedHeaders=${names}, Signature=${signature}`},body:method==='PUT'?body:undefined,signal:AbortSignal.timeout(60000)});if(!response.ok)throw Error('R2 '+method+' HTTP '+response.status);return new Uint8Array(await response.arrayBuffer());
+  const response=await fetch(url,{method,headers:{...(condition.ifMatch?{'if-match':condition.ifMatch}:{}),...(condition.ifNoneMatch?{'if-none-match':condition.ifNoneMatch}:{}),'x-amz-date':date,'x-amz-content-sha256':payload,authorization:`AWS4-HMAC-SHA256 Credential=${access}/${scope}, SignedHeaders=${names}, Signature=${signature}`},body:method==='PUT'?body:undefined,signal:AbortSignal.timeout(60000)});if(!response.ok)throw Error('R2 '+method+' HTTP '+response.status);if(response.headers.get('etag'))etags.set(key,response.headers.get('etag')!);return new Uint8Array(await response.arrayBuffer());
  };
  const decode=(s:string)=>s.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&amp;/g,'&');
  async function measure(){let token='';for(let page=0;page<100;page++){
@@ -32,9 +32,10 @@ export function r2Store(){
  // Inventory includes interrupted/unreferenced uploads. A separate archive bucket
  // and serialized PUT reservations prevent concurrent parser jobs exceeding the cap.
  let puts:Promise<unknown>=Promise.resolve();
- return async(method:'PUT'|'GET',key:string,body=new Uint8Array())=>{
+ const store=async(method:'PUT'|'GET',key:string,body=new Uint8Array(),condition:{ifMatch?:string;ifNoneMatch?:string}={})=>{
   inventory??=measure();await inventory;
   if(method==='GET')return request(method,key,body);
-  const pending=puts.then(async()=>{const next=used-(objects.get(key)??0)+body.byteLength;if(next>budget)throw Error('r2_bucket_budget_reached');const result=await request(method,key,body);objects.set(key,body.byteLength);used=next;return result;});puts=pending.catch(()=>{});return pending;
+  const pending=puts.then(async()=>{const next=used-(objects.get(key)??0)+body.byteLength;if(next>budget)throw Error('r2_bucket_budget_reached');const result=await request(method,key,body,{},condition);objects.set(key,body.byteLength);used=next;return result;});puts=pending.catch(()=>{});return pending;
  };
+ return Object.assign(store,{list:async(prefix='')=>{inventory??=measure();await inventory;return [...objects.keys()].filter(key=>key.startsWith(prefix));},etag:(key:string)=>etags.get(key)});
 }
