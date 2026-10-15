@@ -5,8 +5,7 @@ import {searchBodies} from './global-search';
 import {tokenWeights,sectionScore} from '../regulation-core/search-ranking';
 import {PARSER_VERSION} from '../regulation-core/parser-version';
 import {R2Reader} from './read';
-import {ROOT,STATUS,type R2Catalog,type R2Head,type SearchRecord,type R2Document} from './types';
-import type {Input} from '../d1/tools';
+import {ROOT,STATUS,type R2Catalog,type R2Head,type SearchRecord,type R2Document,type Input} from './types';
 export const envelope=(data:any,isError=false)=>({...isError?{isError:true}:{},structuredContent:data,content:[{type:'text' as const,text:JSON.stringify(data)}]});
 export function rowMatches(r:SearchRecord,q:ReturnType<typeof queryTerms>){
  if(r.kind==='body')return q.terms.every(t=>r.n!.includes(t));
