@@ -57,6 +57,16 @@ try{
    row[name]={correct:c.expect(answer),cold_p50:pct(cold,0.5),cold_p95:pct(cold,0.95),warm_p50:pct(warm,0.5),warm_p95:pct(warm,0.95),r2_reads:reads,r2_bytes:bytes,response_chars:text.length,approx_tokens:Math.round(text.length/2),top5:top,outside_expected:off,...name==='new'&&answer.related?{related:answer.related.map((r:any)=>`${r.regulationName} ${r.label} (${r.relation?.type})`)}:{}};}
   row.calls={base:row.base.correct?1:'≥2',new:row.new.correct?1:'≥2'};
   if(!row.new.correct)row.new.answer=JSON.stringify({coverage:lastNew?.coverage,intent:lastNew?.intent,results:(lastNew?.results??[]).slice(0,6).map((r:any)=>({reg:r.regulationName,type:r.match_type,score:r.score,m:(r.matches??[]).slice(0,3).map((m:any)=>[m.label,m.condition,m.approver,String(m.snippet??'').slice(0,60)])})),body_suggestions:lastNew?.body_suggestions}).slice(0,3000);report.queries.push(row);console.log('BENCH',JSON.stringify(row));}
+ // Where the cold time goes: CPU self time per function for the slowest required
+ // queries, base and new, so a latency gap is explained by measurement.
+ {const {Session}=await import('node:inspector/promises'),session=new Session();session.connect();await session.post('Profiler.enable');await session.post('Profiler.setSamplingInterval',{interval:200});
+  const slow=report.queries.filter((q:any)=>CASES.find(c=>c.id===q.id)?.tool==='search_all_regulations').sort((a:any,b:any)=>(b.new.cold_p95-b.base.cold_p95)-(a.new.cold_p95-a.base.cold_p95)).slice(0,3).map((q:any)=>CASES.find(c=>c.id===q.id)!);
+  for(const name of ['base','new'] as const){const {run,Reader}=tools[name];await session.post('Profiler.start');for(const c of slow)for(let i=0;i<5;i++)await run(new Reader(buckets[name]),c.tool,c.input,name);const {profile}=await session.post('Profiler.stop') as any;
+   const self=new Map<string,number>(),dt=new Map<number,number>();profile.samples.forEach((id:number,i:number)=>dt.set(id,(dt.get(id)??0)+(profile.timeDeltas[i]??0)));
+   for(const n of profile.nodes){const f=n.callFrame,key=`${f.functionName||'(anon)'} ${String(f.url).split('/').slice(-2).join('/')}:${f.lineNumber+1}`;self.set(key,(self.get(key)??0)+(dt.get(n.id)??0)/1000);}
+   const total=[...self.values()].reduce((a,b)=>a+b,0),top=[...self].sort((a,b)=>b[1]-a[1]).slice(0,25).map(([k,v])=>`${Math.round(v)}ms ${k}`);
+   report.profile=report.profile??{};report.profile[name]={queries:slow.map(c=>c.id),runs:5,total_ms:Math.round(total),top};console.log('PROFILE',name,JSON.stringify(report.profile[name]));}
+  await session.post('Profiler.disable');session.disconnect();}
  // Unchanged tools must answer identically (same catalog content, same parser).
  for(const [tool,input] of [['search_regulation_table',{name:'위임전결규정',query:'국외출장',limit:100}],['search_regulation_text',{name:'여비규정',query:'제23조',limit:20}],['get_regulation',{name:'포상금 지급방침'}],['search_regulations',{query:'직제'}]] as const){
   const a=(await tools.base.run(new tools.base.Reader(buckets.base),tool,input,'base')).structuredContent,b=(await tools.new.run(new tools.new.Reader(buckets.new),tool,input,'new')).structuredContent;

@@ -92,8 +92,9 @@ export function unifiedSearch(docs:any[],query:string,limit=5):Unified{
      const cheap=3*w+(inLabel?10:0);if(!best||cheap>best.cheap)best={s,cheap,w,inLabel};}
     // Form/annex down-weighting (sectionScore) only for this document's best candidate.
     if(best)best.score=sectionScore(best.s.text,labelOf(best.s),t,[best.w])+(best.inLabel?10:0)+(inTitle?8:0);
-    if(best){const {snippet,paragraph}=paragraphSnippet(best.s,[t]);candidates.push({...meta(doc),score:Math.round(best.score*50)/100,match_type:'partial',matched_terms:[t],missing_terms:terms.filter(x=>x!==t),matches:[{label:labelOf(best.s),...paragraph?{paragraph}:{},snippet,score:best.score}]});}}
-   partial.push(...candidates.sort((a,b)=>b.score-a.score).slice(0,2));}
+    if(best)candidates.push({doc,best});}
+   // Snippets only for the two candidates kept per term.
+   for(const {doc,best} of candidates.sort((a,b)=>b.best.score-a.best.score).slice(0,2)){const {snippet,paragraph}=paragraphSnippet(best.s,[t]);partial.push({...meta(doc),score:Math.round(best.score*50)/100,match_type:'partial',matched_terms:[t],missing_terms:terms.filter(x=>x!==t),matches:[{label:labelOf(best.s),...paragraph?{paragraph}:{},snippet,score:best.score}]});}}
  }
  const results=[...full,...partial.filter((r,i,a)=>a.findIndex(x=>x.reg_id===r.reg_id&&x.matches[0].label===r.matches[0].label)===i)];
  const covered=new Set(results.slice(0,limit).flatMap(r=>[...r.matched_terms,...r.title_terms??[]]));

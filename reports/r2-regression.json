@@ -1,0 +1,215 @@
+{
+  "passed": true,
+  "tests": [
+    "initial publication and preparing state",
+    "unchanged body and table shards reuse identical keys across builds and verification timestamps",
+    "21 real-HWP table comparisons: core rows kept with original cells, spans, approvers, symbols and footnotes; extra rows only from merged-cell fill-down",
+    "internal-approval zero matches confirmed absent from actual fileNo 239154 body, not a parser timeout",
+    "body section matches and normalized queries",
+    "global table Bloom prefilter has no lost hits; N5/N6 and middot query guard preserved",
+    "hourly unchanged list skips collection; new rules, revision changes and expired/forced SHA do not",
+    "failed validation/upload and stale concurrent publisher retain the committed index; verified update switches fileNo atomically",
+    "new regulation becomes visible only after complete publication",
+    "collection failure serves last validated data with explicit stale/pending status; removed rules remain flagged until publication",
+    "missing catalog falls back to previous immutable manifest",
+    "serving bundle has no ALIO client or document parsers",
+    "all nine OAuth MCP tools through real local R2 binding and DO, twenty calls each, external network forbidden"
+  ],
+  "comparisons": [
+    {
+      "name": "기술용역 업무규정",
+      "query": "식비",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "비고",
+      "core": 25,
+      "actual": 25,
+      "fill_down": 0
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "제10조",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "전문가",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "내부승인",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "300만 원",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "기술용역 업무규정",
+      "query": "계약 승인",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "여비규정",
+      "query": "식비",
+      "core": 31,
+      "actual": 35,
+      "fill_down": 4
+    },
+    {
+      "name": "여비규정",
+      "query": "비고",
+      "core": 4,
+      "actual": 4,
+      "fill_down": 0
+    },
+    {
+      "name": "여비규정",
+      "query": "제10조",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "여비규정",
+      "query": "전문가",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "여비규정",
+      "query": "내부승인",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "여비규정",
+      "query": "300만 원",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "여비규정",
+      "query": "계약 승인",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "위임전결규정",
+      "query": "식비",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "위임전결규정",
+      "query": "비고",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "위임전결규정",
+      "query": "제10조",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "위임전결규정",
+      "query": "전문가",
+      "core": 2,
+      "actual": 3,
+      "fill_down": 1
+    },
+    {
+      "name": "위임전결규정",
+      "query": "내부승인",
+      "core": 0,
+      "actual": 0,
+      "fill_down": 0
+    },
+    {
+      "name": "위임전결규정",
+      "query": "300만 원",
+      "core": 1,
+      "actual": 1,
+      "fill_down": 0
+    },
+    {
+      "name": "위임전결규정",
+      "query": "계약 승인",
+      "core": 11,
+      "actual": 11,
+      "fill_down": 0
+    }
+  ],
+  "mcp": [
+    {
+      "tool": "hello",
+      "cold_ms": 25.213850999998613,
+      "p95_ms": 25.213850999998613
+    },
+    {
+      "tool": "list_regulations",
+      "cold_ms": 52.37304700000095,
+      "p95_ms": 27.443534
+    },
+    {
+      "tool": "search_regulations",
+      "cold_ms": 70.9781409999996,
+      "p95_ms": 50.625019999999495
+    },
+    {
+      "tool": "get_regulation",
+      "cold_ms": 15.591774999998961,
+      "p95_ms": 21.64425999999912
+    },
+    {
+      "tool": "get_regulation_text",
+      "cold_ms": 41.47077999999965,
+      "p95_ms": 35.29077300000063
+    },
+    {
+      "tool": "search_regulation_text",
+      "cold_ms": 71.191057,
+      "p95_ms": 30.11718800000017
+    },
+    {
+      "tool": "search_regulation_table",
+      "cold_ms": 13.590064999998503,
+      "p95_ms": 19.939597000000504
+    },
+    {
+      "tool": "search_all_regulations",
+      "cold_ms": 49.3585430000021,
+      "p95_ms": 31.822265000002517
+    },
+    {
+      "tool": "diagnose_alio_list",
+      "cold_ms": 11.713030999999319,
+      "p95_ms": 17.719365999997535
+    }
+  ],
+  "scope": "Local workerd R2/DO, not production CPU evidence"
+}

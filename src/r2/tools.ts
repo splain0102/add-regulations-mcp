@@ -68,6 +68,10 @@ export async function runR2Tool(reader:R2Reader,tool:string,input:Input={},build
     const delegationFound=[...grouped.values()].some(g=>g.matches.some((m:any)=>m.approver));
     if((!grouped.size||approver&&!delegationFound)&&terms.length>1){const long=terms.findIndex(t=>!/\d/.test(t)&&Array.from(t).length>=4);if(long>=0){const head=Array.from(terms[long]).slice(-2).join(''),relaxed=await scan(terms.map((t,i)=>i===long?head:t));if(relaxed.size){unified.coverage.resolved[terms[long]]=head;for(const [id,g] of relaxed){const old=grouped.get(id);grouped.set(id,old?{count:old.count+g.count,score:Math.max(old.score,g.score),matches:[...old.matches,...g.matches]}:g);}}}}
     const tables=catalog.documents.filter(d=>grouped.has(d.document_id)).map(d=>({regulationName:d.title,reg_id:d.regulation_id,...d.status==='repealed'?{status:'repealed'}:{},fileNo:d.file_no,revisionDate:d.st_date,sourceUrl:d.source_url,score:Math.round((grouped.get(d.document_id)!.score+(nameQuery.length>=2&&d.title_normalized.includes(nameQuery)?30:0))*100)/100,match_type:'table',matches:grouped.get(d.document_id)!.matches.sort((a:any,b:any)=>b.score-a.score).slice(0,3),tableMatches:grouped.get(d.document_id)!.count}));
+    // A regulation found both in body text and in tables keeps one entry; the
+    // stronger side's matches come first so a delegation row is not hidden by a
+    // weak body hit of the same regulation.
+    if(input.scope!=='table')all=all.map(a=>{const t=tables.find(x=>x.fileNo===a.fileNo);return t?{...a,score:Math.max(a.score,t.score),matches:t.score>a.score?[...t.matches,...a.matches]:[...a.matches,...t.matches],tableMatches:t.tableMatches}:a;});
     all=(input.scope==='table'?tables:[...all,...tables.filter(t=>!all.some(a=>a.fileNo===t.fileNo))]).sort((a,b)=>b.score-a.score||a.regulationName.localeCompare(b.regulationName,'ko'));
    }
    if(input.scope==='pdf'){const pdf=new Set(catalog.documents.filter(d=>d.extension==='pdf').map(d=>d.file_no));all=all.filter(d=>pdf.has(d.fileNo));}
