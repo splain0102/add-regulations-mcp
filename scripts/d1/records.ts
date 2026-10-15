@@ -38,13 +38,10 @@ export async function documentRecords(item:any,loaded:any){
   const [layout,rich]=await Promise.all([extractPdfLayout(bytes),extractPdfRichContent(bytes)]);if(rich.layoutSkippedReason)throw Error(rich.layoutSkippedReason);
   const meta={regulationName:item.title,revisionDate:item.revisionDate,updatedDate:item.updatedDate,sourceUrl:item.detailUrl,filename,extension,fileNo:loaded.fileNo,parser_version:PARSER_VERSION,version_check:JSON.parse(document.validation_json),version_warning:null,selection_reason:[],other_attachments:[],cache:{key:document_id,hit:false,scope:'offline',metadataRevalidated:true}};
   const prepared={document:{file:{bytes,extension,filename},text:loaded.text,rows:layout.rows,pdfPages:rich.pages,layoutDebug:layout.debug},cache:meta.cache} as any;
-  const seen=new Set<string>();
-  const queries=[...rich.pages.flatMap(p=>p.rows.map(r=>r.text)),...layout.rows.map(r=>[r.task,r.condition].filter(Boolean).join(' '))].filter(s=>s.trim());
-  for(const query of queries){const result=await searchLatestRegulationTable(item.title,query,prepared,meta as any);for(const row of result.rows){
-   const key=JSON.stringify([row.table_id,row.row,row.page,row.task,row.condition,row.symbol,row.symbol_coordinates]);if(seen.has(key))continue;seen.add(key);
-   const text=String(row.raw_text??[row.task,row.condition].filter(Boolean).join(' '));
+  const result=await searchLatestRegulationTable(item.title,'',prepared,meta as any,{allRows:true});
+  for(const row of result.rows){const text=String(row.raw_text??[row.task,row.condition].filter(Boolean).join(' '));
    rows.push({table_key:row.table_id,analysis_type:String(row.analysis_type),coordinate_space:row.coordinate_space,headers:row.header_evidence,source_row_number:row.row,page_number:row.page,text_original:text,match:{cells:[normalize(text)],row:normalize(text),aliases:[],paths:[]},result:row});
-  }}
+  }
  }
  for(const row of rows){(row as any).grams=grams([row.text_original,...row.match.aliases,...row.match.paths].join(' ')).join(' ');if(Buffer.byteLength(JSON.stringify(row))>500000)throw Error('table_record_size_limit');}
  return {document,sections,rows};

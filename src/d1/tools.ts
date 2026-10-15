@@ -3,6 +3,9 @@ import {tableToolResponse} from '../regulation-core/table-response';
 export type Input={name?:string;query?:string;limit?:number;offset?:number;scope?:'body'|'table'|'pdf'|'all';compact?:boolean;include_history?:boolean;includeRegion?:boolean;include_text_box?:boolean};
 export const envelope=(data:any,isError=false)=>({...isError?{isError:true}:{},structuredContent:data,content:[{type:'text' as const,text:JSON.stringify(data)}]});
 export async function runD1Tool(db:D1Database,tool:string,input:Input={},build='unstamped'){
+ if((input.query?.length??0)>256)return envelope({warning:{code:'query_too_long',message:'검색어는 256자 이내로 입력하세요.'},results:[],totalMatches:0});
+ if((input.name?.length??0)>300)return envelope({error:{code:'invalid_name',message:'규정명이 너무 깁니다.'}},true);
+ if((input.query?.trim().split(/[\s,;/]+/).length??0)>20)return envelope({warning:{code:'too_many_terms',message:'검색어를 20개 이하로 나누어 조회하세요.'},results:[],totalMatches:0});
  const start=Date.now(),limit=Math.min(100,Math.max(1,input.limit??5)),offset=Math.max(0,input.offset??0);let reads=0,queries=0;
  async function sql(query:string,args:any[]=[]){const result=await db.prepare(query).bind(...args).all<any>();queries++;reads+=result.meta.rows_read??0;return result.results;}
  try{

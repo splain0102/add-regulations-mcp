@@ -141,3 +141,5 @@ END;
 -- GC is producer-only, child-before-parent, and protects active/previous snapshots.
 
 CREATE TABLE publication_guard(value INTEGER NOT NULL CHECK(value=1));
+CREATE TABLE sync_lease(singleton INTEGER PRIMARY KEY CHECK(singleton=1),owner TEXT,expires_at TEXT);
+INSERT INTO sync_lease(singleton) VALUES(1);

@@ -1,3 +1,5 @@
+import {lease,release} from './lease';
+import {zipSync,strToU8} from 'fflate';
 import {searchRegulationText} from '../../src/regulation-core/text-search';
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
@@ -18,7 +20,7 @@ export default {...productionWorker,async fetch(request,env,ctx){const url=new U
 `;
 await build({stdin:{contents:workerSource,loader:'ts',resolveDir:process.cwd()+'/src'},bundle:true,format:'esm',platform:'browser',conditions:['workerd','worker','browser'],external:['cloudflare:*','node:async_hooks'],outfile:'.build-check/d1-oauth.js'});
 const mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'.build-check/d1-oauth.js',compatibilityDate:'2026-10-01',compatibilityFlags:['global_fetch_strictly_public'],d1Databases:{REGULATIONS_DB:'regression'},kvNamespaces:['OAUTH_KV'],bindings:{ACCESS_CLIENT_ID:'test',ACCESS_CLIENT_SECRET:'test',COOKIE_ENCRYPTION_KEY:'0123456789abcdef0123456789abcdef'},outboundService:()=>{throw Error('No outbound network permitted');}}));
-const db=await mf.getD1Database('REGULATIONS_DB');const adapter={query:async(sql:string,params:any[]=[])=>{const r=await db.prepare(sql).bind(...params).all();return r.results;},batch:async(rows:any[])=>{await db.batch(rows.map(r=>db.prepare(r.sql).bind(...r.params)));}};
+const db=await mf.getD1Database('REGULATIONS_DB');let writtenRows=0;const adapter={query:async(sql:string,params:any[]=[])=>{const r=await db.prepare(sql).bind(...params).all();return r.results;},batch:async(rows:any[])=>{const results=await db.batch(rows.map(r=>db.prepare(r.sql).bind(...r.params)));writtenRows+=results.reduce((n,r)=>n+(r.meta.rows_written??0),0);}};
 const report:any={passed:false,scope:'Local workerd D1; stored actual ALIO files, not current-source or production CPU evidence',comparison:[],tests:[]};
 try{
  await db.exec(readFileSync('migrations/0001_regulation_index.sql','utf8').split('\n').filter(l=>!l.startsWith('--')).join(' '));
@@ -26,7 +28,13 @@ try{
  await adapter.batch([{sql:"INSERT INTO sync_runs(run_id,build_sha,started_at,status) VALUES('test','test',?,'running')",params:[catalog.verified_at]}]);
  const baselines=new Map();
  for(const title of wanted){const saved=samples.find(d=>d.item?.title===title);assert(saved,title);const loaded={...saved.document,bytes:new Uint8Array(Buffer.from(saved.document.bytes,'base64'))};assert.equal(hash(loaded.bytes),saved.raw_sha256);loaded.text=await hwpToText(loaded.bytes);const records=await documentRecords(saved.item,loaded);await loadDocument(adapter,records);await loadDocument(adapter,records);catalog.items.push(saved.item);catalog.documents.push({item:saved.item,document_id:records.document.document_id,verified_at:catalog.verified_at});const tables=extractHwpTables(loaded.bytes),rows=structureTables(tables,loaded.text);baselines.set(title,{tables,rows,loaded,records,item:saved.item});}
+ await lease(adapter,'test',true);await assert.rejects(()=>lease(adapter,'other',true));
  const snapshot=await publishCatalog(adapter,'test',catalog,null);report.tests.push('complete snapshot published');
+ const cell=(text:string,row:number,col:number,rowSpan=1)=>`<hp:tc><hp:cellAddr rowAddr="${row}" colAddr="${col}"/><hp:cellSpan rowSpan="${rowSpan}" colSpan="1"/><hp:subList><hp:p><hp:run><hp:t>${text}</hp:t></hp:run></hp:p></hp:subList></hp:tc>`;
+ const hwpxBytes=zipSync({'Contents/section0.xml':strToU8(`<hs:sec><hp:tbl>${cell('구분',0,0)}${cell('비고',0,1)}${cell('출장',1,0,2)}${cell('식비',1,1)}${cell('전문가',2,1)}</hp:tbl></hs:sec>`)});
+ const hwpx=await documentRecords({title:'HWPX 구조 시험',detailUrl:'https://www.alio.go.kr/item/itemBoard21110.do?idx=999999',revisionDate:'2026.01.01',updatedDate:'2026.01.01'},{fileNo:'999999',bytes:hwpxBytes,text:'제1조(시험)\n출장 식비 전문가',parserVersion:'1.10.5-parser.1',selectedDate:'2026-01-01'});
+ assert(hwpx.rows.some(r=>(r.result.raw_cells as any[]).some(c=>c.row===1&&c.col===0&&c.rowSpan===2&&c.colSpan===1)));await loadDocument(adapter,hwpx);report.tests.push('synthetic HWPX original merged-cell coordinates persist through D1 ingestion');
+
  const original=globalThis.fetch;globalThis.fetch=async()=>{throw Error('ALIO access forbidden');};
  try{for(const name of wanted)for(const query of ['식비','비고','제10조']){
   const baseline=baselines.get(name),expected=searchGeneralTables(baseline.tables,query,baseline.rows,'hwp').filter(r=>r.analysis_type!=='text_box');
@@ -41,11 +49,13 @@ try{
  }
  for(const tool of ['list_regulations','search_regulations','get_regulation','get_regulation_text','search_regulation_text','search_all_regulations','diagnose_alio_list']){const r=await runD1Tool(db,tool,{name:tool==='list_regulations'||tool==='search_regulations'||tool==='search_all_regulations'||tool==='diagnose_alio_list'?undefined:'위임전결규정',query:'전문가'},'test');assert(!r.isError,JSON.stringify(r));report.tests.push(tool);}
  const warning=await runD1Tool(db,'search_all_regulations',{query:'◎★'});assert.equal(warning.structuredContent.warning.code,'symbol_query');
+ assert.equal((await runD1Tool(db,'search_all_regulations',{query:'가'.repeat(257)})).structuredContent.warning.code,'query_too_long');
  const short=await runD1Tool(db,'search_all_regulations',{query:'가'});assert.equal(short.structuredContent.warning.code,'query_too_short');
  }finally{globalThis.fetch=original;}
  // Publication failure and concurrent publisher must leave the prior pointer intact.
  await adapter.batch([{sql:"INSERT INTO sync_runs(run_id,build_sha,started_at,status) VALUES('bad','test',?,'running')",params:[catalog.verified_at]}]);
- await assert.rejects(()=>publishCatalog(adapter,'bad',catalog,'wrong'));assert.equal((await adapter.query('SELECT active_snapshot_id FROM service_state'))[0].active_snapshot_id,snapshot);
+ await release(adapter,'test');await lease(adapter,'bad',true);
+ await assert.rejects(()=>publishCatalog(adapter,'bad',catalog,'wrong'));await release(adapter,'bad');await lease(adapter,'test',true);assert.equal((await adapter.query('SELECT active_snapshot_id FROM service_state'))[0].active_snapshot_id,snapshot);
  report.tests.push('publication conflict rollback preserves committed snapshot');
  const sourceDoc=(await adapter.query('SELECT * FROM documents WHERE document_id=?',[catalog.documents[0].document_id]))[0],partial={...sourceDoc,document_id:'interrupted-test',metadata_sha256:'interrupted-test',indexed_at:null};const columns=Object.keys(partial);
  await adapter.batch([{sql:`INSERT INTO documents(${columns.join(',')}) VALUES(${columns.map(()=>'?').join(',')})`,params:Object.values(partial)}]);
@@ -55,7 +65,7 @@ try{
  const originalRecords=baselines.get(catalog.items[0].title).records;await loadDocument(adapter,{...originalRecords,document:{...originalRecords.document,document_id:partial.document_id,metadata_sha256:partial.metadata_sha256}});assert((await adapter.query('SELECT indexed_at FROM documents WHERE document_id=?',[partial.document_id]))[0].indexed_at);report.tests.push('interrupted document resumes and validates without changing active catalog');
 
  const page1=await runD1Tool(db,'search_regulation_table',{name:'위임전결규정',query:'계약 승인',limit:5,offset:0});const page2=await runD1Tool(db,'search_regulation_table',{name:'위임전결규정',query:'계약 승인',limit:5,offset:5});assert(!page1.isError&&!page2.isError);assert.equal(page1.structuredContent.next_offset,5);report.tests.push('offset pagination');
- report.database_bytes=(await db.prepare('SELECT 1').all()).meta.size_after??null;
+ report.ingestion_rows_written_including_fault_fixtures=writtenRows;report.database_bytes=(await db.prepare('SELECT 1').all()).meta.size_after??null;
  const bundle=await build({entryPoints:['src/d1-worker.ts'],bundle:true,format:'esm',platform:'browser',conditions:['workerd','worker','browser'],external:['cloudflare:*','node:async_hooks'],outfile:'.build-check/d1-worker.js',metafile:true});assert(!Object.keys(bundle.metafile!.inputs).some(p=>/regulation-core\/(?:regulations|table-layout|pdf-)|hwpxjs|unpdf|fflate/.test(p)));report.tests.push('serving bundle has no ALIO client or document parsers');
  const origin='https://add-regulations-mcp.splain0102.workers.dev';
  assert.equal((await mf.dispatchFetch(origin+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})).status,401);
