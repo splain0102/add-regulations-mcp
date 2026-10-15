@@ -3,7 +3,10 @@ import {normalizeName} from '../d1/normalize';
 import {deletedSection,fold,tokenWeights,wordsWeight,sectionScore} from '../regulation-core/search-ranking';
 import {extractArticleSnippet} from '../regulation-core/article-snippet';
 
-type Section={at:number;label:string;labelFolded:string;text:string;folded:string;compact?:string;words?:string[];skip:boolean};
+type Section={at:number;supplement?:string;labelCache?:string;labelFolded?:string;text:string;folded:string;compact?:string;words?:string[];skip:boolean};
+// Labels are derived on first use: most sections never match and never need one.
+const labelOf=(s:Section)=>s.labelCache??=s.supplement??s.text.match(LABEL)?.[1]??extractArticleSnippet(s.text,0,0,true).label;
+const labelFoldedOf=(s:Section)=>s.labelFolded??=fold(labelOf(s));
 type Prepared={sections:Section[];title:string};
 // Body shard objects are immutable and cached by R2Reader, so their section split,
 // labels and folded text are computed once per isolate, not once per query.
@@ -13,8 +16,8 @@ const squeeze=(s:string)=>s.replace(/[\s,]+/g,'');
 export function prepareDocument(doc:any):Prepared{
  let p=prepared.get(doc);if(p)return p;
  const content=String(doc.text??''),bounds=searchBounds(content,doc.searchSections),supplements=supplementLabels(content,bounds),excluded=bounds===doc.searchSections?.bounds?doc.searchSections.excluded??[]:[],sections:Section[]=[];
- for(let i=0;i<bounds.length-1;i++){const text=content.slice(bounds[i],bounds[i+1]),folded=fold(text),label=supplements.get(bounds[i])??text.match(LABEL)?.[1]??extractArticleSnippet(text,0,0,true).label;
-  sections.push({at:bounds[i],text,folded,label,labelFolded:fold(label),skip:excluded.includes(bounds[i])||deletedSection(text)});}
+ for(let i=0;i<bounds.length-1;i++){const text=content.slice(bounds[i],bounds[i+1]);
+  sections.push({at:bounds[i],text,folded:fold(text),supplement:supplements.get(bounds[i]),skip:excluded.includes(bounds[i])||deletedSection(text)});}
  p={sections,title:normalizeName(String(doc.title??''))};prepared.set(doc,p);return p;
 }
 const meta=(doc:any)=>({regulationName:doc.title,reg_id:doc.regulation_id,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,sourceUrl:doc.sourceUrl,indexedAt:doc.verifiedAt,sha256:doc.sha256});
@@ -33,7 +36,7 @@ export function searchBodies(docs:any[],query:string){
  const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean),results:any[]=[],nameQuery=normalizeName(query);
  if(terms.length)for(const doc of docs){const p=prepareDocument(doc),found:any[]=[];
   for(const s of p.sections){if(s.skip||!terms.every(t=>s.folded.includes(fold(t))))continue;const weights=tokenWeights(s.text,terms);if(weights.some(w=>!w))continue;
-   const at=Math.max(0,s.text.toLowerCase().indexOf(terms[0]));found.push({label:s.label,snippet:extractArticleSnippet(s.text,at,query.length,true).snippet,score:sectionScore(s.text,s.label,query,weights)});}
+   const at=Math.max(0,s.text.toLowerCase().indexOf(terms[0]));found.push({label:labelOf(s),snippet:extractArticleSnippet(s.text,at,query.length,true).snippet,score:sectionScore(s.text,labelOf(s),query,weights)});}
   // A regulation whose name contains the query ranks ahead of passing mentions.
   const titleBonus=nameQuery.length>=2&&p.title.includes(nameQuery)?30:0;
   if(found.length)results.push({...meta(doc),score:titleBonus+rank(found),matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
@@ -48,7 +51,7 @@ export function paragraphSnippet(s:Section,terms:string[],max=700){
  if(parts.length<2){const lower=s.text.toLowerCase(),at=Math.max(0,...terms.map(t=>lower.indexOf(t.toLowerCase())).filter(n=>n>=0).slice(0,1));return {snippet:extractArticleSnippet(s.text,at,terms[0]?.length??0,true).snippet,paragraph:null};}
  let best=parts[0],bestScore=-1;for(const part of parts){const sec={...s,text:part,folded:fold(part),compact:undefined,words:undefined},hits=terms.filter(t=>present(sec,t)).length,score=hits*10+weightsFor(sec,terms).reduce((a,b)=>a+b,0);if(score>bestScore){best=part;bestScore=score;}}
  const symbol=/^[①-⑳]/.test(best)?best[0]:null,body=best.trim();
- return {snippet:(symbol&&best!==parts[0]?`${s.label} … ${body}`:body).slice(0,max),paragraph:symbol};
+ return {snippet:(symbol&&best!==parts[0]?`${labelOf(s)} … ${body}`:body).slice(0,max),paragraph:symbol};
 }
 
 // Question words that name the kind of answer rather than its content.
@@ -72,7 +75,7 @@ export function unifiedSearch(docs:any[],query:string,limit=5):Unified{
   // Terms that name this regulation ("직제" in 직제규정) need not repeat in the article.
   const titleTerms=terms.length>1?terms.filter(t=>!hasNumber(t)&&p.title.includes(normalizeName(t))):[],bodyTerms=titleTerms.length&&titleTerms.length<terms.length?terms.filter(t=>!titleTerms.includes(t)):terms,routed=bodyTerms!==terms,found:any[]=[];
   for(const s of p.sections){if(s.skip||!bodyTerms.every(t=>present(s,t)))continue;const weights=weightsFor(s,bodyTerms);if(weights.some(w=>!w))continue;
-   const {snippet,paragraph}=paragraphSnippet(s,bodyTerms);found.push({label:s.label,...paragraph?{paragraph}:{},snippet,score:sectionScore(s.text,s.label,bodyTerms.join(' '),weights)});}
+   const {snippet,paragraph}=paragraphSnippet(s,bodyTerms);found.push({label:labelOf(s),...paragraph?{paragraph}:{},snippet,score:sectionScore(s.text,labelOf(s),bodyTerms.join(' '),weights)});}
   if(!found.length)continue;
   const bonus=(nameQuery.length>=2&&p.title.includes(nameQuery)?30:0)+(routed?20*titleTerms.length:0);
   full.push({...meta(doc),score:Math.round((bonus+rank(found))*100)/100,match_type:'full',matched_terms:terms,...routed?{title_terms:titleTerms}:{},matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
@@ -83,11 +86,11 @@ export function unifiedSearch(docs:any[],query:string,limit=5):Unified{
   // Each term's strongest article. Only headings, regulation names or rare terms
   // qualify, so a word that merely occurs somewhere is not presented as the answer.
   for(const t of terms){const candidates:any[]=[],docsWith=preparedDocs.filter(({p})=>p.sections.some(s=>present(s,t))).length;
-   for(const {doc,p} of preparedDocs){let best:any;const inTitle=p.title.includes(normalizeName(t)),ft=folded(t);for(const s of p.sections){if(s.skip)continue;const inLabel=s.labelFolded.includes(ft);if(!inLabel&&!inTitle&&docsWith>5||!present(s,t))continue;const [w]=weightsFor(s,[t]);if(!w)continue;
+   for(const {doc,p} of preparedDocs){let best:any;const inTitle=p.title.includes(normalizeName(t)),ft=folded(t);for(const s of p.sections){if(s.skip)continue;const inLabel=labelFoldedOf(s).includes(ft);if(!inLabel&&!inTitle&&docsWith>5||!present(s,t))continue;const [w]=weightsFor(s,[t]);if(!w)continue;
      const cheap=3*w+(inLabel?10:0);if(!best||cheap>best.cheap)best={s,cheap,w,inLabel};}
     // Form/annex down-weighting (sectionScore) only for this document's best candidate.
-    if(best)best.score=sectionScore(best.s.text,best.s.label,t,[best.w])+(best.inLabel?10:0)+(inTitle?8:0);
-    if(best){const {snippet,paragraph}=paragraphSnippet(best.s,[t]);candidates.push({...meta(doc),score:Math.round(best.score*50)/100,match_type:'partial',matched_terms:[t],missing_terms:terms.filter(x=>x!==t),matches:[{label:best.s.label,...paragraph?{paragraph}:{},snippet,score:best.score}]});}}
+    if(best)best.score=sectionScore(best.s.text,labelOf(best.s),t,[best.w])+(best.inLabel?10:0)+(inTitle?8:0);
+    if(best){const {snippet,paragraph}=paragraphSnippet(best.s,[t]);candidates.push({...meta(doc),score:Math.round(best.score*50)/100,match_type:'partial',matched_terms:[t],missing_terms:terms.filter(x=>x!==t),matches:[{label:labelOf(best.s),...paragraph?{paragraph}:{},snippet,score:best.score}]});}}
    partial.push(...candidates.sort((a,b)=>b.score-a.score).slice(0,2));}
  }
  const results=[...full,...partial.filter((r,i,a)=>a.findIndex(x=>x.reg_id===r.reg_id&&x.matches[0].label===r.matches[0].label)===i)];
@@ -100,12 +103,12 @@ export function unifiedSearch(docs:any[],query:string,limit=5):Unified{
 // create a link here.
 function relatedArticles(preparedDocs:{doc:any;p:Prepared}[],results:any[],terms:string[]){
  const byId=new Map(preparedDocs.map(x=>[x.doc.regulation_id,x])),shown=new Set(results.flatMap(r=>r.matches.map((m:any)=>r.reg_id+'\0'+m.label))),out:any[]=[];
- const pick=(target:{doc:any;p:Prepared},article:string|null)=>{const sections=target.p.sections.filter(s=>!s.skip);if(article){const s=sections.find(x=>x.labelFolded.replace(/\s/g,'').startsWith(article.replace(/\s/g,'')));if(s)return s;}
+ const pick=(target:{doc:any;p:Prepared},article:string|null)=>{const sections=target.p.sections.filter(s=>!s.skip);if(article){const s=sections.find(x=>labelFoldedOf(x).replace(/\s/g,'').startsWith(article.replace(/\s/g,'')));if(s)return s;}
   let best:Section|undefined,score=0;for(const s of sections){const n=weightsFor(s,terms).filter(Boolean).length;if(n>score){best=s;score=n;}}return best;};
- const push=(target:{doc:any;p:Prepared},s:Section|undefined,relation:any)=>{if(!s||out.length>=5||shown.has(target.doc.regulation_id+'\0'+s.label))return;shown.add(target.doc.regulation_id+'\0'+s.label);const {snippet,paragraph}=paragraphSnippet(s,terms,300);out.push({...meta(target.doc),label:s.label,...paragraph?{paragraph}:{},snippet,relation});};
+ const push=(target:{doc:any;p:Prepared},s:Section|undefined,relation:any)=>{if(!s||out.length>=5||shown.has(target.doc.regulation_id+'\0'+labelOf(s)))return;shown.add(target.doc.regulation_id+'\0'+labelOf(s));const {snippet,paragraph}=paragraphSnippet(s,terms,300);out.push({...meta(target.doc),label:labelOf(s),...paragraph?{paragraph}:{},snippet,relation});};
  for(const r of results){const source=byId.get(r.reg_id);if(!source)continue;const labels=new Set(r.matches.map((m:any)=>m.label));
   for(const c of source.doc.citations??[]){if(!labels.has(c.label))continue;const target=byId.get(c.to);if(target)push(target,pick(target,c.article),{type:'citation',confidence:c.article?'high':'medium',from:`${r.regulationName} ${c.label}`,evidence:c.evidence});}
-  for(const other of preparedDocs){if(other.doc.regulation_id===r.reg_id)continue;for(const c of other.doc.citations??[]){if(c.to!==r.reg_id)continue;const s=other.p.sections.find(x=>x.label===c.label);if(s&&weightsFor(s,terms).some(Boolean))push(other,s,{type:'cited_by',confidence:'medium',from:`${other.doc.title} ${c.label}`,evidence:c.evidence});}}}
+  for(const other of preparedDocs){if(other.doc.regulation_id===r.reg_id)continue;for(const c of other.doc.citations??[]){if(c.to!==r.reg_id)continue;const s=other.p.sections.find(x=>labelOf(x)===c.label);if(s&&weightsFor(s,terms).some(Boolean))push(other,s,{type:'cited_by',confidence:'medium',from:`${other.doc.title} ${c.label}`,evidence:c.evidence});}}}
  return out;
 }
 
@@ -114,6 +117,6 @@ function relatedArticles(preparedDocs:{doc:any;p:Prepared}[],results:any[],terms
 export function extractCitations(doc:any,titles:Map<string,{reg_id:string;title:string}>){
  const p=prepareDocument(doc),out:any[]=[];
  for(const s of p.sections){if(s.skip)continue;for(const m of s.text.matchAll(/[「｢『]([^」｣』\n]{2,60})[」｣』](\s*제\s*\d+\s*조(?:의\s*\d+)?)?/g)){const hit=titles.get(normalizeName(m[1]));if(!hit||hit.reg_id===doc.regulation_id)continue;const article=m[2]?m[2].replace(/\s/g,''):null;
-  if(!out.some(c=>c.label===s.label&&c.to===hit.reg_id&&c.article===article))out.push({label:s.label,to:hit.reg_id,to_title:hit.title,article,evidence:m[0].trim().slice(0,80)});}}
+  if(!out.some(c=>c.label===labelOf(s)&&c.to===hit.reg_id&&c.article===article))out.push({label:labelOf(s),to:hit.reg_id,to_title:hit.title,article,evidence:m[0].trim().slice(0,80)});}}
  return out;
 }
