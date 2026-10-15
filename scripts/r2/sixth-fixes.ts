@@ -61,6 +61,8 @@ try{
  check('7 여비규정 부칙 블록·조문 라벨',supp.includes('부칙(규제910호, 2024.2.16.)')&&supp.includes('부칙(2024.2.16.) 제1조(시행일)'),supp.slice(-4));
  const synthetic='제1조(목적) 본문\n부    칙<방침 제1012호, 2026. 9. 28.>\n제1조(시행일) 이 방침은 2026년 10월 1일부터 시행한다.\n제2조(경과조치) 이 방침은 시행일 이후 확정되는 경비에 적용한다.\n[별표 1] 지급기준\n',labels=[...supplementLabels(synthetic,prepareSearchSections(synthetic).bounds).values()];
  check('7 "부칙(2026.9.28.) 제2조(경과조치)" 형식',labels.includes('부칙(방침 제1012호, 2026.9.28.)')&&labels.includes('부칙(2026.9.28.) 제2조(경과조치)'),labels);
+ const undated='제1조(목적) 본문\n부    칙\n제1조(시행일) 이 방침은 2018년 5월 1일부터 시행한다.\n제2조(경과조치) 종전\n',undatedLabels=[...supplementLabels(undated,prepareSearchSections(undated).bounds).values()];
+ check('7 날짜 머리 없는 부칙: 시행일로 구분',JSON.stringify(undatedLabels)===JSON.stringify(['부칙(시행 2018.5.1.)','부칙(시행 2018.5.1.) 제1조(시행일)','부칙(시행 2018.5.1.) 제2조(경과조치)']),undatedLabels);
  const hit=(await call('search_regulation_text',{name:'여비규정',query:'시행일',scope:'body',limit:20})).structuredContent.results.map((x:any)=>x.label);
  check('7 검색 결과 라벨에 부칙 날짜',hit.some((l:string)=>l.startsWith('부칙(2024.2.16.) 제1조')),hit.slice(-3));
  // 8. Snippet boundaries and revision evidence limited to 부칙.
