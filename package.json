@@ -1,6 +1,6 @@
 {
   "name": "add-regulations-mcp",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "scripts": {
     "prepare": "node scripts/stamp-build.mjs",
@@ -20,7 +20,9 @@
     "test:r2": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/regression.ts",
     "typecheck:r2": "tsc -p tsconfig.r2.json",
     "build:r2": "node scripts/stamp-build.mjs && wrangler deploy --dry-run --config wrangler.r2.jsonc --outdir .build-r2",
-    "test:r2-lifecycle": "node --import ./scripts/test-loader.mjs scripts/r2/lifecycle.ts"
+    "test:r2-lifecycle": "node --import ./scripts/test-loader.mjs scripts/r2/lifecycle.ts",
+    "test:r2-sixth": "node --import ./scripts/test-loader.mjs scripts/r2/sixth-fixes.ts",
+    "test:r2-sixth-live": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/sixth-live.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.0.0",

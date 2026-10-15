@@ -43,7 +43,10 @@ try{
  try{for(const name of wanted)for(const query of ['식비','비고','제10조']){
   const baseline=baselines.get(name),expected=searchGeneralTables(baseline.tables,query,baseline.rows,'hwp').filter(r=>r.analysis_type!=='text_box');
   const times:number[]=[];let actual:any;for(let i=0;i<20;i++){const t=performance.now();actual=await runD1Tool(db,'search_regulation_table',{name,query,limit:100,compact:false},'test');times.push(performance.now()-t);assert(!actual.isError,JSON.stringify(actual));}
-  const got=actual.structuredContent.totalMatches;report.comparison.push({name,query,old:expected.length,new:got,p95_ms:times.sort((a,b)=>a-b)[18],matches:got===expected.length});assert.equal(got,expected.length,name+'/'+query);
+  const got=actual.structuredContent.totalMatches;report.comparison.push({name,query,old:expected.length,new:got,p95_ms:times.sort((a,b)=>a-b)[18],fill_down:got-expected.length});
+  // Merged category/task cells are searchable on every covered row (6th fixes):
+  // the core rows are all still found and only fill-down can add rows.
+  const rows=actual.structuredContent.rows??actual.structuredContent.results;for(const e of expected)assert(rows.some((r:any)=>r.table_id===e.table_id&&r.row===e.row)||got>rows.length,name+'/'+query+' lost row '+e.row);assert(got>=expected.length,name+'/'+query);
  }
  for(const name of wanted)for(const query of ['식비','비고','제10조']){
   const baseline=baselines.get(name),old:any[]=[];for(let offset=0;offset<1000;offset+=10){const legacy:any=await searchRegulationText(name,query,{compact:false,offset},{text:async()=>({...baseline.item,regulationName:name,text:baseline.loaded.text}) as any,table:async()=>({rows:[]}) as any,metadata:async()=>({}) as any,history:async()=>[]});old.push(...legacy.structuredContent.matches);if(legacy.structuredContent.matches.length<10)break;}

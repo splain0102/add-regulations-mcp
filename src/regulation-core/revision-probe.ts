@@ -8,12 +8,16 @@ import {DocumentError} from './table-layout';
 export async function extractRevisionSection(bytes:Uint8Array, extension:string):Promise<string> {
  let section='', collecting=false;
  const revisionLines:string[]=[];
- const accept=(text:string)=>{
-  if(extension==='pdf'&&text.includes('개정')&&/20\d{2}/.test(text))revisionLines.push(text.slice(0,300));
-  if(/^[ \t]*부[ \t]*칙/.test(text)){collecting=true;section+=text+'\n';}
-  else if(collecting){if(/^\s*\[?별\s*(표|지)/.test(text))collecting=false;else section+=text+'\n';}
+ // Judged line by line: a PDF page or HWP paragraph can carry several lines, and
+ // annex/form headings (별표·별지·서식) end the supplementary provisions.
+ const acceptLine=(text:string)=>{
+  const line=text.replace(/^[\s\u0000-\u001f\u00a0\ufeff]+/,'');
+  if(extension==='pdf'&&line.includes('개정')&&/20\d{2}/.test(line))revisionLines.push(line.slice(0,300));
+  if(/^부[ \t]*칙/.test(line)){collecting=true;section+=text+'\n';}
+  else if(collecting){if(/^\[?\s*(?:별\s*(?:표|지|첨)|서식)/.test(line))collecting=false;else section+=text+'\n';}
   if(section.length>64000)throw new DocumentError('parse_error','부칙 텍스트 처리 한도 초과');
  };
+ const accept=(text:string)=>{for(const line of text.split('\n'))acceptLine(line);};
  if(extension==='hwp'){
   const cfb=CFB.read(bytes,{type:'buffer'});
   const headerContent=CFB.find(cfb,'/FileHeader')?.content;

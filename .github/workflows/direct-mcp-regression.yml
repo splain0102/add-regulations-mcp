@@ -22,3 +22,11 @@ jobs:
       - run: npm run test:regulation-fixes
       - run: npm run test:tables
       - run: npm run test:delegation-response
+      - name: R2 6th-fix acceptance on real ALIO documents
+        run: npm run test:r2-sixth-live
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2-sixth-live
+          path: reports/r2-sixth-live.json
+          if-no-files-found: ignore
