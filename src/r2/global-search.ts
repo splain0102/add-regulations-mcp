@@ -16,8 +16,12 @@ const squeeze=(s:string)=>s.replace(/[\s,]+/g,'');
 export function prepareDocument(doc:any):Prepared{
  let p=prepared.get(doc);if(p)return p;
  const content=String(doc.text??''),bounds=searchBounds(content,doc.searchSections),supplements=supplementLabels(content,bounds),excluded=bounds===doc.searchSections?.bounds?doc.searchSections.excluded??[]:[],sections:Section[]=[];
- for(let i=0;i<bounds.length-1;i++){const text=content.slice(bounds[i],bounds[i+1]);
-  sections.push({at:bounds[i],text,folded:fold(text),supplement:supplements.get(bounds[i]),skip:excluded.includes(bounds[i])||deletedSection(text)});}
+ // Folded sections are kept as slices of one string per document: far fewer
+ // retained objects, so a cold call spends less time in garbage collection.
+ const texts:string[]=[];for(let i=0;i<bounds.length-1;i++)texts.push(content.slice(bounds[i],bounds[i+1]));
+ const parts=texts.map(fold),joined=parts.join('\n');let at=0;
+ for(let i=0;i<texts.length;i++){const text=texts[i],end=at+parts[i].length;
+  sections.push({at:bounds[i],text,folded:joined.slice(at,end),supplement:supplements.get(bounds[i]),skip:excluded.includes(bounds[i])||deletedSection(text)});at=end+1;}
  p={sections,title:normalizeName(String(doc.title??''))};prepared.set(doc,p);return p;
 }
 const meta=(doc:any)=>({regulationName:doc.title,reg_id:doc.regulation_id,fileNo:doc.fileNo,revisionDate:doc.revisionDate,updatedDate:doc.updatedDate,sourceUrl:doc.sourceUrl,indexedAt:doc.verifiedAt,sha256:doc.sha256});
