@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {unifiedSearch,searchBodies,extractCitations} from '../../src/r2/global-search';
 import {prepareSearchSections} from '../../src/regulation-core/search-sections';
 import {normalizeName} from '../../src/d1/normalize';
+import {amountOf,rangeOf,inRange} from '../../src/r2/amount';
 const doc=(id:string,title:string,text:string)=>({regulation_id:id,title,fileNo:id,text,searchSections:prepareSearchSections(text)}) as any;
 const docs=[
  doc('24638','포상금 지급방침','제3조(포상금의 종류) 포상금의 종류는 다음 각 호와 같다.\n6. 모범소원․공로연수․모험연수․직무향상연수 포상금\n제9조(모범소원․공로연수․모험연수․직무향상연수 포상금) ① 모범소원․모험연수․직무향상연수 포상금은 대상자로 선정된 직원에게 국내․외 연수 등에 필요한 경비를 지급하는 포상금을 말한다.\n② 목적은 다음과 같다. 3. 모험연수: 해외연수를 실시함으로써 도전의식 부여\n④ 포상금 지급액은 모범소원 400만원, 모험연수 300만 원 이내로 한다.\n⑤ 포상금 지급은 총 포상금에서 국내․외 연수에 필요한 직접 경비는 여행사에 일괄 지불하고, 잔액은 개인에게 지급한다.\n'),
@@ -28,4 +29,9 @@ u=unifiedSearch(docs,'국외출장 여비');ok('인용된 조문이 이미 결�
 u=unifiedSearch(docs,'공무국외출장 여비');ok('인용 링크: 공무국외출장 업무방침 제5조 → 여비규정 제23조 (citation, high)',u.related.some(r=>r.regulationName==='여비규정'&&/^제23조/.test(r.label)&&r.relation.type==='citation'&&r.relation.confidence==='high'),u.related);
 ok('N5 유지: "사고 보고" ↛ "사고방식 보고서"',unifiedSearch(docs,'사고 보고').results.every(r=>r.regulationName!=='견본')&&searchBodies(docs,'사고 보고').every(r=>r.regulationName!=='견본'),'');
 u=unifiedSearch(docs,'부소장 근무시간');ok('관련성 낮은 단어 부분일치는 근거로 제시하지 않음 (근무시간 미존재 → missing)',u.coverage.missing.includes('근무시간'),u.coverage);
+// Amount ranges for approver questions.
+assert.equal(amountOf('10억'),1e9);assert.equal(amountOf('300만원'),3e6);assert.equal(amountOf('1억5천만'),1.5e8);assert.equal(amountOf('기술용역'),null);assert.equal(amountOf('2024'),null);
+const within=(c:string,v:number)=>{const r=rangeOf(c);return r?inRange(v,r):null;};
+assert.equal(within('용역비 5억 초과',1e9),true);assert.equal(within('2억 원 이상 5억 원 미만',1e9),false);assert.equal(within('2억 원 미만',1e9),false);assert.equal(within('10억 원 이상(수정계약의 경우 차액 기준)',1e9),true);assert.equal(within('10억 원 미만',1e9),false);assert.equal(within('5천만 원 이하',5e7),true);assert.equal(within('중요사항',1e9),null);
+results.push('amount ranges: 10억 is within 5억 초과 and 10억 원 이상, outside 2억~5억 미만 and 10억 원 미만');
 console.log(JSON.stringify({passed:true,cases:results},null,1));

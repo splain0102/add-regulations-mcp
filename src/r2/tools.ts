@@ -2,6 +2,7 @@ import {normalizeName,queryTerms,normalize} from '../d1/normalize';
 import {tableToolResponse} from '../regulation-core/table-response';
 import {mightMatch} from './bloom';
 import {unifiedSearch,type Unified} from './global-search';
+import {amountOf,rangeOf,inRange} from './amount';
 import {tokenWeights,sectionScore} from '../regulation-core/search-ranking';
 import {PARSER_VERSION} from '../regulation-core/parser-version';
 import {R2Reader} from './read';
@@ -57,16 +58,21 @@ export async function runR2Tool(reader:R2Reader,tool:string,input:Input={},build
    if(!input.scope||input.scope==='table'||input.scope==='all'){
     // Table rows use the same resolved terms (intent words such as 승인권자 removed,
     // compounds stemmed); delegation rows rank first for approver questions.
-    const terms=unified.coverage.terms,nameQuery=normalizeName(terms.join('')),approver=unified.intent==='approver';
+    // Approver questions compare amounts as ranges: "기술용역 10억" matches the
+    // 기술용역 row whose condition covers 10억 ("용역비 5억 초과"), not any row that
+    // merely contains the text "10억" under another task.
+    const nameQuery=normalizeName(unified.coverage.terms.join('')),approver=unified.intent==='approver',amounts=approver?unified.coverage.terms.map(amountOf).filter((v):v is number=>v!==null):[];
+    const terms=amounts.length&&unified.coverage.terms.some(t=>amountOf(t)===null)?unified.coverage.terms.filter(t=>amountOf(t)===null):unified.coverage.terms,amount=terms.length<unified.coverage.terms.length?amounts[0]:null;
+    const rangeScore=(r:any,text:string)=>{if(amount===null||!r.approver)return {};const range=rangeOf(r.condition??text);return range?{amount_match:inRange(amount,range)}:{};};
     const scan=async(t:string[])=>{const tq=queryTerms(t.join(' ')),grouped=new Map<string,{count:number;score:number;matches:any[]}>(),refs=[...catalog.table_shards,...input.include_repealed?catalog.repealed_table_shards??[]:[]].filter(ref=>mightMatch(ref.bloom,tq.terms));
-     for(let i=0;i<refs.length;i+=4)for(const part of await Promise.all(refs.slice(i,i+4).map(ref=>reader.ref(ref))))for(const r of part){if(!input.include_text_box&&r.analysis_type==='text_box'||!rowMatches({...r,kind:'table'},tq))continue;const text=r.text||r.match.row,weights=t.map(x=>/\d/.test(x)?(normalize(text).includes(normalize(x))?1:0):tokenWeights(text,[x])[0]),score=(weights.every(w=>w>0)?0.5*sectionScore(text,'',t.join(' '),weights):0.05)+(approver&&r.analysis_type==='delegation_table'&&r.approver?40:0),g=grouped.get(r.document_id)??{count:0,score:0,matches:[]};g.count++;g.score=Math.max(g.score,score);g.matches.push({label:r.label,snippet:text.slice(0,850),score,kind:'table',...r.approver?{task:r.task??null,condition:r.condition??null,approver:r.approver}:{}});grouped.set(r.document_id,g);}
+     for(let i=0;i<refs.length;i+=4)for(const part of await Promise.all(refs.slice(i,i+4).map(ref=>reader.ref(ref))))for(const r of part){if(!input.include_text_box&&r.analysis_type==='text_box'||!rowMatches({...r,kind:'table'},tq))continue;const text=r.text||r.match.row,weights=t.map(x=>/\d/.test(x)?(normalize(text).includes(normalize(x))?1:0):tokenWeights(text,[x])[0]),range=rangeScore(r,text),score=(weights.every(w=>w>0)?0.5*sectionScore(text,'',t.join(' '),weights):0.05)+(approver&&r.analysis_type==='delegation_table'&&r.approver?40:0)+(range.amount_match===true?60:range.amount_match===false?-35:0),g=grouped.get(r.document_id)??{count:0,score:0,matches:[]};g.count++;g.score=Math.max(g.score,score);g.matches.push({label:r.label,snippet:text.slice(0,850),score,kind:'table',...r.approver?{task:r.task??null,condition:r.condition??null,approver:r.approver,...range}:{}});grouped.set(r.document_id,g);}
      return grouped;};
     let grouped=await scan(terms);
     // Approver questions with no delegation row retry once with a long compound's
     // head noun ("기술용역 10억 승인권자" → 용역 10억). Other questions do not, so
     // they read no extra table shards.
     const delegationFound=[...grouped.values()].some(g=>g.matches.some((m:any)=>m.approver));
-    if(approver&&!delegationFound&&terms.length>1){const long=terms.findIndex(t=>!/\d/.test(t)&&Array.from(t).length>=4);if(long>=0){const head=Array.from(terms[long]).slice(-2).join(''),relaxed=await scan(terms.map((t,i)=>i===long?head:t));if(relaxed.size){unified.coverage.resolved[terms[long]]=head;for(const [id,g] of relaxed){const old=grouped.get(id);grouped.set(id,old?{count:old.count+g.count,score:Math.max(old.score,g.score),matches:[...old.matches,...g.matches]}:g);}}}}
+    if(approver&&!delegationFound&&(terms.length>1||amount!==null)){const long=terms.findIndex(t=>!/\d/.test(t)&&Array.from(t).length>=4);if(long>=0){const head=Array.from(terms[long]).slice(-2).join(''),relaxed=await scan(terms.map((t,i)=>i===long?head:t));if(relaxed.size){unified.coverage.resolved[terms[long]]=head;for(const [id,g] of relaxed){const old=grouped.get(id);grouped.set(id,old?{count:old.count+g.count,score:Math.max(old.score,g.score),matches:[...old.matches,...g.matches]}:g);}}}}
     const tables=catalog.documents.filter(d=>grouped.has(d.document_id)).map(d=>({regulationName:d.title,reg_id:d.regulation_id,...d.status==='repealed'?{status:'repealed'}:{},fileNo:d.file_no,revisionDate:d.st_date,sourceUrl:d.source_url,score:Math.round((grouped.get(d.document_id)!.score+(nameQuery.length>=2&&d.title_normalized.includes(nameQuery)?30:0))*100)/100,match_type:'table',matches:grouped.get(d.document_id)!.matches.sort((a:any,b:any)=>b.score-a.score).slice(0,3),tableMatches:grouped.get(d.document_id)!.count}));
     // A regulation found both in body text and in tables keeps one entry; the
     // stronger side's matches come first so a delegation row is not hidden by a

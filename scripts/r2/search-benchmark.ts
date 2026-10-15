@@ -19,7 +19,7 @@ const CASES:Case[]=[
  {id:'모험연수 300만원',tool:'search_all_regulations',input:{query:'모험연수 300만원'},expect:r=>has(r,'포상금 지급방침',/^제9조/,3),allowed:['포상금 지급방침']},
  {id:'모험연수 국외출장비',tool:'search_all_regulations',input:{query:'모험연수 국외출장비'},expect:r=>has(r,'포상금 지급방침',/^제9조/)&&has(r,'여비규정',/^제23조/),allowed:['포상금 지급방침','여비규정','공무국외출장 업무방침']},
  {id:'모험연수 잔액 개인 지급',tool:'search_all_regulations',input:{query:'모험연수 잔액 개인 지급'},expect:r=>body(r).slice(0,3).some((x:any)=>x.regulationName==='포상금 지급방침'&&x.matches.some((m:any)=>/^제9조/.test(m.label)&&/잔액은\s*개인에게\s*지급/.test(m.snippet))),allowed:['포상금 지급방침']},
- {id:'기술용역 10억 승인권자',tool:'search_all_regulations',input:{query:'기술용역 10억 승인권자'},expect:r=>body(r).some((x:any)=>x.regulationName==='위임전결규정'&&x.matches.some((m:any)=>/10억\s*원\s*이상/.test((m.condition??'')+(m.snippet??''))&&/용역/.test((m.task??'')+(m.snippet??'')))),allowed:['위임전결규정','기술용역 업무규정']},
+ {id:'기술용역 10억 승인권자',tool:'search_all_regulations',input:{query:'기술용역 10억 승인권자'},expect:r=>{const m=(r.results??[]).find((x:any)=>x.regulationName==='위임전결규정')?.matches?.[0];return m?.approver==='소장'&&m.amount_match===true&&/기술\s*용역/.test((m.task??'')+(m.condition??''));},allowed:['위임전결규정','기술용역 업무규정']},
  {id:'직제 부소장',tool:'search_all_regulations',input:{query:'직제 부소장'},expect:r=>r.results?.[0]?.regulationName==='직제규정',allowed:['직제규정']},
  {id:'연구소차량 사고 보험',tool:'search_all_regulations',input:{query:'연구소차량 사고 보험'},expect:r=>r.results?.[0]?.regulationName==='연구소차량 관리방침'&&r.results[0].matches.some((m:any)=>/^제1[56]조/.test(m.label)),allowed:['연구소차량 관리방침']},
  {id:'외국인 보안과제',tool:'search_all_regulations',input:{query:'외국인 보안과제'},expect:r=>r.results?.[0]?.regulationName==='민군기술협력사업 보안과제 관리요령',allowed:['민군기술협력사업 보안과제 관리요령']},
