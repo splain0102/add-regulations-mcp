@@ -7,7 +7,7 @@ import {BUILD_VERSION} from './build-info';
 import {PARSER_VERSION} from './regulation-core/parser-version';
 import {runD1Tool,envelope} from './d1/tools';
 export type D1Env=Env&{REGULATIONS_DB:D1Database;MCP_ORIGIN?:string};
-const MCP_VERSION='1.11.0';
+const MCP_VERSION='2.0.0';
 function createD1Server(env:D1Env){
  const server=new McpServer({name:'ADD Regulations MCP',version:MCP_VERSION});
  const page={limit:z.number().int().min(1).max(100).default(5),offset:z.number().int().min(0).default(0)};

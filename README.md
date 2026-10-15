@@ -318,7 +318,7 @@ ALIO 목록의 제·개정일과 첨부파일명에 적힌 날짜가 서로 다�
 
 
 
-## D1 preindexed search (v1.11.0, staged migration)
+## D1 preindexed search (v2.0.0, staged migration)
 
 The D1 serving entrypoint is `src/d1-worker.ts`. It has no ALIO client or HWP/HWPX/PDF parser imports. OAuth continues using the existing provider and OAuth KV namespace. All nine MCP tool names are retained. Search results default to five records, with `limit`/`offset` pagination; `scope=body|table|pdf|all` filters the current-document catalog. Historical PDF attachments are excluded; requesting `include_history` reports an explicit partial/unavailable status until such attachments are separately indexed.
 
