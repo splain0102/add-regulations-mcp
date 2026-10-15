@@ -1,5 +1,11 @@
 name: D1 hourly regulation sync
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/d1/**'
+      - 'migrations/**'
+      - '.github/workflows/d1-sync.yml'
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
@@ -15,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.D1_ENABLED == 'true')
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push' || vars.D1_ENABLED == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
