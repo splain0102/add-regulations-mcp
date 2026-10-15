@@ -39,7 +39,10 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Verify actual R2 catalog without publishing or querying ALIO/D1
-        run: node scripts/stamp-build.mjs && node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/remote-acceptance.ts
+        run: |
+          node scripts/stamp-build.mjs
+          node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/remote-acceptance.ts
+          node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/workerd-acceptance.ts
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
