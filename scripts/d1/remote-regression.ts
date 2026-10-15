@@ -12,7 +12,7 @@ try{
   }
   const body=JSON.parse(String(init?.body));queries++;
   if(body.sql?.startsWith('SELECT coalesce'))return Response.json({success:true,result:[{success:true,results:[{n:0}]}]});
-  if(body.sql?.startsWith('UPDATE sync_runs SET rows_written'))return Response.json({success:true,result:[{success:true}]});
+  if(body.sql?.startsWith('INSERT INTO sync_usage'))return Response.json({success:true,result:[{success:true}]});
   assert(Array.isArray(body.batch));return Response.json({success:true,result:body.batch.map(()=>({success:true,results:[{n:1}],meta:{rows_written:1}}))});
  };
  const r2=r2Store();await assert.rejects(()=>r2('PUT','new.bin',new Uint8Array(101)),/r2_bucket_budget_reached/);assert.equal(puts,0);

@@ -143,3 +143,4 @@ END;
 CREATE TABLE publication_guard(value INTEGER NOT NULL CHECK(value=1));
 CREATE TABLE sync_lease(singleton INTEGER PRIMARY KEY CHECK(singleton=1),owner TEXT,expires_at TEXT);
 INSERT INTO sync_lease(singleton) VALUES(1);
+CREATE TABLE sync_usage(day TEXT NOT NULL,run_id TEXT NOT NULL,rows_written INTEGER NOT NULL,PRIMARY KEY(day,run_id));
