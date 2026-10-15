@@ -2,7 +2,8 @@
 // 포상금 지급방침 제9조, 여비규정 제23조, 직제규정 제8조 and distractors.
 // The complete-corpus comparison with main runs in search-benchmark.ts (CI).
 import assert from 'node:assert/strict';
-import {unifiedSearch,searchBodies,extractCitations} from '../../src/r2/global-search';
+import {unifiedSearch,searchBodies,extractCitations,prepareDocument,present} from '../../src/r2/global-search';
+import {fold} from '../../src/regulation-core/search-ranking';
 import {prepareSearchSections} from '../../src/regulation-core/search-sections';
 import {normalizeName} from '../../src/d1/normalize';
 import {amountOf,rangeOf,inRange} from '../../src/r2/amount';
@@ -29,6 +30,10 @@ u=unifiedSearch(docs,'국외출장 여비');ok('인용된 조문이 이미 결�
 u=unifiedSearch(docs,'공무국외출장 여비');ok('인용 링크: 공무국외출장 업무방침 제5조 → 여비규정 제23조 (citation, high)',u.related.some(r=>r.regulationName==='여비규정'&&/^제23조/.test(r.label)&&r.relation.type==='citation'&&r.relation.confidence==='high'),u.related);
 ok('N5 유지: "사고 보고" ↛ "사고방식 보고서"',unifiedSearch(docs,'사고 보고').results.every(r=>r.regulationName!=='견본')&&searchBodies(docs,'사고 보고').every(r=>r.regulationName!=='견본'),'');
 u=unifiedSearch(docs,'부소장 근무시간');ok('관련성 낮은 단어 부분일치는 근거로 제시하지 않음 (근무시간 미존재 → missing)',u.coverage.missing.includes('근무시간'),u.coverage);
+// Raw-text prefilter equals full folding on characters folding rewrites.
+{const texts=['제1조(목적) 민·군 기술협력','제2조 1,000만 원 이하','제3조 ＰＤＦ 파일과 Ｋ값','제4조 ㉮ 항목과 ㈎ 항목','제5조 ① 1억 5천만원','제6조 국외 출장비','제7조 ＩＩ단계 Ⅱ','제8조 KT 보고'],terms=['민군','1000만원','pdf','k','가','1억5천만원','국외출장','ii','kt','①'];let n=0;
+ for(const text of texts){const p=prepareDocument({text,title:'시험'});for(const sec of p.sections)for(const t of terms){const f=fold(sec.text),ft=fold(t),want=/\d/.test(t)?f.replace(/[\s,]+/g,'').includes(ft.replace(/[\s,]+/g,'')):f.includes(ft);assert.equal(present(sec as any,t),want,t+' in '+sec.text);n++;}}
+ results.push(`raw-text prefilter equals full folding on ${n} synthetic checks (middle dot, full-width, circled Hangul, amounts with spaces/commas)`);}
 // Amount ranges for approver questions.
 assert.equal(amountOf('10억'),1e9);assert.equal(amountOf('300만원'),3e6);assert.equal(amountOf('1억5천만'),1.5e8);assert.equal(amountOf('기술용역'),null);assert.equal(amountOf('2024'),null);
 const within=(c:string,v:number)=>{const r=rangeOf(c);return r?inRange(v,r):null;};

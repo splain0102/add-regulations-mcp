@@ -3,7 +3,7 @@ import {normalizeName} from '../d1/normalize';
 import {deletedSection,fold,tokenWeights,wordsWeight,sectionScore} from '../regulation-core/search-ranking';
 import {extractArticleSnippet} from '../regulation-core/article-snippet';
 
-type Section={at:number;supplement?:string;labelCache?:string;labelFolded?:string;text:string;foldedCache?:string;mayFold?:boolean;mayFoldDigits?:boolean;compact?:string;words?:string[];skip:boolean};
+type Section={at:number;supplement?:string;labelCache?:string;labelFolded?:string;text:string;foldedCache?:string;exotic?:boolean;exoticHangul?:boolean;compact?:string;words?:string[];skip:boolean};
 // Labels are derived on first use: most sections never match and never need one.
 const labelOf=(s:Section)=>s.labelCache??=s.supplement??s.text.match(LABEL)?.[1]??extractArticleSnippet(s.text,0,0,true).label;
 const labelFoldedOf=(s:Section)=>s.labelFolded??=fold(labelOf(s));
@@ -25,16 +25,20 @@ const meta=(doc:any)=>({regulationName:doc.title,reg_id:doc.regulation_id,fileNo
 const hasNumber=(t:string)=>/\d/.test(t);
 // The squeezed copy is made only for number terms, keeping the cached corpus small.
 const folds=new Map<string,string>(),folded=(t:string)=>{let f=folds.get(t);if(f===undefined){f=fold(t);if(folds.size>256)folds.clear();folds.set(t,f);}return f;};
-// Folding (NFKC, lower case, middle dots removed) is done only for sections that
-// might match: a term found in the raw text is found in the folded text, and a
-// term absent from raw text can appear after folding only if the section holds a
-// character folding changes (middle dot, Latin capital, full-width or
-// compatibility form; circled digits only matter for terms with digits).
-const MAY_FOLD=/[·ㆍ･‧A-Z\u00C0-\u024F\u2150-\u218F\u24B6-\u24FF\u3200-\u33FF\uF900-\uFAFF\uFB00-\uFB4F\uFE30-\uFE4F\uFF00-\uFFEF]/,MAY_FOLD_DIGITS=/[\u2460-\u24B5\u2776-\u2793\u3251-\u325F\u32B1-\u32BF\u00B2\u00B3\u00B9\u00BC-\u00BE\u2070-\u209F]/;
+// Folding (NFKC, lower case, middle dots removed) is done only when it can change
+// the answer. A term is first matched on the raw text with middle dots allowed
+// between its letters (and spaces/commas between the letters of an amount), case
+// insensitively: such a match is a match after folding. Without one, folding can
+// only create a match if the section holds a character it rewrites (compatibility
+// forms, full-width, circled, Latin-1, jamo; for a Hangul-only term just the
+// Hangul compatibility forms), so only those sections are folded.
+const EXOTIC=/[\u00AA\u00B2\u00B3\u00B9\u00BA\u00BC-\u00BE\u00C0-\u024F\u02B0-\u02FF\u0370-\u04FF\u1100-\u11FF\u1D00-\u1DBF\u2024-\u2026\u2070-\u209F\u2100-\u218F\u2460-\u24FF\u2776-\u2793\u3131-\u318E\u3200-\u33FF\uF900-\uFAFF\uFB00-\uFB4F\uFE30-\uFE4F\uFF00-\uFFEF]/,EXOTIC_HANGUL=/[\u1100-\u11FF\u3131-\u318E\u3200-\u321E\u3260-\u327E\uFFA0-\uFFDC]/;
+const patterns=new Map<string,RegExp>(),rawPattern=(ft:string,number:boolean)=>{const key=(number?'n':'t')+ft;let re=patterns.get(key);if(!re){const chars=Array.from(number?squeeze(ft):ft).map(c=>c.replace(/[.*+?^${}()|[\]\\\/-]/g,'\\$&'));re=new RegExp(chars.join(number?'[\\s,·ㆍ･‧]*':'[·ㆍ･‧]*'),'i');if(patterns.size>256)patterns.clear();patterns.set(key,re);}return re;};
 const foldedOf=(s:Section)=>s.foldedCache??=fold(s.text);
-export function present(s:Section,t:string){const ft=folded(t);
- if(hasNumber(t)){const digits=ft.match(/\d+/)![0];if(!s.text.includes(digits)&&!(s.mayFold??=MAY_FOLD.test(s.text))&&!(s.mayFoldDigits??=MAY_FOLD_DIGITS.test(s.text)))return false;return (s.compact??=squeeze(foldedOf(s))).includes(squeeze(ft));}
- if(s.text.includes(ft))return true;if(!(s.mayFold??=MAY_FOLD.test(s.text))&&!(/\d/.test(ft)&&(s.mayFoldDigits??=MAY_FOLD_DIGITS.test(s.text))))return false;return foldedOf(s).includes(ft);}
+export function present(s:Section,t:string){const ft=folded(t),number=hasNumber(t);
+ if(rawPattern(ft,number).test(s.text))return true;
+ if(!(/^[\uAC00-\uD7A3]+$/.test(ft)?(s.exoticHangul??=EXOTIC_HANGUL.test(s.text)):(s.exotic??=EXOTIC.test(s.text))))return false;
+ return number?(s.compact??=squeeze(foldedOf(s))).includes(squeeze(ft)):foldedOf(s).includes(ft);}
 // Word split is cached per section; the weight rule is tokenWeights' own.
 function weightsFor(s:Section,terms:string[]){return terms.map(t=>hasNumber(t)?(present(s,t)?1:0):wordsWeight(s.words??=foldedOf(s).match(/[\p{L}\p{N}]+/gu)??[],t));}
 function rank(found:any[]){return Math.max(...found.map(m=>m.score))+0.1*found.map(m=>m.score).sort((a,b)=>b-a).slice(0,3).reduce((sum,n)=>sum+n,0);}
@@ -58,7 +62,7 @@ export function searchBodies(docs:any[],query:string){
 export function paragraphSnippet(s:Section,terms:string[],max=700){
  const parts=s.text.split(/(?=[①-⑳])/);
  if(parts.length<2){const lower=s.text.toLowerCase(),at=Math.max(0,...terms.map(t=>lower.indexOf(t.toLowerCase())).filter(n=>n>=0).slice(0,1));return {snippet:extractArticleSnippet(s.text,at,terms[0]?.length??0,true).snippet,paragraph:null};}
- let best=parts[0],bestScore=-1;for(const part of parts){const sec:Section={...s,text:part,foldedCache:undefined,mayFold:undefined,mayFoldDigits:undefined,compact:undefined,words:undefined},hits=terms.filter(t=>present(sec,t)).length,score=hits*10+weightsFor(sec,terms).reduce((a,b)=>a+b,0);if(score>bestScore){best=part;bestScore=score;}}
+ let best=parts[0],bestScore=-1;for(const part of parts){const sec:Section={...s,text:part,foldedCache:undefined,exotic:undefined,exoticHangul:undefined,compact:undefined,words:undefined},hits=terms.filter(t=>present(sec,t)).length,score=hits*10+weightsFor(sec,terms).reduce((a,b)=>a+b,0);if(score>bestScore){best=part;bestScore=score;}}
  const symbol=/^[①-⑳]/.test(best)?best[0]:null,body=best.trim();
  return {snippet:(symbol&&best!==parts[0]?`${labelOf(s)} … ${body}`:body).slice(0,max),paragraph:symbol};
 }
