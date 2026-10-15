@@ -1,15 +1,6 @@
-name: Publish offline regulation index
+name: Legacy KV publisher (disabled by R2 migration)
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: '17 * * * *'
   workflow_dispatch:
-    inputs:
-      force_documents:
-        description: Recheck every attachment and raw SHA even when ALIO dates are unchanged
-        type: boolean
-        default: false
 permissions:
   contents: read
   id-token: write
@@ -18,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   refresh:
-    if: github.ref == 'refs/heads/main' && vars.D1_ENABLED != 'true'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:

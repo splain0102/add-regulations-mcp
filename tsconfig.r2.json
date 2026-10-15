@@ -1,0 +1,1 @@
+{"compilerOptions": {"target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler", "strict": true, "skipLibCheck": true, "noEmit": true, "lib": ["ES2022"], "types": ["@cloudflare/workers-types"]}, "files": ["src/r2-worker.ts", "src/types/hwpxjs-browser.d.ts"]}

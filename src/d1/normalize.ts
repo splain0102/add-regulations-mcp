@@ -7,7 +7,7 @@ export function queryTerms(query:string){
  const terms=query.normalize('NFKC').trim().split(/[\s,;/]+/).map(normalize).filter(Boolean);
  const joined=normalize(query);
  if(Array.from(joined).length<2)return {warning:'query_too_short',terms,joined,fts:''};
- if(!/[\p{L}\p{N}]{2}/u.test(joined))return {warning:'symbol_query',terms,joined,fts:''};
+ if((joined.match(/[\p{L}\p{N}]/gu)??[]).length<2)return {warning:'symbol_query',terms,joined,fts:''};
  // A one-character component is verified after the indexed longer components.
  const indexed=terms.flatMap(grams);if(!indexed.length)indexed.push(...grams(joined));
  return {warning:null,terms,joined,fts:[...new Set(indexed)].map(g=>'"'+g+'"').join(' AND ')};

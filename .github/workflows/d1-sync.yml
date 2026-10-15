@@ -1,15 +1,11 @@
 name: D1 hourly regulation sync
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'scripts/d1/**'
-      - 'migrations/**'
-      - '.github/workflows/d1-sync.yml'
-  schedule:
-    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
+      enable_experimental:
+        description: Explicitly run deferred D1 validation (R2 is the serving path)
+        type: boolean
+        default: false
       force_sha:
         description: Force raw SHA verification of all current attachments
         type: boolean
@@ -21,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push' || vars.D1_ENABLED == 'true')
+    if: github.ref == 'refs/heads/main' && inputs.enable_experimental == true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
