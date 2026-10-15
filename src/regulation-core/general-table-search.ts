@@ -21,15 +21,16 @@ function headerRowNumbers(table:Table){
  return directRows.filter(row=>row>=anchor&&row<end);
 }
 
-export function searchGeneralTables(tables:Table[],query:string,delegationRows:StructuredRow[],sourceType:string){
+export function searchGeneralTables(tables:Table[],query:string,delegationRows:StructuredRow[],sourceType:string,options:{allRows?:boolean}={}){
  const q=normalizeTableSearch(query),tokens=query.normalize('NFKC').split(/[\s,;/]+/).map(normalizeTableSearch).filter(Boolean);
- if(!q)return [];
+ if(!q&&!options.allRows)return [];
  const matches:{table:Table;cell:Cell;row:number;mode:'cell'|'row'|'header_path'}[]=[],seen=new Set<string>();
  for(const table of tables){
   const rowCount=Math.max(0,...table.cells.map(c=>c.row+c.rowSpan));
   const colCount=Math.max(0,...table.cells.map(c=>c.col+c.colSpan));
   const isTextBox=rowCount===1&&colCount===1;
   const headerRows=isTextBox?[]:headerRowNumbers(table);
+  if(options.allRows){for(const row of [...new Set(table.cells.map(c=>c.row))]){const cell=tableCellsForRow(table,row)[0];if(cell)matches.push({table,cell,row,mode:'row'});}continue;}
   for(const cell of table.cells){if(normalizeTableSearch(cell.text).includes(q)){
    if(tokens.length===1&&headerRows.includes(cell.row)){
      const dataRows=[...new Set(table.cells.map(c=>c.row))].filter(r=>!headerRows.includes(r)).slice(0,20);
@@ -88,3 +89,4 @@ export function searchGeneralTables(tables:Table[],query:string,delegationRows:S
   return specialized.length?specialized.map(r=>({...base,...r,category:r.category?normalizedText(r.category):null,task:r.task?normalizedText(r.task):null,condition:r.condition?normalizedText(r.condition):null,analysis_type:'delegation_table',coordinate_type:'logical_cell',row,col:r.bounding_box.x0,coordinate:{coordinate_type:'logical_cell',row,col:r.bounding_box.x0},symbol_coordinates:{...r.symbol_coordinates,coordinate_type:'logical_cell',row,col:r.bounding_box.x0},header_evidence:{...(r.header_evidence as object??{}),rows:headers,columns},confidence_basis:['explicit_cell_span','header_detected','symbol_inside_column']})):[{...base,...(isDelegation?{analysis_type:'delegation_table',approver:null,needs_review:true}: {})}];
  });
 }
+
