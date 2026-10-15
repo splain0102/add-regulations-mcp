@@ -46,15 +46,17 @@ try{
   sizes[name]={objects:built[name].objects.size,bytes:[...built[name].objects.values()].reduce((n:number,b:Uint8Array)=>n+b.length,0),body_shard_bytes:built[name].catalog.body_shards.reduce((n:number,r:any)=>n+r.bytes,0)};}
  report.catalog_sizes=sizes;
  const tools:any={base:{run:baseTools.runR2Tool,Reader:baseRead.R2Reader},new:{run:newTools.runR2Tool,Reader:newRead.R2Reader}};
- for(const c of CASES){const row:any={id:c.id,tool:c.tool};
+ for(const c of CASES){const row:any={id:c.id,tool:c.tool};let lastNew:any;
   for(const name of ['base','new'] as const){const {run,Reader}=tools[name];
    // Cold: a fresh reader per call (new isolate). Warm: one reader reused (DO cache).
    const cold:number[]=[],warm:number[]=[],warmReader=new Reader(buckets[name]);let answer:any,reads=0,bytes=0;
    for(let i=0;i<ITER;i++){const reader=new Reader(buckets[name]),t=performance.now();answer=(await run(reader,c.tool,c.input,name)).structuredContent;cold.push(performance.now()-t);reads=reader.requests;bytes=reader.bytes_read;}
    for(let i=0;i<ITER;i++){const t=performance.now();await run(warmReader,c.tool,c.input,name);warm.push(performance.now()-t);}
    const text=JSON.stringify(answer),top=(answer.results??[]).slice(0,5).map((r:any)=>r.regulationName),off=c.allowed.length?top.filter((t:string)=>!c.allowed.includes(t)).length:null;
+   if(name==='new')lastNew=answer;
    row[name]={correct:c.expect(answer),cold_p50:pct(cold,0.5),cold_p95:pct(cold,0.95),warm_p50:pct(warm,0.5),warm_p95:pct(warm,0.95),r2_reads:reads,r2_bytes:bytes,response_chars:text.length,approx_tokens:Math.round(text.length/2),top5:top,outside_expected:off,...name==='new'&&answer.related?{related:answer.related.map((r:any)=>`${r.regulationName} ${r.label} (${r.relation?.type})`)}:{}};}
-  row.calls={base:row.base.correct?1:'≥2',new:row.new.correct?1:'≥2'};report.queries.push(row);console.log('BENCH',JSON.stringify(row));}
+  row.calls={base:row.base.correct?1:'≥2',new:row.new.correct?1:'≥2'};
+  if(!row.new.correct)row.new.answer=JSON.stringify({coverage:lastNew?.coverage,intent:lastNew?.intent,results:(lastNew?.results??[]).slice(0,6).map((r:any)=>({reg:r.regulationName,type:r.match_type,score:r.score,m:(r.matches??[]).slice(0,3).map((m:any)=>[m.label,m.condition,m.approver,String(m.snippet??'').slice(0,60)])})),body_suggestions:lastNew?.body_suggestions}).slice(0,3000);report.queries.push(row);console.log('BENCH',JSON.stringify(row));}
  // Unchanged tools must answer identically (same catalog content, same parser).
  for(const [tool,input] of [['search_regulation_table',{name:'위임전결규정',query:'국외출장',limit:100}],['search_regulation_text',{name:'여비규정',query:'제23조',limit:20}],['get_regulation',{name:'포상금 지급방침'}],['search_regulations',{query:'직제'}]] as const){
   const a=(await tools.base.run(new tools.base.Reader(buckets.base),tool,input,'base')).structuredContent,b=(await tools.new.run(new tools.new.Reader(buckets.new),tool,input,'new')).structuredContent;

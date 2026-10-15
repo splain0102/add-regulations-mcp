@@ -75,10 +75,12 @@ export function unifiedSearch(docs:any[],query:string,limit=5):Unified{
   // Terms that name this regulation ("직제" in 직제규정) need not repeat in the article.
   const titleTerms=terms.length>1?terms.filter(t=>!hasNumber(t)&&p.title.includes(normalizeName(t))):[],bodyTerms=titleTerms.length&&titleTerms.length<terms.length?terms.filter(t=>!titleTerms.includes(t)):terms,routed=bodyTerms!==terms,found:any[]=[];
   for(const s of p.sections){if(s.skip||!bodyTerms.every(t=>present(s,t)))continue;const weights=weightsFor(s,bodyTerms);if(weights.some(w=>!w))continue;
-   const {snippet,paragraph}=paragraphSnippet(s,bodyTerms);found.push({label:labelOf(s),...paragraph?{paragraph}:{},snippet,score:sectionScore(s.text,labelOf(s),bodyTerms.join(' '),weights)});}
+   found.push({s,score:sectionScore(s.text,labelOf(s),bodyTerms.join(' '),weights)});}
   if(!found.length)continue;
+  // Snippets only for the matches that are returned (top 3 per regulation).
+  const top=found.sort((a,b)=>b.score-a.score).slice(0,3).map(({s,score})=>{const {snippet,paragraph}=paragraphSnippet(s,bodyTerms);return {label:labelOf(s),...paragraph?{paragraph}:{},snippet,score};});
   const bonus=(nameQuery.length>=2&&p.title.includes(nameQuery)?30:0)+(routed?20*titleTerms.length:0);
-  full.push({...meta(doc),score:Math.round((bonus+rank(found))*100)/100,match_type:'full',matched_terms:terms,...routed?{title_terms:titleTerms}:{},matches:found.sort((a,b)=>b.score-a.score).slice(0,3)});
+  full.push({...meta(doc),score:Math.round((bonus+rank(found))*100)/100,match_type:'full',matched_terms:terms,...routed?{title_terms:titleTerms}:{},matches:top});
  }
  full.sort((a,b)=>b.score-a.score||b.matches[0].score-a.matches[0].score||a.regulationName.localeCompare(b.regulationName,'ko'));
  const partial:any[]=[];
@@ -86,7 +88,7 @@ export function unifiedSearch(docs:any[],query:string,limit=5):Unified{
   // Each term's strongest article. Only headings, regulation names or rare terms
   // qualify, so a word that merely occurs somewhere is not presented as the answer.
   for(const t of terms){const candidates:any[]=[],docsWith=preparedDocs.filter(({p})=>p.sections.some(s=>present(s,t))).length;
-   for(const {doc,p} of preparedDocs){let best:any;const inTitle=p.title.includes(normalizeName(t)),ft=folded(t);for(const s of p.sections){if(s.skip)continue;const inLabel=labelFoldedOf(s).includes(ft);if(!inLabel&&!inTitle&&docsWith>5||!present(s,t))continue;const [w]=weightsFor(s,[t]);if(!w)continue;
+   for(const {doc,p} of preparedDocs){let best:any;const inTitle=p.title.includes(normalizeName(t)),ft=folded(t);for(const s of p.sections){if(s.skip)continue;if(!present(s,t))continue;const inLabel=labelFoldedOf(s).includes(ft);if(!inLabel&&!inTitle&&docsWith>5)continue;const [w]=weightsFor(s,[t]);if(!w)continue;
      const cheap=3*w+(inLabel?10:0);if(!best||cheap>best.cheap)best={s,cheap,w,inLabel};}
     // Form/annex down-weighting (sectionScore) only for this document's best candidate.
     if(best)best.score=sectionScore(best.s.text,labelOf(best.s),t,[best.w])+(best.inLabel?10:0)+(inTitle?8:0);
