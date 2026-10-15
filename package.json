@@ -1,6 +1,6 @@
 {
   "name": "add-regulations-mcp",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "private": true,
   "scripts": {
     "prepare": "node scripts/stamp-build.mjs",
@@ -20,7 +20,9 @@
     "test:r2-sixth": "node --import ./scripts/test-loader.mjs scripts/r2/sixth-fixes.ts",
     "test:r2-sixth-live": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/sixth-live.ts",
     "mirror:d1": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/d1/mirror-run.ts",
-    "test:d1-mirror": "node --import ./scripts/test-loader.mjs scripts/d1/mirror-regression.ts"
+    "test:d1-mirror": "node --import ./scripts/test-loader.mjs scripts/d1/mirror-regression.ts",
+    "test:unified-search": "node --import ./scripts/test-loader.mjs scripts/r2/unified-search.ts",
+    "bench:search": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/search-benchmark.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.0.0",

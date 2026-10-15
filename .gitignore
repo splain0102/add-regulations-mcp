@@ -8,3 +8,4 @@ wrangler.d1.generated.jsonc
 
 .r2-types/
 .build-r2/
+.base/
