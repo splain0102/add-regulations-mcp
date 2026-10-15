@@ -39,7 +39,7 @@ export function tableToolResponse(result:Result,query:string,options:Options={})
   const row=rows[index],key=row.table_id,hadTable=key in tables;
   if(!hadTable){
    const evidence=row.header_evidence as {columns?:unknown[];rows?:{row:number;cells:{text:string;col:number;colSpan:number}[]}[];ranges?:unknown}|undefined;
-   tables[key]={analysis_type:row.analysis_type,coordinate_type:row.coordinate_type,columns:compact?(evidence?.columns??row.columns??evidence?.rows?.flatMap(b=>b.cells.filter(c=>c.text.trim()).map(c=>({name:c.text,row:b.row,col:c.col,colSpan:c.colSpan})))??[]).map((c:any)=>({name:c.name,col:c.col,colSpan:c.colSpan??c.span??1})):clean(evidence?.columns??row.columns??evidence?.rows??[]),...(!compact?{headers:clean(evidence?.rows??[]),ranges:clean(evidence?.ranges)}:{})};
+   tables[key]={analysis_type:row.analysis_type,coordinate_type:row.coordinate_type,columns:compact?((evidence?.columns??row.columns??evidence?.rows?.flatMap(b=>b.cells.filter(c=>c.text.trim()).map(c=>({name:c.text,row:b.row,col:c.col,colSpan:c.colSpan})))??[]) as any[]).map((c:any)=>({name:c.name,col:c.col,colSpan:c.colSpan??c.span??1})):clean(evidence?.columns??row.columns??evidence?.rows??[]),...(!compact?{headers:clean(evidence?.rows??[]),ranges:clean(evidence?.ranges)}:{})};
   }
   const value=compact?compactRow(row):clean(row);
   selected.push(value);data.next_offset=index+1;
@@ -59,3 +59,4 @@ export function tableToolResponse(result:Result,query:string,options:Options={})
  if(!fits())throw new Error('layout_error: table metadata exceeds the response budget');
  return envelope();
 }
+

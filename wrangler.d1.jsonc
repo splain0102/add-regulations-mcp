@@ -1,0 +1,12 @@
+{
+  "name": "add-regulations-mcp-d1-preview",
+  "main": "src/d1-worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "keep_vars": true,
+  "observability": {"enabled": true},
+  "d1_databases": [{"binding": "REGULATIONS_DB", "database_name": "add-regulations", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations"}],
+  "kv_namespaces": [{"binding": "OAUTH_KV", "id": "9d1edd2663b14487a1d5eade64e2c445"}],
+  "durable_objects": {"bindings": [{"name":"CORPUS_INDEX_COORDINATOR","class_name":"CorpusIndexCoordinator"}]},
+  "migrations": [{"tag":"corpus-index-coordinator-v1","new_sqlite_classes":["CorpusIndexCoordinator"]}]
+}

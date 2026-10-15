@@ -977,16 +977,16 @@ async function layoutFromLoaded(loaded:Awaited<ReturnType<typeof loadLatestDocum
 export async function getLatestRegulationLayout(name:string){return layoutFromLoaded(await loadLatestDocument(name));}
 
 /** Same cached download and latest-file selection as all original tools. */
-export async function searchLatestRegulationTable(name:string,query:string){
- const loaded=await loadLatestDocument(name),{document}=loaded,meta=documentMeta(loaded);
+export async function searchLatestRegulationTable(name:string,query:string,prepared?:Awaited<ReturnType<typeof loadLatestDocument>>,preparedMeta?:ReturnType<typeof documentMeta>,options:{allRows?:boolean}={}){
+ const loaded=prepared??await loadLatestDocument(name),{document}=loaded,meta=preparedMeta??documentMeta(loaded);
  if(document.file.extension==='pdf'){
   if(!document.pdfPages){
    if(!document.pdfPending)document.pdfPending=(async()=>{const parsed=await extractPdfRichContent(document.file.bytes);if(parsed.layoutSkippedReason)throw new DocumentError('layout_error',parsed.layoutSkippedReason);document.pdfPages=parsed.pages;})();
    try{await document.pdfPending;}finally{document.pdfPending=undefined;}
   }
-  const priorLayout=await layoutFromLoaded(loaded);
+  const priorLayout=preparedMeta?{rows:document.rows??[],layout_debug:document.layoutDebug}:await layoutFromLoaded(loaded);
   const terms=query.trim().split(/\s+/).map(normalizeTableSearch);
-  const matches=searchPdfLayoutRows(document.pdfPages!,query,Number.MAX_SAFE_INTEGER);
+  const matches=options.allRows?document.pdfPages!.flatMap(page=>page.rows.map(row=>({page,row,mode:'row' as const}))):searchPdfLayoutRows(document.pdfPages!,query,Number.MAX_SAFE_INTEGER);
   const rows=matches.flatMap<SearchTableRow>(({page,row,mode})=>{
    const detected=detectKnownPdfHeader(page.rows),isDelegation=!!detected&&detected.matched>=2;
    const cells=row.segments.map(segment=>({text:segment.text,x0:segment.x,x1:segment.xEnd,y:row.y,coordinate_type:'pdf_point',source_items:segment.sourceItems}));

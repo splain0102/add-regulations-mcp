@@ -1,0 +1,36 @@
+name: D1 hourly regulation sync
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_sha:
+        description: Force raw SHA verification of all current attachments
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: add-d1-sync-production
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: github.ref == 'refs/heads/main' && vars.D1_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run sync:d1
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          CLOUDFLARE_D1_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          FORCE_SHA: ${{ inputs.force_sha == true && 'true' || 'false' }}
