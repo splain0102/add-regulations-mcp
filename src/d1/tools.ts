@@ -20,6 +20,7 @@ export async function runD1Tool(db:D1Database,tool:string,input:Input={},build='
   }
   const meta=(d:any)=>({regulationName:d.title,revisionDate:d.st_date,updatedDate:d.i_date,fileNo:d.file_no,filename:d.filename,extension:d.extension,sourceUrl:d.source_url,parser_version:d.parser_version,version_check:JSON.parse(d.validation_json),...health});
   if(tool==='get_regulation')return envelope({...meta(doc),selection_evidence:JSON.parse(doc.selection_evidence_json)});
+  if(tool==='search_regulations'){const checked=queryTerms(input.query??'');if(checked.warning)return envelope({...health,warning:{code:checked.warning,message:'검색어는 문자·숫자 중심으로 두 글자 이상 입력하세요.'},results:[],totalMatches:0});}
   if(tool==='list_regulations'||tool==='search_regulations'){
    const q=normalizeName(input.query??''),rows=await sql(`SELECT d.*,count(*) OVER() AS total ${active} AND instr(d.title_normalized,?)>0 ORDER BY CASE WHEN d.title_normalized=? THEN 0 ELSE 1 END,d.title LIMIT ? OFFSET ?`,[snapshot,q,q,limit,offset]);
    return envelope({...health,results:rows.map(meta),totalMatches:rows[0]?.total??0,limit,offset,next_offset:offset+rows.length<(rows[0]?.total??0)?offset+rows.length:null});

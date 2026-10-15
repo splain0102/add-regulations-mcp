@@ -25,7 +25,7 @@ try{
  const samples=JSON.parse(gunzipSync(Buffer.from(readFileSync('scripts/fixtures/d1-samples.json.gz.b64','utf8'),'base64')).toString('utf8')),wanted=['기술용역 업무규정','여비규정','위임전결규정'];const catalog:any={items:[],documents:[],verified_at:new Date().toISOString()};
  await adapter.batch([{sql:"INSERT INTO sync_runs(run_id,build_sha,started_at,status) VALUES('test','test',?,'running')",params:[catalog.verified_at]}]);
  const baselines=new Map();
- for(const title of wanted){const saved=samples.find(d=>d.item?.title===title);assert(saved,title);const loaded={...saved.document,bytes:new Uint8Array(Buffer.from(saved.document.bytes,'base64'))};assert.equal(hash(loaded.bytes),saved.raw_sha256);loaded.text=await hwpToText(loaded.bytes);const records=await documentRecords(saved.item,loaded);await loadDocument(adapter,records);await loadDocument(adapter,records);catalog.items.push(saved.item);catalog.documents.push({item:saved.item,document_id:records.document.document_id,verified_at:catalog.verified_at});const tables=extractHwpTables(loaded.bytes),rows=structureTables(tables,loaded.text);baselines.set(title,{tables,rows,loaded,item:saved.item});}
+ for(const title of wanted){const saved=samples.find(d=>d.item?.title===title);assert(saved,title);const loaded={...saved.document,bytes:new Uint8Array(Buffer.from(saved.document.bytes,'base64'))};assert.equal(hash(loaded.bytes),saved.raw_sha256);loaded.text=await hwpToText(loaded.bytes);const records=await documentRecords(saved.item,loaded);await loadDocument(adapter,records);await loadDocument(adapter,records);catalog.items.push(saved.item);catalog.documents.push({item:saved.item,document_id:records.document.document_id,verified_at:catalog.verified_at});const tables=extractHwpTables(loaded.bytes),rows=structureTables(tables,loaded.text);baselines.set(title,{tables,rows,loaded,records,item:saved.item});}
  const snapshot=await publishCatalog(adapter,'test',catalog,null);report.tests.push('complete snapshot published');
  const original=globalThis.fetch;globalThis.fetch=async()=>{throw Error('ALIO access forbidden');};
  try{for(const name of wanted)for(const query of ['식비','비고','제10조']){
@@ -47,11 +47,12 @@ try{
  await adapter.batch([{sql:"INSERT INTO sync_runs(run_id,build_sha,started_at,status) VALUES('bad','test',?,'running')",params:[catalog.verified_at]}]);
  await assert.rejects(()=>publishCatalog(adapter,'bad',catalog,'wrong'));assert.equal((await adapter.query('SELECT active_snapshot_id FROM service_state'))[0].active_snapshot_id,snapshot);
  report.tests.push('publication conflict rollback preserves committed snapshot');
- const sourceDoc=(await adapter.query('SELECT * FROM documents LIMIT 1'))[0],partial={...sourceDoc,document_id:'interrupted-test',metadata_sha256:'interrupted-test',indexed_at:null};const columns=Object.keys(partial);
+ const sourceDoc=(await adapter.query('SELECT * FROM documents WHERE document_id=?',[catalog.documents[0].document_id]))[0],partial={...sourceDoc,document_id:'interrupted-test',metadata_sha256:'interrupted-test',indexed_at:null};const columns=Object.keys(partial);
  await adapter.batch([{sql:`INSERT INTO documents(${columns.join(',')}) VALUES(${columns.map(()=>'?').join(',')})`,params:Object.values(partial)}]);
  await assert.rejects(()=>publishCatalog(adapter,'bad',{...catalog,items:[catalog.items[0]],documents:[{...catalog.documents[0],document_id:partial.document_id}]},snapshot));
  assert.equal((await adapter.query('SELECT active_snapshot_id FROM service_state'))[0].active_snapshot_id,snapshot);
  report.tests.push('interrupted incomplete document cannot publish');
+ const originalRecords=baselines.get(catalog.items[0].title).records;await loadDocument(adapter,{...originalRecords,document:{...originalRecords.document,document_id:partial.document_id,metadata_sha256:partial.metadata_sha256}});assert((await adapter.query('SELECT indexed_at FROM documents WHERE document_id=?',[partial.document_id]))[0].indexed_at);report.tests.push('interrupted document resumes and validates without changing active catalog');
 
  const page1=await runD1Tool(db,'search_regulation_table',{name:'위임전결규정',query:'계약 승인',limit:5,offset:0});const page2=await runD1Tool(db,'search_regulation_table',{name:'위임전결규정',query:'계약 승인',limit:5,offset:5});assert(!page1.isError&&!page2.isError);assert.equal(page1.structuredContent.next_offset,5);report.tests.push('offset pagination');
  report.database_bytes=(await db.prepare('SELECT 1').all()).meta.size_after??null;

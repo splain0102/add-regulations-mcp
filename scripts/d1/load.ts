@@ -1,8 +1,8 @@
 import {hash} from './records';
 export type Database={query:(sql:string,params?:any[])=>Promise<any[]>;batch:(rows:{sql:string;params:any[]}[])=>Promise<void>};
-const statement=(table:string,row:Record<string,any>)=>({sql:`INSERT INTO ${table} (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(()=>'?').join(',')})`,params:Object.values(row)});
+const statement=(table:string,row:Record<string,any>)=>({sql:`INSERT OR IGNORE INTO ${table} (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(()=>'?').join(',')})`,params:Object.values(row)});
 export async function loadDocument(db:Database,records:any){
- const d=records.document,exists=await db.query('SELECT indexed_at FROM documents WHERE document_id=?',[d.document_id]);if(exists[0]?.indexed_at)return;if(exists.length)await discardUnpublished(db,d.document_id);
+ const d=records.document,exists=await db.query('SELECT indexed_at FROM documents WHERE document_id=?',[d.document_id]);if(exists[0]?.indexed_at)return;
  // Partial immutable documents are not publishable until every declared record exists.
  const statements=[{sql:'INSERT OR IGNORE INTO regulations(regulation_id,alio_rule_no,detail_url) VALUES(?,?,?)',params:[d.regulation_id,d.regulation_id,d.source_url]},statement('documents',d)];
  // A document is loaded in a bounded batch sequence. On retry remove only this
@@ -19,7 +19,7 @@ export async function loadDocument(db:Database,records:any){
   const [counts]=await db.query('SELECT (SELECT count(*) FROM sections WHERE document_id=?) AS sections,(SELECT count(*) FROM table_rows r JOIN table_definitions t ON t.table_pk=r.table_pk WHERE t.document_id=?) AS rows',[d.document_id,d.document_id]);
   if(counts.sections!==records.sections.length||counts.rows!==records.rows.length)throw Error('document_count_mismatch');
   await db.batch([{sql:'UPDATE documents SET indexed_at=?,expected_sections=?,expected_rows=? WHERE document_id=?',params:[new Date().toISOString(),records.sections.length,records.rows.length,d.document_id]}]);
- }catch(error){await discardUnpublished(db,d.document_id);throw error;}
+ }catch(error){/* Keep deterministic partial rows for quota/network retry. They remain unpublished. */throw error;}
 }
 export async function discardUnpublished(db:Database,id:string){
  const [used]=await db.query('SELECT count(*) AS n FROM catalog_entries WHERE document_id=?',[id]);if(used.n)throw Error('refuse_to_delete_referenced_document');

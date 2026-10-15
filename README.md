@@ -326,7 +326,7 @@ The producer runs in Node/GitHub Actions, checks ALIO every hour (`17 * * * *` U
 
 D1 stores versioned metadata, article/annex/form sections, original table evidence and row records. Offline two-character grams feed separate FTS5 indexes. Candidates are verified against normalized content. A stored normalization-to-original offset map permits original-text snippets even when a query matches spaces/commas removed during normalization. Original cell row/col/spans, headers, footnotes and approval symbols remain in detailed evidence; merged display values do not create additional single-token origin-cell matches.
 
-R2 stores immutable originals under `raw/<fileNo>/<SHA-256>/<filename>` and parsed snapshots under `parsed/<documentId>.json`. The producer verifies uploaded bytes. D1 loading uses bounded transactions and an `indexed_at` completion marker. Only fully loaded documents enter a validated catalog. A guarded publication transaction swaps one active snapshot pointer and retains the previous pointer. Failed or interrupted runs leave the preceding serving catalog intact. Unfinished documents are safely removed/reloaded on retry; completed unpublished documents are reusable. Diagnostic tools return D1 sync state, not live ALIO HTML.
+R2 stores immutable originals under `raw/<fileNo>/<SHA-256>/<filename>` and parsed snapshots under `parsed/<documentId>.json`. The producer verifies uploaded bytes. D1 loading uses bounded transactions and an `indexed_at` completion marker. Only fully loaded documents enter a validated catalog. A guarded publication transaction swaps one active snapshot pointer and retains the previous pointer. Failed or interrupted runs leave the preceding serving catalog intact. Unfinished immutable documents resume using unique-key inserts on retry; completed unpublished documents are reusable. Diagnostic tools return D1 sync state, not live ALIO HTML.
 
 ### Provision and configure
 
@@ -350,7 +350,7 @@ FORCE_SHA=true npm run sync:d1
 # guarded D1 transaction by an authenticated operator, never by a public tool.
 ```
 
-The Actions variable `D1_ENABLED=true` enables hourly D1 sync and disables the old KV refresh workflow. Do this only after resources/secrets and the initial catalog are validated. `workflow_dispatch` provides manual reindexing. Actions scheduling is approximate, not a guarantee of an exact hourly start. `D1_WRITE_BUDGET` defaults to 80,000 accounted writes/day for this producer; FTS and index writes count too. Quota failures are visible and preserve the active catalog. Account-wide competing usage and storage/R2 retention require operational monitoring; this draft does not claim they were remotely verified.
+The Actions variable `D1_ENABLED=true` enables hourly D1 sync and disables the old KV refresh workflow. Do this only after resources/secrets and the initial catalog are validated. `workflow_dispatch` provides manual reindexing. Actions scheduling is approximate, not a guarantee of an exact hourly start. `D1_WRITE_BUDGET` defaults to 80,000 accounted writes/day for this producer; FTS and index writes count too. Quota failures are visible and preserve the active catalog. D1 REST calls are rate limited in the producer. Account-wide competing usage and storage/R2 retention require operational monitoring; this draft does not claim they were remotely verified.
 
 ### Verify and promote
 
