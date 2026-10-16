@@ -70,8 +70,9 @@ try{
  // Unchanged tools must answer identically (same catalog content, same parser).
  for(const [tool,input] of [['search_regulation_table',{name:'위임전결규정',query:'국외출장',limit:100}],['search_regulation_text',{name:'여비규정',query:'제23조',limit:20}],['get_regulation',{name:'포상금 지급방침'}],['search_regulations',{query:'직제'}]] as const){
   const a=(await tools.base.run(new tools.base.Reader(buckets.base),tool,input,'base')).structuredContent,b=(await tools.new.run(new tools.new.Reader(buckets.new),tool,input,'new')).structuredContent;
-  // Fields added on purpose (공통/개별 위임전결 scope) are not a compatibility change.
-  const added=(k:string,v:any)=>['delegation_scope','scope_label','department'].includes(k)?undefined:v,same=JSON.stringify({...a,metrics:undefined})===JSON.stringify({...b,metrics:undefined},added);report.compatibility.push({tool,input,identical:same,...same?{}:{base_total:a.totalMatches,new_total:b.totalMatches}});}
+  // Fields added on purpose (공통/개별 위임전결 scope, 시행일 basis of version_check) are
+  // not a compatibility change; they are dropped from both sides before comparing.
+  const added=(k:string,v:any)=>['delegation_scope','scope_label','department','revision_basis','current_effective_date','revision_verification'].includes(k)?undefined:v,same=JSON.stringify({...a,metrics:undefined},added)===JSON.stringify({...b,metrics:undefined},added);report.compatibility.push({tool,input,identical:same,...same?{}:{base_total:a.totalMatches,new_total:b.totalMatches}});}
  const sum=(k:string,n:'base'|'new')=>report.queries.filter((q:any)=>q.id.match(/^(모험|기술|직제|연구소|외국인 보)/)).map((q:any)=>q[n][k]);
  report.summary={first_call_success:{base:report.queries.filter((q:any)=>q.base.correct).length,new:report.queries.filter((q:any)=>q.new.correct).length,total:report.queries.length},required7_cold_p95_max:{base:Math.max(...sum('cold_p95','base')),new:Math.max(...sum('cold_p95','new'))},required7_warm_p95_max:{base:Math.max(...sum('warm_p95','base')),new:Math.max(...sum('warm_p95','new'))}};
  report.passed=report.queries.every((q:any)=>q.new.correct)&&report.compatibility.every((c:any)=>c.identical||c.tool==='search_regulations');

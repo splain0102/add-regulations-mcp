@@ -167,8 +167,10 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  // An undated 부칙 that stacks one "…부터 시행한다" line per amendment records each
  // revision only by its enforcement line; the last line is the current version, so
  // older 개정 notes (e.g. in a 별표) are not reported as the body's last revision.
- const stacked=lastHeading&&!/20\d{2}/.test(lastHeading[0])?lastStackedEffective(text,lastHeading.index!):null,stackedDate=stacked?normalize(`${stacked[1]}.${stacked[2]}.${stacked[3]}`):null;
- if(stackedDate&&r&&r<stackedDate)r=undefined;
+ // The same holds for any undated last 부칙: its own 시행일 marks the current version,
+ // so an older 개정 note inside it (e.g. a 별표 history line) is stale evidence.
+ const undated=Boolean(lastHeading&&!/20\d{2}/.test(lastHeading[0])),stacked=undated?lastStackedEffective(text,lastHeading!.index!):null,stackedDate=stacked?normalize(`${stacked[1]}.${stacked[2]}.${stacked[3]}`):null,current=stackedDate??(undated?e??null:null);
+ if(current&&r&&r<current)r=undefined;
  if(r)dates.push({source:'body_last_revision_date',date:r});if(e)dates.push({source:'body_last_effective_date',date:e});
  const dateRange=(value:string):[number,number]=>{
   if(value.length===7){const [year,month]=value.split('-').map(Number);return [Date.UTC(year,month-1,1),Date.UTC(year,month,0)];}
@@ -177,11 +179,16 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  // Month-only filenames describe an interval, never an invented day. Compare
  // nearby effective dates against that interval and exact revision evidence.
  const dayDiff=(a:string,b:string)=>{const x=dateRange(a),y=dateRange(b);return Math.max(0,x[0]-y[1],y[0]-x[1])/86400000;};
- const mismatches=dates.flatMap((d,i)=>dates.slice(i+1).filter(o=>(o.date.length===7||d.date.length===7)?o.date.slice(0,7)!==d.date.slice(0,7):o.date!==d.date).map(o=>({left:d,right:o,kind:d.source.includes('effective')||o.source.includes('effective')?'effective_date_difference':'revision_date_mismatch'})));
- const effectiveDifferences=mismatches.filter(m=>m.kind==='effective_date_difference');
- const otherDifferences=mismatches.filter(m=>m.kind!=='effective_date_difference');
- return {dates,revision_evidence:revisionSource.slice(0,900),revision_verification:dates.some(d=>d.source==='body_last_revision_date')||stackedDate&&stackedDate===a?'verified':'unverified',...stackedDate?{revision_basis:'stacked_effective_lines',current_effective_date:stackedDate}:{},checked:dates.length>=2,
+ // ALIO often posts the 시행일 as the revision date: when it equals the body's 시행일,
+ // a different 공포/개정 date in the 부칙 heading is information, not a mismatch.
+ // A 시행일 far (60+ days) from ALIO means the attachment and the listing disagree.
+ const postedAsEffective=Boolean(a&&e&&a===e);
+ const kindOf=(d:{source:string;date:string},o:{source:string;date:string})=>{const eff=d.source.includes('effective')||o.source.includes('effective');if(eff)return dayDiff(d.date,o.date)>60&&[d,o].some(x=>x.source==='alio_revision_date')?'effective_date_far_from_alio':'effective_date_difference';return postedAsEffective&&[d,o].some(x=>x.source==='body_last_revision_date')?'alio_posted_effective_date':'revision_date_mismatch';};
+ const mismatches=dates.flatMap((d,i)=>dates.slice(i+1).filter(o=>(o.date.length===7||d.date.length===7)?o.date.slice(0,7)!==d.date.slice(0,7):o.date!==d.date).map(o=>({left:d,right:o,kind:kindOf(d,o)})));
+ const effectiveDifferences=mismatches.filter(m=>m.kind==='effective_date_difference'||m.kind==='alio_posted_effective_date');
+ const otherDifferences=mismatches.filter(m=>m.kind==='revision_date_mismatch'||m.kind==='effective_date_far_from_alio');
+ return {dates,revision_evidence:revisionSource.slice(0,900),revision_verification:dates.some(d=>d.source==='body_last_revision_date')||current&&current===a?'verified':'unverified',...stackedDate?{revision_basis:'stacked_effective_lines',current_effective_date:stackedDate}:undated&&current&&!r?{revision_basis:'undated_supplement_effective',current_effective_date:current}:{},checked:dates.length>=2,
  info:effectiveDifferences.length?{code:'effective_date_difference',mismatches:effectiveDifferences}:null,
  warning:otherDifferences.length?{code:'version_date_mismatch',mismatches:otherDifferences,note:'원문 개정일과 공시 또는 첨부파일 날짜를 확인하세요.'}:null,
- missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s)&&!(stackedDate&&s==='body_last_revision_date'))};
+ missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s)&&!(current&&s==='body_last_revision_date'))};
 }
