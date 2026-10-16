@@ -22,7 +22,8 @@
     "mirror:d1": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/d1/mirror-run.ts",
     "test:d1-mirror": "node --import ./scripts/test-loader.mjs scripts/d1/mirror-regression.ts",
     "test:unified-search": "node --import ./scripts/test-loader.mjs scripts/r2/unified-search.ts",
-    "bench:search": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/search-benchmark.ts"
+    "bench:search": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/search-benchmark.ts",
+    "audit:effective": "node --use-env-proxy --import ./scripts/test-loader.mjs scripts/r2/effective-audit.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.0.0",

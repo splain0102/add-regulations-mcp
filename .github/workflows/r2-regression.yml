@@ -62,11 +62,21 @@ jobs:
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      - name: Audit 시행일/개정일 evidence of every regulation (report only)
+        if: always()
+        run: npm run audit:effective
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: search-benchmark
-          path: reports/search-benchmark.json
+          path: |
+            reports/search-benchmark.json
+            reports/effective-audit.json
           if-no-files-found: ignore
 
   actual-r2:
