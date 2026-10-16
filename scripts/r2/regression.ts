@@ -58,10 +58,11 @@ try{
  report.tests.push('body section matches and normalized queries');
  const filter=bloom('전문가 내부승인 300만 원');assert(mightMatch(filter,['전문가','내부승인']));assert(!mightMatch(filter,['매우희귀없는단어']));assert.equal(queryTerms('민·군').warning,null);
  // 공통(전 부서) / 개별(해당 부서) delegation scope on 위임전결규정 rows, and filtering by it.
- {const all=(await call('search_regulation_table',{name:'위임전결규정',query:'국외출장',limit:100})).structuredContent.results,scopes=new Set(all.map((r:any)=>r.delegation_scope));
+ {const page=(await call('search_regulation_table',{name:'위임전결규정',query:'국외출장',limit:100})).structuredContent;assert.equal(page.results.length,page.totalMatches,'scope fields must not shrink a compact page');
+  const all=page.results,scopes=new Set(all.map((r:any)=>r.delegation_scope));
   assert(all.length&&all.every((r:any)=>r.delegation_scope==='common'||r.delegation_scope==='individual'),JSON.stringify(all.slice(0,2)));
   const individual=all.filter((r:any)=>r.delegation_scope==='individual');assert(individual.every((r:any)=>r.department&&r.department===r.category),JSON.stringify(individual[0]));
-  const common=all.filter((r:any)=>r.delegation_scope==='common');assert(common.every((r:any)=>!r.department&&/전 부서/.test(r.scope_label)),JSON.stringify(common[0]));
+  const common=all.filter((r:any)=>r.delegation_scope==='common');assert(common.every((r:any)=>!r.department),JSON.stringify(common[0]));
   for(const [input,want] of [[{query:'개별 국외출장'},'individual'],[{query:'공통 국외출장'},'common'],[{query:'국외출장',delegation_scope:'individual'},'individual']] as const){const rows=(await call('search_regulation_table',{name:'위임전결규정',limit:100,...input})).structuredContent.results;assert(rows.length&&rows.every((r:any)=>r.delegation_scope===want),JSON.stringify(input)+' '+rows.length);}
   report.tests.push(`위임전결 공통/개별 구분: 국외출장 ${common.length} common + ${individual.length} individual rows (${[...scopes].join(',')}); '공통'/'개별' words and delegation_scope filter`);}
  {const a=(await call('search_all_regulations',{query:'개별 연구계획부 사업 승인 전결권자'})).structuredContent,m=a.results.find((r:any)=>r.regulationName==='위임전결규정')?.matches?.[0];assert(m?.delegation_scope==='individual'&&/연구계획부/.test(m.department),JSON.stringify(a).slice(0,1200));}
