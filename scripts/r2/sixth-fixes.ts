@@ -8,6 +8,7 @@ import {hwpToText} from '@ssabrojs/hwpxjs/browser';
 import {documentRecords,hash} from '../d1/records';
 import {extractRevisionSection} from '../../src/regulation-core/revision-probe';
 import {supplementLabels,prepareSearchSections} from '../../src/regulation-core/search-sections';
+import {versionCheck} from '../../src/regulation-core/table-layout';
 import {tokenWeights} from '../../src/regulation-core/search-ranking';
 import {searchBodies} from '../../src/r2/global-search';
 import {R2Reader} from '../../src/r2/read';
@@ -63,6 +64,10 @@ try{
  check('7 "부칙(2026.9.28.) 제2조(경과조치)" 형식',labels.includes('부칙(방침 제1012호, 2026.9.28.)')&&labels.includes('부칙(2026.9.28.) 제2조(경과조치)'),labels);
  const undated='제1조(목적) 본문\n부    칙\n제1조(시행일) 이 방침은 2018년 5월 1일부터 시행한다.\n제2조(경과조치) 종전\n',undatedLabels=[...supplementLabels(undated,prepareSearchSections(undated).bounds).values()];
  check('7 날짜 머리 없는 부칙: 시행일로 구분',JSON.stringify(undatedLabels)===JSON.stringify(['부칙(시행 2018.5.1.)','부칙(시행 2018.5.1.) 제1조(시행일)','부칙(시행 2018.5.1.) 제2조(경과조치)']),undatedLabels);
+ // 강사 선정 및 교육경비 집행방침: one undated 부칙 stacking a 시행 line per amendment → the last line is current.
+ const stackedText='제7조(강의연구비) 본문 (개정 2016. 1. 12., 2018. 5. 1., 2025. 4. 8.)\n부    칙\n제1조(시행일) 이 방침은 2014년 2월 10일부터 시행한다.\n제2조(경과조치) 종전\n부    칙\n이 방침은 2016년 1월 12일부터 시행한다.\n이 방침은 2018년 5월  1일부터 시행한다.\n이 방침은 2025년 4월  8일부터 시행한다.\n<별표 제1호> 강의료지급기준 (삭제 2018.5.1.)\n<별표 제2호> 원고료 지급기준 (개정 2016.1.12., 2018.5.1.)\n지급단가\n',stackedLabels=[...supplementLabels(stackedText,prepareSearchSections(stackedText).bounds).values()],stackedCheck=versionCheck('2025.04.08','2025-04-08',stackedText);
+ check('7 쌓인 시행일 줄: 맨 아래 줄을 시행일로',stackedLabels.at(-1)==='부칙(시행 2025.4.8.)'&&stackedLabels[0]==='부칙(시행 2014.2.10.)',stackedLabels);
+ check('7 쌓인 시행일 줄: 옛 개정 표기로 개정일 불일치 경고를 내지 않음',!stackedCheck.warning&&stackedCheck.revision_verification==='verified'&&stackedCheck.dates.find((x:any)=>x.source==='body_last_effective_date')?.date==='2025-04-08',stackedCheck);
  const hit=(await call('search_regulation_text',{name:'여비규정',query:'시행일',scope:'body',limit:20})).structuredContent.results.map((x:any)=>x.label);
  check('7 검색 결과 라벨에 부칙 날짜',hit.some((l:string)=>l.startsWith('부칙(2024.2.16.) 제1조')),hit.slice(-3));
  // 8. Snippet boundaries and revision evidence limited to 부칙.

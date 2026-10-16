@@ -48,3 +48,13 @@ export async function documentRecords(item:any,loaded:any){
  for(const row of rows){(row as any).grams=grams([row.text_original,...row.match.aliases,...row.match.paths].join(' ')).join(' ');if(Buffer.byteLength(JSON.stringify(row))>500000)throw Error('table_record_size_limit');}
  return {document,sections,rows};
 }
+// Section labels and the version check depend only on the stored text, so a catalog
+// rebuild recomputes them and picks up rule fixes (e.g. stacked 부칙 시행일 lines)
+// without re-downloading or re-parsing files.
+export function refreshDerived(records:any,text:string){
+ const b=prepareSearchSections(text),labels=supplementLabels(text,b.bounds),ats=b.bounds.slice(0,-1).filter((at:number)=>!b.excluded?.includes(at)),d=records.document;
+ const same=ats.length===records.sections.length&&records.sections.every((s:any,i:number)=>text.slice(ats[i],b.bounds[b.bounds.indexOf(ats[i])+1])===s.text_original);
+ const sections=same?records.sections.map((s:any,i:number)=>{const label=labels.get(ats[i]);return label&&label!==s.section_label&&s.kind==='supplement'?{...s,section_label:label,grams:grams(label+' '+s.text_original).join(' ')}:s;}):records.sections;
+ let selectedDate:string|undefined;try{selectedDate=JSON.parse(d.selection_evidence_json??'{}').selectedDate??undefined;}catch{}
+ return {...records,sections,document:{...d,validation_json:JSON.stringify(versionCheck(d.st_date??undefined,selectedDate,text))}};
+}

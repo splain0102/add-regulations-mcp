@@ -1,14 +1,14 @@
 import {normalize,normalizeName} from '../../src/d1/normalize';
 import {bloom} from '../../src/r2/bloom';
 import {extractCitations} from '../../src/r2/global-search';
-import {hash} from '../d1/records';
+import {hash,refreshDerived} from '../d1/records';
 import {PARSER_VERSION} from '../../src/regulation-core/parser-version';
 import {prepareSearchSections} from '../../src/regulation-core/search-sections';
 import {delegationScopes,scopeFields} from '../../src/regulation-core/delegation-scope';
 import type {ObjectRef,R2Catalog,R2Document,SearchRecord} from '../../src/r2/types';
 // Bumped when catalog-level search data changes without a parser change, so the
 // next sync rebuilds the catalog from stored snapshots (no downloads).
-export const SEARCH_FORMAT=3;
+export const SEARCH_FORMAT=4;
 export type StoredDocument={records:any;loaded:any;verified_at?:string};
 export function buildR2Catalog(stored:StoredDocument[],build:string,now=new Date().toISOString()){
  const objects=new Map<string,Uint8Array>();
@@ -17,7 +17,7 @@ export function buildR2Catalog(stored:StoredDocument[],build:string,now=new Date
  // Repealed regulations keep their own shards so default global searches never
  // read them; include_repealed opts in.
  const documents:R2Document[]=[],bodies:any[]=[],tableRows:any[]=[],repealedBodies:any[]=[],repealedRows:any[]=[];
- for(const saved of stored){const {document:d,sections,rows}=saved.records;if(!d?.document_id||d.parser_version!==PARSER_VERSION||!Array.isArray(sections)||!Array.isArray(rows))throw Error('invalid_parsed_snapshot');
+ for(const saved of stored){const {document:d,sections,rows}=saved.records?.document?refreshDerived(saved.records,String(saved.loaded?.text??'')):saved.records;if(!d?.document_id||d.parser_version!==PARSER_VERSION||!Array.isArray(sections)||!Array.isArray(rows))throw Error('invalid_parsed_snapshot');
   if(sections.some((s:any)=>normalize(s.text_original)!==s.text_normalized||!String(saved.loaded.text??'').includes(s.text_original)))throw Error('parsed_body_validation_failed:'+d.title);
   const summaries:SearchRecord[]=[];let evidenceBytes=2;
   const pending:{summary:any;payload:any}[]=[];
