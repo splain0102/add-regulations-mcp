@@ -18,6 +18,7 @@ try{
  await migrate('migrations/0001_regulation_index.sql');
  await d1.prepare("INSERT INTO sync_usage(day,run_id,rows_written) VALUES('2026-10-15','old',79999)").run();
  await migrate('migrations/0002_derived_index.sql');
+ await migrate('migrations/0003_delegation_scope.sql');
  const tables=(await d1.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name").all()).results.map((r:any)=>r.name);
  assert(!tables.some((t:string)=>/fts|sections|table_rows|catalog_entries|documents/.test(t)),tables.join());assert(['regulations','versions','units','approvals','sync_state','sync_usage','current_units','current_approvals'].every(t=>tables.includes(t)),tables.join());
  assert.equal((await d1.prepare('SELECT rows_written FROM sync_usage').first<any>())?.rows_written,79999);
@@ -41,6 +42,13 @@ try{
  assert.equal(r.totals.regulations,3);for(const p of perReg)assert(p.units<=p.sections+p.table_rows&&p.units>=p.sections);
  const delegation=stored.find(s=>s.records.document.title==='위임전결규정')!.records.document.regulation_id;
  assert.equal((await one("SELECT count(*) n FROM current_approvals WHERE reg_id=? AND task='8) 공무국외출장'",delegation)).n,8);
+ // 공통(전 부서) / 개별(해당 부서) scope from the [별표] headings; individual rows name their department.
+ const scopeCounts=Object.fromEntries((await d1.prepare("SELECT coalesce(scope,'none') s,count(*) n FROM current_approvals WHERE reg_id=? GROUP BY s").bind(delegation).all()).results.map((r:any)=>[r.s,r.n]));
+ assert(scopeCounts.common>100&&scopeCounts.individual>600,JSON.stringify(scopeCounts));
+ assert.equal((await one("SELECT count(*) n FROM current_approvals WHERE reg_id=? AND scope='individual' AND department IS NOT category",delegation)).n,0);
+ assert.equal((await one("SELECT count(*) n FROM current_approvals WHERE reg_id=? AND scope='common' AND department IS NOT NULL",delegation)).n,0);
+ const planning=(await one("SELECT department d FROM current_approvals WHERE reg_id=? AND scope='individual' AND task LIKE '%연구소 경영정책%' LIMIT 1",delegation))?.d;assert.match(String(planning),/정책기획부/);
+ report.scope_counts=scopeCounts;report.tests.push(`공통/개별 위임전결: ${JSON.stringify(scopeCounts)}; individual rows carry their department (e.g. ${planning})`);
  const director=(await one("SELECT count(*) n FROM current_approvals WHERE reg_id=? AND approver='소장'",delegation)).n,review=(await one('SELECT count(*) n FROM current_approvals WHERE needs_review=1')).n;assert(director>0);
  const byCategory=(await d1.prepare("SELECT category,count(*) n FROM current_approvals WHERE reg_id=? GROUP BY category ORDER BY n DESC LIMIT 3").bind(delegation).all()).results;
  report.stats_examples={director_approvals:director,needs_review:review,top_categories:byCategory};

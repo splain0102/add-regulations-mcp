@@ -4,10 +4,11 @@ import {extractCitations} from '../../src/r2/global-search';
 import {hash} from '../d1/records';
 import {PARSER_VERSION} from '../../src/regulation-core/parser-version';
 import {prepareSearchSections} from '../../src/regulation-core/search-sections';
+import {delegationScopes,scopeFields} from '../../src/regulation-core/delegation-scope';
 import type {ObjectRef,R2Catalog,R2Document,SearchRecord} from '../../src/r2/types';
 // Bumped when catalog-level search data changes without a parser change, so the
 // next sync rebuilds the catalog from stored snapshots (no downloads).
-export const SEARCH_FORMAT=2;
+export const SEARCH_FORMAT=3;
 export type StoredDocument={records:any;loaded:any;verified_at?:string};
 export function buildR2Catalog(stored:StoredDocument[],build:string,now=new Date().toISOString()){
  const objects=new Map<string,Uint8Array>();
@@ -24,9 +25,11 @@ export function buildR2Catalog(stored:StoredDocument[],build:string,now=new Date
   const add=(summary:any,payload:any)=>{const size=Buffer.byteLength(JSON.stringify(payload))+1;if(pending.length&&evidenceBytes+size>300_000)flush();pending.push({summary,payload});evidenceBytes+=size;};
   for(const s of sections)add({id:s.ordinal,kind:'body',ordinal:s.ordinal,label:s.section_label,n:s.text_normalized},{text:s.text_original});
   // group links the sub-rows of one delegation task for group_by='task'.
-  rows.forEach((r:any,i:number)=>add({id:i,kind:'table',ordinal:i,label:r.table_key+':'+r.source_row_number,match:r.match,analysis_type:r.analysis_type,...r.result?.task?{group:r.table_key+':'+normalize(String(r.result.task))}:{}},{result:r.result}));flush();
+  // 공통/개별 위임전결 scope of each delegation table, from the headings in the text.
+  const scopes=delegationScopes(String(saved.loaded.text??''),rows),scoped=(r:any)=>scopeFields(scopes.get(r.table_key),r.result);
+  rows.forEach((r:any,i:number)=>add({id:i,kind:'table',ordinal:i,label:r.table_key+':'+r.source_row_number,match:r.match,analysis_type:r.analysis_type,...r.result?.task?{group:r.table_key+':'+normalize(String(r.result.task))}:{},...scopes.get(r.table_key)&&r.analysis_type==='delegation_table'?{scope:scopes.get(r.table_key)!.delegation_scope}:{}},{result:{...r.result,...scoped(r)}}));flush();
   const repealed=d.status==='repealed';
-  for(const r of summaries.filter(r=>r.kind==='table')){const res=rows[r.ordinal]?.result??{};(repealed?repealedRows:tableRows).push({document_id:d.document_id,label:r.label,match:r.match,analysis_type:r.analysis_type,text:String(rows[r.ordinal]?.text_original??'').slice(0,850),...res.analysis_type==='delegation_table'&&res.approver?{task:res.task??null,condition:res.condition??null,approver:res.approver}:{}});}
+  for(const r of summaries.filter(r=>r.kind==='table')){const res=rows[r.ordinal]?.result??{};(repealed?repealedRows:tableRows).push({document_id:d.document_id,label:r.label,match:r.match,analysis_type:r.analysis_type,text:String(rows[r.ordinal]?.text_original??'').slice(0,850),...res.analysis_type==='delegation_table'&&res.approver?{task:res.task??null,condition:res.condition??null,approver:res.approver,...scoped(rows[r.ordinal])}:{}});}
   documents.push({...d,verified_at:saved.verified_at??now,search:chunks(summaries)});
   const text=String(saved.loaded.text??'');if(!text.trim())throw Error('missing_parsed_body:'+d.title);
   (repealed?repealedBodies:bodies).push({regulation_id:d.regulation_id,title:d.title,fileNo:d.file_no,revisionDate:d.st_date,updatedDate:d.i_date,sourceUrl:d.source_url,sha256:d.sha256,text,searchSections:prepareSearchSections(text)});

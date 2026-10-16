@@ -10,6 +10,8 @@ function compactRow(row:SearchTableRow){
  if(row.analysis_type==='delegation_table'){
   for(const key of delegationKeys)value[key]=row[key]??(key==='footnotes'||key==='approvers'?[]:key==='multi_approver'?false:null);
   if(Array.isArray(row.related_regulations)&&row.related_regulations.length)value.related_regulations=row.related_regulations;
+  // 공통(전 부서) or 개별(해당 부서) delegation, when the regulation separates them.
+  for(const key of ['delegation_scope','scope_label','department'])if(row[key])value[key]=row[key];
  }else value.values=row.values??{};
  if(row.coordinate_type==='pdf_point')Object.assign(value,{coordinate_type:'pdf_point',page:row.page,y:row.y,coordinate:row.coordinate,symbol_coordinates:row.symbol_coordinates,raw_text:row.raw_text??(Array.isArray(row.cells)?row.cells.map((c:any)=>c.text).join(' '):''),columns:row.columns??[]});
  return value;
