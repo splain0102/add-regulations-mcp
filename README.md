@@ -1,4 +1,11 @@
-# R2 사전 색인 검색: 2.3.0
+# R2 사전 색인 검색: 2.4.0
+
+## 2.4.0 — 위임전결 공통/개별 구분
+
+- 위임전결규정 [별표]의 "가. 공통 위임전결사항(전 부서 적용)"과 "나. 개별 위임전결사항" 제목을 읽어, 위임전결표 행마다 `delegation_scope`(`common`=전 부서, `individual`=해당 부서), `scope_label`을 붙이고 개별 행에는 그 부서(구분 칸)를 `department`로 담습니다. 제목이 없는 규정의 행에는 붙이지 않습니다.
+- `search_regulation_table`은 `delegation_scope`(`common`|`individual`) 입력이나 검색어의 "공통"/"개별"(예: "개별 국외출장")로 한쪽 행만 반환합니다. `search_all_regulations`는 "공통"/"개별"이 든 질문에서 그 구분의 행을 앞에 둡니다.
+- D1 `approvals`에 `scope`·`department` 열이 추가됩니다(`migrations/0003`). 예: `SELECT department,count(*) FROM current_approvals WHERE scope='individual' GROUP BY department`.
+- 색인: `search_format:3`으로 다음 동기화가 저장된 스냅숏으로 카탈로그를 다시 만들고(다운로드 없음), D1은 `mirror_format` 2로 한 번 다시 적재합니다.
 
 ## 2.3.0 — 통합검색과 관련 조문 연결
 

@@ -7,6 +7,7 @@ import {fold} from '../../src/regulation-core/search-ranking';
 import {prepareSearchSections} from '../../src/regulation-core/search-sections';
 import {normalizeName} from '../../src/d1/normalize';
 import {amountOf,rangeOf,inRange} from '../../src/r2/amount';
+import {delegationScopes} from '../../src/regulation-core/delegation-scope';
 const doc=(id:string,title:string,text:string)=>({regulation_id:id,title,fileNo:id,text,searchSections:prepareSearchSections(text)}) as any;
 const docs=[
  doc('24638','포상금 지급방침','제3조(포상금의 종류) 포상금의 종류는 다음 각 호와 같다.\n6. 모범소원․공로연수․모험연수․직무향상연수 포상금\n제9조(모범소원․공로연수․모험연수․직무향상연수 포상금) ① 모범소원․모험연수․직무향상연수 포상금은 대상자로 선정된 직원에게 국내․외 연수 등에 필요한 경비를 지급하는 포상금을 말한다.\n② 목적은 다음과 같다. 3. 모험연수: 해외연수를 실시함으로써 도전의식 부여\n④ 포상금 지급액은 모범소원 400만원, 모험연수 300만 원 이내로 한다.\n⑤ 포상금 지급은 총 포상금에서 국내․외 연수에 필요한 직접 경비는 여행사에 일괄 지불하고, 잔액은 개인에게 지급한다.\n'),
@@ -34,6 +35,12 @@ u=unifiedSearch(docs,'부소장 근무시간');ok('관련성 낮은 단어 부�
 {const texts=['제1조(목적) 민·군 기술협력','제2조 1,000만 원 이하','제3조 ＰＤＦ 파일과 Ｋ값','제4조 ㉮ 항목과 ㈎ 항목','제5조 ① 1억 5천만원','제6조 국외 출장비','제7조 ＩＩ단계 Ⅱ','제8조 KT 보고'],terms=['민군','1000만원','pdf','k','가','1억5천만원','국외출장','ii','kt','①'];let n=0;
  for(const text of texts){const p=prepareDocument({text,title:'시험'});for(const sec of p.sections)for(const t of terms){const f=fold(sec.text),ft=fold(t),want=/\d/.test(t)?f.replace(/[\s,]+/g,'').includes(ft.replace(/[\s,]+/g,'')):f.includes(ft);assert.equal(present(sec as any,t),want,t+' in '+sec.text);n++;}}
  results.push(`raw-text prefilter equals full folding on ${n} synthetic checks (middle dot, full-width, circled Hangul, amounts with spaces/commas)`);}
+// 공통/개별 위임전결 headings: the prose that names both is not a heading.
+{const text='제3조 위임전결사항은 공통 위임전결사항, 개별 위임전결사항으로 구분하며 별표 제1호와 같다.\n가. 공통 위임전결사항(전 부서 적용)\n구 분 업무 내용\n1) 소관사업계획(안) 제출\n나. 개별 위임전결사항\n정책기획부 1) 연구소 경영정책 관련 업무\n2) 경영성과 관리';
+ const rows=[{table_key:'t1',result:{analysis_type:'delegation_table',task:'★: 부설기구의 경우'}},{table_key:'t1',result:{analysis_type:'delegation_table',task:'1) 소관사업계획(안) 제출'}},{table_key:'t2',result:{analysis_type:'delegation_table',task:'1) 연구소 경영정책 관련 업무',category:'정책기획부'}},{table_key:'t3',result:{analysis_type:'delegation_table',task:'2) 경영성과 관리'}}];
+ const s=delegationScopes(text,rows);assert.deepEqual([s.get('t1')?.delegation_scope,s.get('t2')?.delegation_scope,s.get('t3')?.delegation_scope],['common','individual','individual']);
+ assert.equal(delegationScopes('제3조 공통 위임전결사항, 개별 위임전결사항으로 구분한다.',rows).size,0);
+ results.push('공통/개별 위임전결: tables take the preceding heading (continued tables keep it); the prose naming both is ignored');}
 // Amount ranges for approver questions.
 assert.equal(amountOf('10억'),1e9);assert.equal(amountOf('300만원'),3e6);assert.equal(amountOf('1억5천만'),1.5e8);assert.equal(amountOf('기술용역'),null);assert.equal(amountOf('2024'),null);
 const within=(c:string,v:number)=>{const r=rangeOf(c);return r?inRange(v,r):null;};

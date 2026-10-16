@@ -17,7 +17,7 @@ R2가 정본이고, D1은 R2의 현재 카탈로그에서 언제든 다시 만�
 | `regulations` | 규정 1건(ALIO idx = `reg_id`). 이름·옛 이름·폐지 여부·현재 파일·개정일·조문/표/전결 행 수 | 약 213 (폐지 포함 시 증가) |
 | `versions` | 지금까지 현재본이었던 첨부 버전 1건(`reg_id` + `file_no`). 지우지 않음 | 약 213부터 개정마다 증가 |
 | `units` | 조문 1개 또는 **표 1개 통째**(행은 `rows_json`에 묶음) | 약 1.5만 (추정) |
-| `approvals` | 위임전결표의 행 1개(구분·업무·조건·전결권자·검토 필요) | 약 1천~3천 (추정) |
+| `approvals` | 위임전결표의 행 1개(구분·업무·조건·전결권자·검토 필요, 공통/개별 `scope`와 개별 행의 `department`) | 1,533 (2026-10-16 첫 적재) |
 | `sync_state` | 마지막으로 옮긴 R2 카탈로그와 개수 | 1 |
 | `sync_usage` | 하루 쓰기 행 수 기록(기존 표 유지, 8만 행 안전한도에 사용) | 실행 수 |
 
@@ -26,6 +26,7 @@ R2가 정본이고, D1은 R2의 현재 카탈로그에서 언제든 다시 만�
 - 원본은 R2 카탈로그 문서의 `parsed/<document_id>.json` 스냅숏이다. 문서 파싱을 다시 하지 않는다.
 - 표 하나가 D1 행 크기 상한에 가까우면 `table_id#1`, `#2`처럼 나눈다.
 - 기존 FTS 기반 표(`sections`·`table_rows`·`body_fts`·`table_fts` 등)는 0002에서 삭제한다.
+- 0003은 `approvals.scope`(`common`=공통·전 부서, `individual`=개별·해당 부서)·`department`와 `regulations.mirror_format`을 추가한다. `mirror_format`이 현재 값(2)과 다른 규정은 다음 적재에서 한 번 다시 쓴다.
 
 ## 3. 적재 흐름 (`scripts/d1/mirror.ts`, GitHub Actions)
 
