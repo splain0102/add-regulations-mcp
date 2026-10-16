@@ -1,7 +1,8 @@
 import {normalizeName,queryTerms,normalize} from '../d1/normalize';
 import {tableToolResponse} from '../regulation-core/table-response';
 import {mightMatch} from './bloom';
-import {searchBodies} from './global-search';
+import {unifiedSearch,type Unified} from './global-search';
+import {amountOf,rangeOf,inRange} from './amount';
 import {tokenWeights,sectionScore} from '../regulation-core/search-ranking';
 import {PARSER_VERSION} from '../regulation-core/parser-version';
 import {R2Reader} from './read';
@@ -41,17 +42,42 @@ export async function runR2Tool(reader:R2Reader,tool:string,input:Input={},build
   // and build state live in hello/diagnose_alio_list unless the index is stale.
   const brief=(d:R2Document)=>{const full=meta(d,false);return {regulationName:d.title,reg_id:d.regulation_id,revisionDate:d.st_date,fileNo:d.file_no,sourceUrl:d.source_url,...full.version_warning?{version_warning:full.version_warning}:{},...full.cross_entry_warnings.length?{cross_entry_warnings:full.cross_entry_warnings}:{},...d.status==='repealed'?{status:'repealed',repealed_at:d.repealed_at}:{},...(full as any).source_warning?{source_warning:(full as any).source_warning}:{},...d===doc&&matchedAlias?{matched_alias:matchedAlias}:{},...healthBrief};};
   if(tool==='get_regulation')return envelope(meta(doc!,!compactOn));
-  if(tool==='list_regulations'||tool==='search_regulations'){const n=normalizeName(input.query??''),all=(input.include_repealed?catalog.documents:active).filter(d=>d.title_normalized.includes(n)||aliasesOf(d).some(a=>normalizeName(a).includes(n))),items=all.slice(offset,offset+limit);return envelope({...compactOn?healthBrief:health,results:items.map(d=>compactOn?{...brief(d),updatedDate:d.i_date,...aliasesOf(d).length?{aliases:aliasesOf(d)}:{}}:meta(d)),totalMatches:all.length,limit,offset,next_offset:offset+items.length<all.length?offset+items.length:null});}
+  if(tool==='list_regulations'||tool==='search_regulations'){const n=normalizeName(input.query??''),all=(input.include_repealed?catalog.documents:active).filter(d=>d.title_normalized.includes(n)||aliasesOf(d).some(a=>normalizeName(a).includes(n))),items=all.slice(offset,offset+limit);
+   // A name search that finds nothing returns the best body articles instead of an
+   // empty list, so a topic word ("모험연수") needs no second call.
+   let suggestions:any[]|undefined;if(tool==='search_regulations'&&!all.length&&q){const bodies:any[]=[];for(let i=0;i<catalog.body_shards.length;i+=4)for(const part of await Promise.all(catalog.body_shards.slice(i,i+4).map(ref=>reader.ref(ref))))bodies.push(...part);suggestions=unifiedSearch(bodies,input.query!,3).results.slice(0,3).map(r=>({regulationName:r.regulationName,reg_id:r.reg_id,fileNo:r.fileNo,revisionDate:r.revisionDate,sourceUrl:r.sourceUrl,match_type:r.match_type,label:r.matches[0].label,...r.matches[0].paragraph?{paragraph:r.matches[0].paragraph}:{},snippet:r.matches[0].snippet.slice(0,300)}));}
+   return envelope({...compactOn?healthBrief:health,...suggestions?{body_suggestions:suggestions}:{},results:items.map(d=>compactOn?{...brief(d),updatedDate:d.i_date,...aliasesOf(d).length?{aliases:aliasesOf(d)}:{}}:meta(d)),totalMatches:all.length,limit,offset,next_offset:offset+items.length<all.length?offset+items.length:null});}
   async function summaries(d:R2Document){const rows:SearchRecord[]=[];for(let i=0;i<d.search.length;i+=4)for(const part of await Promise.all(d.search.slice(i,i+4).map(ref=>reader.ref(ref))))rows.push(...part);return rows;}
   const page=(all:any[],size=limit)=>({totalMatches:all.length,limit,offset,has_more:offset+size<all.length,next_offset:offset+size<all.length?offset+size:null,next_cursor:offset+size<all.length?offset+size:null});
   if(tool==='search_all_regulations'){
-   const bodies:any[]=[];const bodyShards=[...catalog.body_shards,...input.include_repealed?catalog.repealed_body_shards??[]:[]],byFile=new Map(catalog.documents.map(d=>[d.file_no,d]));if(input.scope!=='table')for(let i=0;i<bodyShards.length;i+=4)for(const part of await Promise.all(bodyShards.slice(i,i+4).map(ref=>reader.ref(ref))))bodies.push(...part);let all=searchBodies(bodies,input.query!).map(r=>{const d=byFile.get(r.fileNo);return {...r,reg_id:d?.regulation_id??r.reg_id,...d?.status==='repealed'?{status:'repealed'}:{},indexedAt:d?.verified_at??catalog.verified_at};});bodies.length=0;
+   const bodies:any[]=[];const bodyShards=[...catalog.body_shards,...input.include_repealed?catalog.repealed_body_shards??[]:[]],byFile=new Map(catalog.documents.map(d=>[d.file_no,d]));if(input.scope!=='table')for(let i=0;i<bodyShards.length;i+=4)for(const part of await Promise.all(bodyShards.slice(i,i+4).map(ref=>reader.ref(ref))))bodies.push(...part);// Unified search: full matches, per-term coverage and citation links in one call.
+   const unified:Unified=unifiedSearch(bodies,input.query!,limit),withDoc=(r:any)=>{const d=byFile.get(r.fileNo);return {...r,reg_id:d?.regulation_id??r.reg_id,...d?.status==='repealed'?{status:'repealed'}:{},indexedAt:d?.verified_at??catalog.verified_at};};
+   let all=unified.results.map(withDoc);const related=unified.related.map(withDoc);bodies.length=0;
    // Preserve existing body ranking, then include table matches by default.
    // Explicit body scope excludes tables. Search precomputed row summaries; no document parser.
    if(!input.scope||input.scope==='table'||input.scope==='all'){
-    const terms=input.query!.toLowerCase().trim().split(/\s+/).filter(Boolean),nameQuery=normalizeName(input.query!),grouped=new Map<string,{count:number;score:number;matches:any[]}>(),refs=[...catalog.table_shards,...input.include_repealed?catalog.repealed_table_shards??[]:[]].filter(ref=>mightMatch(ref.bloom,q!.terms));
-    for(let i=0;i<refs.length;i+=4)for(const part of await Promise.all(refs.slice(i,i+4).map(ref=>reader.ref(ref))))for(const r of part){if(!input.include_text_box&&r.analysis_type==='text_box'||!rowMatches({...r,kind:'table'},q!))continue;const text=r.text||r.match.row,weights=tokenWeights(text,terms),score=weights.every(w=>w>0)?0.5*sectionScore(text,'',input.query!,weights):0.05,g=grouped.get(r.document_id)??{count:0,score:0,matches:[]};g.count++;g.score=Math.max(g.score,score);if(g.matches.length<3)g.matches.push({label:r.label,snippet:text.slice(0,850),score,kind:'table'});grouped.set(r.document_id,g);}
-    const tables=catalog.documents.filter(d=>grouped.has(d.document_id)).map(d=>({regulationName:d.title,reg_id:d.regulation_id,...d.status==='repealed'?{status:'repealed'}:{},fileNo:d.file_no,revisionDate:d.st_date,sourceUrl:d.source_url,score:Math.round((grouped.get(d.document_id)!.score+(nameQuery.length>=2&&d.title_normalized.includes(nameQuery)?30:0))*100)/100,matches:grouped.get(d.document_id)!.matches.sort((a:any,b:any)=>b.score-a.score),tableMatches:grouped.get(d.document_id)!.count}));
+    // Table rows use the same resolved terms (intent words such as 승인권자 removed,
+    // compounds stemmed); delegation rows rank first for approver questions.
+    // Approver questions compare amounts as ranges: "기술용역 10억" matches the
+    // 기술용역 row whose condition covers 10억 ("용역비 5억 초과"), not any row that
+    // merely contains the text "10억" under another task.
+    const nameQuery=normalizeName(unified.coverage.terms.join('')),approver=unified.intent==='approver',amounts=approver?unified.coverage.terms.map(amountOf).filter((v):v is number=>v!==null):[];
+    const terms=amounts.length&&unified.coverage.terms.some(t=>amountOf(t)===null)?unified.coverage.terms.filter(t=>amountOf(t)===null):unified.coverage.terms,amount=terms.length<unified.coverage.terms.length?amounts[0]:null;
+    const rangeScore=(r:any,text:string)=>{if(amount===null||!r.approver)return {};const range=rangeOf(r.condition??text);return range?{amount_match:inRange(amount,range)}:{};};
+    const scan=async(t:string[])=>{const tq=queryTerms(t.join(' ')),grouped=new Map<string,{count:number;score:number;matches:any[]}>(),refs=[...catalog.table_shards,...input.include_repealed?catalog.repealed_table_shards??[]:[]].filter(ref=>mightMatch(ref.bloom,tq.terms));
+     for(let i=0;i<refs.length;i+=4)for(const part of await Promise.all(refs.slice(i,i+4).map(ref=>reader.ref(ref))))for(const r of part){if(!input.include_text_box&&r.analysis_type==='text_box'||!rowMatches({...r,kind:'table'},tq))continue;const text=r.text||r.match.row,weights=t.map(x=>/\d/.test(x)?(normalize(text).includes(normalize(x))?1:0):tokenWeights(text,[x])[0]),range=rangeScore(r,text),score=(weights.every(w=>w>0)?0.5*sectionScore(text,'',t.join(' '),weights):0.05)+(approver&&r.analysis_type==='delegation_table'&&r.approver?40:0)+(range.amount_match===true?60:range.amount_match===false?-35:0),g=grouped.get(r.document_id)??{count:0,score:0,matches:[]};g.count++;g.score=Math.max(g.score,score);g.matches.push({label:r.label,snippet:text.slice(0,850),score,kind:'table',...r.approver?{task:r.task??null,condition:r.condition??null,approver:r.approver,...range}:{}});grouped.set(r.document_id,g);}
+     return grouped;};
+    let grouped=await scan(terms);
+    // Approver questions with no delegation row retry once with a long compound's
+    // head noun ("기술용역 10억 승인권자" → 용역 10억). Other questions do not, so
+    // they read no extra table shards.
+    const delegationFound=[...grouped.values()].some(g=>g.matches.some((m:any)=>m.approver));
+    if(approver&&!delegationFound&&(terms.length>1||amount!==null)){const long=terms.findIndex(t=>!/\d/.test(t)&&Array.from(t).length>=4);if(long>=0){const head=Array.from(terms[long]).slice(-2).join(''),relaxed=await scan(terms.map((t,i)=>i===long?head:t));if(relaxed.size){unified.coverage.resolved[terms[long]]=head;for(const [id,g] of relaxed){const old=grouped.get(id);grouped.set(id,old?{count:old.count+g.count,score:Math.max(old.score,g.score),matches:[...old.matches,...g.matches]}:g);}}}}
+    const tables=catalog.documents.filter(d=>grouped.has(d.document_id)).map(d=>({regulationName:d.title,reg_id:d.regulation_id,...d.status==='repealed'?{status:'repealed'}:{},fileNo:d.file_no,revisionDate:d.st_date,sourceUrl:d.source_url,score:Math.round((grouped.get(d.document_id)!.score+(nameQuery.length>=2&&d.title_normalized.includes(nameQuery)?30:0))*100)/100,match_type:'table',matches:grouped.get(d.document_id)!.matches.sort((a:any,b:any)=>b.score-a.score).slice(0,3),tableMatches:grouped.get(d.document_id)!.count}));
+    // A regulation found both in body text and in tables keeps one entry; the
+    // stronger side's matches come first so a delegation row is not hidden by a
+    // weak body hit of the same regulation.
+    if(input.scope!=='table')all=all.map(a=>{const t=tables.find(x=>x.fileNo===a.fileNo);return t?{...a,score:Math.max(a.score,t.score),matches:t.score>a.score?[...t.matches,...a.matches]:[...a.matches,...t.matches],tableMatches:t.tableMatches}:a;});
     all=(input.scope==='table'?tables:[...all,...tables.filter(t=>!all.some(a=>a.fileNo===t.fileNo))]).sort((a,b)=>b.score-a.score||a.regulationName.localeCompare(b.regulationName,'ko'));
    }
    if(input.scope==='pdf'){const pdf=new Set(catalog.documents.filter(d=>d.extension==='pdf').map(d=>d.file_no));all=all.filter(d=>pdf.has(d.fileNo));}
@@ -59,7 +85,7 @@ export async function runR2Tool(reader:R2Reader,tool:string,input:Input={},build
    // Identical scores across several results mean the ranking formula broke down.
    if(all.length>1&&new Set(all.map(r=>r.score)).size===1)console.warn('search_score_degenerate',JSON.stringify({query:input.query,results:all.length,score:all[0].score}));
    console.log('r2_search_metrics',JSON.stringify({tool,...metrics}));
-   return envelope({...compactOn?healthBrief:health,...page(all),query:input.query,results:all.slice(offset,offset+limit).map(r=>compactOn?{regulationName:r.regulationName,reg_id:r.reg_id,...r.status?{status:r.status}:{},fileNo:r.fileNo,revisionDate:r.revisionDate,sourceUrl:r.sourceUrl,score:r.score,matches:r.matches,...r.tableMatches?{tableMatches:r.tableMatches}:{}}:r),...compactOn?{}:{metrics}});
+   return envelope({...compactOn?healthBrief:health,...page(all),query:input.query,results:all.slice(offset,offset+limit).map(r=>compactOn?{regulationName:r.regulationName,reg_id:r.reg_id,...r.status?{status:r.status}:{},fileNo:r.fileNo,revisionDate:r.revisionDate,sourceUrl:r.sourceUrl,score:r.score,...r.match_type?{match_type:r.match_type}:{},...r.matched_terms?{matched_terms:r.matched_terms}:{},...r.missing_terms?{missing_terms:r.missing_terms}:{},...r.title_terms?{title_terms:r.title_terms}:{},matches:r.matches,...r.tableMatches?{tableMatches:r.tableMatches}:{}}:r),...offset===0&&related.length?{related}:{},coverage:unified.coverage,...unified.intent?{intent:unified.intent}:{},...compactOn?{}:{metrics}});
   }
   if(!doc)return envelope({error:{code:'invalid_name'}},true);
   const all=(await summaries(doc)).filter(r=>{if(input.scope==='pdf'&&doc!.extension!=='pdf')return false;const wanted=tool==='get_regulation_text'?r.kind==='body':tool==='search_regulation_table'?r.kind==='table':input.scope==='body'?r.kind==='body':input.scope==='table'?r.kind==='table':true;return wanted&&(r.kind!=='table'||input.include_text_box||r.analysis_type!=='text_box')&&(!q||rowMatches(r,q));});

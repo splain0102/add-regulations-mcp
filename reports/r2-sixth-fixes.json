@@ -1,0 +1,137 @@
+[
+ {
+  "case": "1 국외출장 → 8) 공무국외출장 8행(57–64, 세부과제책임자 row 60 포함)",
+  "pass": true,
+  "detail": "{\"rows\":[57,58,59,60,61,62,63,64]}"
+ },
+ {
+  "case": "1 row 60 세부과제책임자: 글자 전결 \"직상위자 또는 PM\"",
+  "pass": true,
+  "detail": "{\"table_id\":\"section1:table1\",\"row\":60,\"analysis_type\":\"delegation_table\",\"needs_review\":true,\"review_reason\":\"multiple_approvers\",\"category\":\"인사교육\",\"task\":\"8) 공무국외출장\",\"condition\":\"미래도전 / 분기/집행 계획 승인 / PM과제의 세부과제책임자 출장\",\"approver\":\"직상위자\",\"approvers\":[{\"name\":\"직상위자\",\"symbol\":null,\"legend\":null,\"suffi"
+ },
+ {
+  "case": "1 초빙 → 10) 국내외 전문가 초빙요구 2행",
+  "pass": true,
+  "detail": "[66,67]"
+ },
+ {
+  "case": "1 재무분야 → 1)~9) 전 행",
+  "pass": true,
+  "detail": "{\"expected\":23,\"got\":23,\"tasks\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\"]}"
+ },
+ {
+  "case": "1 category·task 필드 유지",
+  "pass": true,
+  "detail": "[{\"table_id\":\"section1:table1\",\"row\":71,\"analysis_type\":\"delegation_table\",\"needs_review\":false,\"category\":\"재무분야\",\"task\":\"1) 도급경비 배정요구 및 정산\",\"condition\":\"3천만 원 초과\",\"approver\":\"사업기구장\",\"approvers\":[{\"name\":\"사업기구장\",\"symbol\":\"◎\",\"legend\":null,\"suffix\":null}],\"symbol\":\"◎\",\"suffix\":null,\"legend\":null,\"foo"
+ },
+ {
+  "case": "1 group_by=task → 8) 공무국외출장 하위 8행 묶음",
+  "pass": true,
+  "detail": "{\"table_id\":\"section1:table1\",\"category\":\"인사교육\",\"task\":\"8) 공무국외출장\",\"rows\":[57,58,59,60,61,62,63,64]}"
+ },
+ {
+  "case": "1 group_by=task: 하위 행 하나만 일치해도 업무 전체 반환",
+  "pass": true,
+  "detail": "[57,58,59,60,61,62,63,64]"
+ },
+ {
+  "case": "2 적성무기 row 655: multi_approver → needs_review, review_reason",
+  "pass": true,
+  "detail": "{\"table_id\":\"section1:table2\",\"row\":655,\"analysis_type\":\"delegation_table\",\"needs_review\":true,\"review_reason\":\"multiple_approvers\",\"category\":\"군전력 연구센터 (M&S기술)\",\"task\":\"6) 적성무기에 관한 업무\",\"condition\":\"중요사항\",\"approver\":\"부장(센터장)\",\"approvers\":[{\"name\":\"부장(센터장)\",\"symbol\":\"◎\",\"legend\":null,\"suffix\":null},{"
+ },
+ {
+  "case": "샘플 국내출장=운영",
+  "pass": true,
+  "detail": "{\"got\":\"운영\"}"
+ },
+ {
+  "case": "샘플 과제참여자 출장=사책/과책",
+  "pass": true,
+  "detail": "{\"got\":\"사책/과책\"}"
+ },
+ {
+  "case": "샘플 행정규칙 개정소요 중요=소장",
+  "pass": true,
+  "detail": "{\"got\":\"소장\"}"
+ },
+ {
+  "case": "샘플 결의서 소본부 1억 이상=실장",
+  "pass": true,
+  "detail": "{\"got\":\"실장\"}"
+ },
+ {
+  "case": "4 \"전문가활용\" → \"전문가활용경비\" 접두 일치",
+  "pass": true,
+  "detail": "[0.5]"
+ },
+ {
+  "case": "4 N5 유지: \"사고 보고\" ↛ \"사고방식 보고서\"",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "case": "4 규정명 포함 가점 → 「전문가활용경비 지급 방침」 1순위",
+  "pass": true,
+  "detail": "[[\"전문가활용경비 지급 방침\",37.15],[\"기술료분쟁조정위원회 구성 및 운영 방침\",7.15]]"
+ },
+ {
+  "case": "5 compact 기본: 상태·첨부 감사 필드 제외",
+  "pass": true,
+  "detail": "[\"regulationName\",\"reg_id\",\"revisionDate\",\"fileNo\",\"sourceUrl\",\"totalMatches\",\"limit\",\"offset\",\"has_more\",\"next_offset\",\"next_cursor\",\"query\",\"results\"]"
+ },
+ {
+  "case": "5 search_regulation_text(\"여비규정\",\"제10조\") 크기",
+  "pass": true,
+  "detail": "582 chars / 710 bytes (structuredContent)"
+ },
+ {
+  "case": "5 compact:false: 전체 메타데이터",
+  "pass": true,
+  "detail": "50"
+ },
+ {
+  "case": "6 get_regulation_text: 기본 results만, format=full이면 text 추가",
+  "pass": true,
+  "detail": "{\"default\":[\"regulationName\",\"reg_id\",\"revisionDate\",\"fileNo\",\"sourceUrl\",\"totalMatches\",\"limit\",\"offset\",\"has_more\",\"next_offset\",\"next_cursor\",\"query\",\"results\"],\"full\":true}"
+ },
+ {
+  "case": "7 여비규정 부칙 블록·조문 라벨",
+  "pass": true,
+  "detail": "[\"부칙(2023.4.21.) 제2조(적용례)\",\"부칙(규제910호, 2024.2.16.)\",\"부칙(2024.2.16.) 제1조(시행일)\",\"부칙(2024.2.16.) 제2조(적용례)\"]"
+ },
+ {
+  "case": "7 \"부칙(2026.9.28.) 제2조(경과조치)\" 형식",
+  "pass": true,
+  "detail": "[\"부칙(방침 제1012호, 2026.9.28.)\",\"부칙(2026.9.28.) 제1조(시행일)\",\"부칙(2026.9.28.) 제2조(경과조치)\"]"
+ },
+ {
+  "case": "7 날짜 머리 없는 부칙: 시행일로 구분",
+  "pass": true,
+  "detail": "[\"부칙(시행 2018.5.1.)\",\"부칙(시행 2018.5.1.) 제1조(시행일)\",\"부칙(시행 2018.5.1.) 제2조(경과조치)\"]"
+ },
+ {
+  "case": "7 검색 결과 라벨에 부칙 날짜",
+  "pass": true,
+  "detail": "[\"부칙(2023.4.21.) 제2조(적용례)\",\"부칙(2024.2.16.) 제1조(시행일)\",\"부칙(2024.2.16.) 제2조(적용례)\"]"
+ },
+ {
+  "case": "8 snippet 시작점이 어절 경계",
+  "pass": true,
+  "detail": "{\"start\":\"제46조(건강진단결과조\"}"
+ },
+ {
+  "case": "8 revision_evidence 부칙만: 위임전결규정",
+  "pass": true,
+  "detail": " 2025년 1월 1일부터 시행한다.\n부      칙 <규제935호, 2025. 1. 24.>\n  이 규정은 2025년 1월 24일부터 시행한다.\n부      칙\n  이 규정은 2026년 7월 15일부터 시행한다.\n"
+ },
+ {
+  "case": "8 revision_evidence 부칙만: 여비규정",
+  "pass": true,
+  "detail": "    칙 <규제910호, 2024. 2. 16.>\n제1조(시행일) 이 규정은 2024년 2월 16일부터 시행한다.\n제2조(적용례) 이 규정 별표 제8호의 개정내용은 이 규정 시행일 이후 신규 파견자부터 적용한다.\n"
+ },
+ {
+  "case": "8 revision_evidence 부칙만: 기술용역 업무규정",
+  "pass": true,
+  "detail": "호, 2024. 6. 26.>\n제1조(시행일) 이 규정은 2024년 7월 1일부터 시행한다.\n부      칙 <규제951호, 2025. 12. 31.>\n제1조(시행일) 이 규정은 2026년 1월 1일부터 시행한다.\n"
+ }
+]

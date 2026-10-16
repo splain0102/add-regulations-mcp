@@ -1,4 +1,5 @@
 import {PARSER_VERSION} from '../../src/regulation-core/parser-version';
+import {SEARCH_FORMAT} from './build';
 export function rawProofFresh(value:string|undefined,now=Date.now()){const age=now-Date.parse(value??'');return Number.isFinite(age)&&age>=-300000&&age<7*86400000;}
 export function preferredDocuments(documents:any[],checkpoint:any,active:any){
  const current=checkpoint.current??{},activeIds=new Set((active?.documents??[]).map((d:any)=>d.document_id));
@@ -11,7 +12,7 @@ export const activeDocuments=(catalog:any)=>(catalog?.documents??[]).filter((d:a
 export function metadataUnchanged(catalog:any,checkpoint:any,items:any[],now=Date.now(),force=false){
  const active=activeDocuments(catalog);
  // A regulation that was missing once must be re-collected to clear or advance it.
- if(force||catalog?.format!==1||catalog.parser_version!==PARSER_VERSION||active.length!==items.length||active.some((d:any)=>d.missing_count>0))return false;
+ if(force||catalog?.format!==1||catalog.parser_version!==PARSER_VERSION||(catalog.search_format??1)!==SEARCH_FORMAT||active.length!==items.length||active.some((d:any)=>d.missing_count>0))return false;
  return items.every(item=>{const d=active.find((d:any)=>d.regulation_id===regulationId(item));
   return d&&(!checkpoint.current?.[d.regulation_id]||checkpoint.current[d.regulation_id]===d.document_id)&&d.title===item.title&&d.st_date===(item.revisionDate??null)&&d.i_date===(item.updatedDate??null)&&rawProofFresh(checkpoint.entries?.[d.document_id]?.raw_checked_at,now);
  });

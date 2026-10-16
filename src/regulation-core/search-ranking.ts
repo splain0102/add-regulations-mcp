@@ -14,6 +14,8 @@ function normalizedWeight(word:string,term:string){let best=0;
   best=Math.max(best,at===0?1:0.3);
  }return best;
 }
+// Same rule as tokenWeights over a pre-split word list (callers cache the split).
+export function wordsWeight(words:string[],term:string){const t=fold(term);let best=0;for(const word of words){best=Math.max(best,normalizedWeight(word,t));if(best===1)break;}return best;}
 export function tokenWeights(text:string,terms:string[]){
  const words=fold(text).match(/[\p{L}\p{N}]+/gu)??[];
  return terms.map(fold).map(term=>{let best=0;for(const word of words){best=Math.max(best,normalizedWeight(word,term));if(best===1)break;}return best;});

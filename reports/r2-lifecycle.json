@@ -1,0 +1,152 @@
+{
+ "scope": "unmodified scripts/r2/sync.ts with scripted ALIO and file-backed R2; production acceptance gate recorded but bypassed (fixture corpus lacks its named regulations)",
+ "results": [
+  {
+   "scenario": "초기 적재",
+   "check": "3건 게시",
+   "expected": "published, 3건",
+   "actual": "{\"published\":true,\"names\":[\"기술용역 업무규정\",\"여비규정\",\"위임전결규정\"]}",
+   "pass": true
+  },
+  {
+   "scenario": "변경 없음",
+   "check": "다운로드 없이 종료",
+   "expected": "R2_METADATA_UNCHANGED, 다운로드 0",
+   "actual": "{\"unchanged\":true,\"downloads\":0}",
+   "pass": true
+  },
+  {
+   "scenario": "신설",
+   "check": "새 idx 게시·조회",
+   "expected": "4건, idx=990001",
+   "actual": "{\"published\":true,\"count\":4,\"idx\":\"990001\"}",
+   "pass": true
+  },
+  {
+   "scenario": "신설",
+   "check": "기존 규정 재다운로드 없음",
+   "expected": "다운로드 1(신규분만)",
+   "actual": "{\"downloads\":1}",
+   "pass": true
+  },
+  {
+   "scenario": "명칭변경",
+   "check": "새 이름으로 조회, 같은 idx 유지",
+   "expected": "idx=25281",
+   "actual": "{\"published\":true,\"idx\":\"25281\"}",
+   "pass": true
+  },
+  {
+   "scenario": "명칭변경",
+   "check": "옛 이름 조회(aliases)",
+   "expected": "옛 이름 → idx 25281, aliases에 옛 이름",
+   "actual": "{\"idx\":\"25281\",\"aliases\":[\"여비규정\"]}",
+   "pass": true
+  },
+  {
+   "scenario": "명칭변경",
+   "check": "search_regulations 옛 이름",
+   "expected": "옛 이름으로 1건",
+   "actual": "{\"total\":1,\"names\":[\"국내외 여비규정\"]}",
+   "pass": true
+  },
+  {
+   "scenario": "명칭변경+개정",
+   "check": "새 이름·새 file_no, 같은 idx",
+   "expected": "idx=24708, fileNo=990002",
+   "actual": "{\"published\":true,\"idx\":\"24708\",\"fileNo\":\"990002\"}",
+   "pass": true
+  },
+  {
+   "scenario": "명칭변경+개정",
+   "check": "옛 이름 조회(aliases)",
+   "expected": "옛 이름 → idx 24708",
+   "actual": "{\"idx\":\"24708\"}",
+   "pass": true
+  },
+  {
+   "scenario": "명칭변경+개정",
+   "check": "이전 버전 원본 보관",
+   "expected": "raw/228379/… 유지",
+   "actual": "{\"retained\":true}",
+   "pass": true
+  },
+  {
+   "scenario": "폐지(1회 미검출)",
+   "check": "한 번 빠진 규정은 유지(일시누락 대비)",
+   "expected": "조회 가능, active, missing_count=1",
+   "actual": "{\"published\":true,\"result\":\"990001\",\"status\":\"active\",\"missing\":1,\"source\":\"missing_from_source\"}",
+   "pass": true
+  },
+  {
+   "scenario": "폐지(2회 미검출)",
+   "check": "status=repealed로 보존, 기본 목록에서 제외",
+   "expected": "repealed 표시, 물리 삭제 없음",
+   "actual": "{\"result\":\"repealed\",\"repealed_at\":\"2026-10-15T23:50:43.444Z\",\"listed\":false}",
+   "pass": true
+  },
+  {
+   "scenario": "폐지(2회 미검출)",
+   "check": "include_repealed=true일 때만 포함",
+   "expected": "목록·전체검색 모두 옵트인",
+   "actual": "{\"list\":true,\"global_default\":false,\"global_opt_in\":true}",
+   "pass": true
+  },
+  {
+   "scenario": "폐지(2회 미검출)",
+   "check": "diagnose_alio_list에 폐지 내역",
+   "expected": "repealed 1건, last_changes.repealed",
+   "actual": "{\"repealed\":[{\"reg_id\":\"990001\",\"title\":\"신설 시험규정\",\"repealed_at\":\"2026-10-15T23:50:43.444Z\"}],\"changes\":[\"신설 시험규정\"]}",
+   "pass": true
+  },
+  {
+   "scenario": "폐지 후 재등장",
+   "check": "같은 idx로 active 복귀, 재다운로드 없음",
+   "expected": "idx=990001, active, 다운로드 0",
+   "actual": "{\"published\":true,\"idx\":\"990001\",\"status\":\"active\",\"downloaded\":[\"228379\"]}",
+   "pass": true
+  },
+  {
+   "scenario": "일시누락(1회) 후 복귀",
+   "check": "계속 검색 가능, 복귀 후 missing_count=0",
+   "expected": "active, missing_count 0",
+   "actual": "{\"status\":\"active\",\"missing\":0,\"downloaded\":[\"228379\"]}",
+   "pass": true
+  },
+  {
+   "scenario": "목록 부분응답",
+   "check": "반영 중단, 기존 유지",
+   "expected": "sync 실패, 4건 유지",
+   "actual": "{\"failed\":\"Error: incomplete_index_list\",\"count\":4}",
+   "pass": true
+  },
+  {
+   "scenario": "목록 조회 실패(522)",
+   "check": "반영 중단, 기존 유지",
+   "expected": "sync 실패, 4건 유지",
+   "actual": "{\"failed\":\"Error: ALIO HTTP 522\",\"count\":4}",
+   "pass": true
+  },
+  {
+   "scenario": "목록 급감(4→1)",
+   "check": "반영 중단(누락 5% 초과)·경고",
+   "expected": "게시 안 함, 4건 유지, list_shrink_guard",
+   "actual": "{\"published\":false,\"failed\":\"Error: list_shrink_guard: 3/4 active regulations missing from the ALIO list\",\"count\":4,\"warning\":\"list_shrink_guard\"}",
+   "pass": true
+  },
+  {
+   "scenario": "동명규정(서로 다른 idx)",
+   "check": "두 규정 모두 색인",
+   "expected": "같은 이름 2건(idx 990001, 990003)",
+   "actual": "{\"published\":true,\"ids\":[\"990001\",\"990003\"]}",
+   "pass": true
+  },
+  {
+   "scenario": "동명규정(서로 다른 idx)",
+   "check": "이름 조회는 후보 안내, reg_id로 지정",
+   "expected": "ambiguous_name + reg_id 990003 조회",
+   "actual": "{\"error\":\"ambiguous_name\",\"candidates\":[\"990001\",\"990003\"],\"by_id\":\"990003\"}",
+   "pass": true
+  }
+ ]
+}

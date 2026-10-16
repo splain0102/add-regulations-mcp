@@ -20,6 +20,7 @@ jobs:
       - run: npm run test:r2
       - run: npm run test:r2-lifecycle
       - run: npm run test:r2-sixth
+      - run: npm run test:unified-search
       - run: npm run test:d1-mirror
       - run: node --import ./scripts/test-loader.mjs scripts/d1/remote-regression.ts
       - if: always()
@@ -31,6 +32,41 @@ jobs:
             reports/r2-lifecycle.json
             reports/r2-sixth-fixes.json
             reports/d1-mirror.json
+          if-no-files-found: ignore
+
+  # Same-input comparison of main and this branch on the complete actual corpus
+  # (R2 read-only). Expected answers are judged automatically; see
+  # scripts/r2/search-benchmark.ts.
+  search-benchmark:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    needs: r2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Check out main as the comparison base
+        run: git worktree add .base origin/main
+      - name: Compare search on the actual corpus
+        run: |
+          node scripts/stamp-build.mjs
+          BASE_DIR=.base npm run bench:search
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-benchmark
+          path: reports/search-benchmark.json
           if-no-files-found: ignore
 
   actual-r2:
