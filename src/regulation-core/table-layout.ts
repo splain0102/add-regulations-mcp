@@ -186,7 +186,10 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  const version=new Set([r,e,stackedDate,current].filter(Boolean) as string[]);
  const group=(d:string)=>version.has(d)?version:new Set([d]);
  const sources:{source:string;dates:string[]}[]=[...a?[{source:'alio_revision_date',dates:[a]}]:[],...filenameDate?[{source:'attachment_filename_date',dates:[filenameDate]}]:[],...h?[{source:'body_history_date',dates:[h]}]:[],...version.size?[{source:'body_supplement',dates:[...version].sort()}]:[]];
- const agrees=(src:{dates:string[]},c:string)=>{const g=group(c);return src.dates.some(d=>d.length===7?[...g].some(x=>x.slice(0,7)===d):g.has(d));};
+ // A 부칙 without a dated heading carries only its 시행일, which may sit up to two
+ // months from the 공포 date others record (e.g. 2007.1.25 개정, 2007.1.1 시행 소급).
+ const days=(x:string,y:string)=>Math.abs(Date.parse(x+'T00:00:00Z')-Date.parse(y+'T00:00:00Z'))/86400000;
+ const agrees=(src:{source?:string;dates:string[]},c:string)=>{const g=group(c);if(src.source==='body_supplement'&&!r&&e&&!g.has(e)&&c.length===10&&days(e,c)<=60)return true;return src.dates.some(d=>d.length===7?[...g].some(x=>x.slice(0,7)===d):g.has(d));};
  const candidates=[...new Set([a,h,...version].filter(Boolean) as string[])];
  const scored=candidates.map(c=>({c,agree:sources.filter(s=>agrees(s,c))})).sort((x,y)=>y.agree.length-x.agree.length||Number(y.agree.some(s=>s.source==='alio_revision_date'))-Number(x.agree.some(s=>s.source==='alio_revision_date')));
  const best=scored[0],rivals=best?scored.filter(x=>x.agree.length===best.agree.length&&!group(best.c).has(x.c)):[];

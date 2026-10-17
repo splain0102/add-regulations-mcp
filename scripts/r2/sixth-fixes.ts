@@ -76,6 +76,8 @@ try{
  check('7 다수결: ALIO·연혁 2019.10.22, 부칙만 2010.7.20 → 2019.10.22 기준, 부칙 경고 (연구소 기획관리규정)',majority.consensus?.date==='2019-10-22'&&!majority.consensus.tie&&majority.consensus.dissenting.map((d:any)=>d.source).join()==='body_supplement'&&/부칙/.test(majority.warning?.note??''),majority);
  const split=versionCheck('2014.01.30','2014-01-30','손 해 배 상 규 정\n제정 1979. 8. 1령제143호\n개정 2004. 1.30규제369호\n목 차\n제 1 장 총 칙 ···· 1\n본문\n부    칙<2004. 1. 30.>\n이 규정은 2004년 1월 30일부터 시행한다.\n');
  check('7 2 대 2로 갈리면 갈렸다고 경고 (손해배상규정)',split.consensus?.tie===true&&split.warning?.consensus_date===null&&/갈립니다/.test(split.warning?.note??''),split);
+ const retro=versionCheck('2007.01.25','2007-01-25','임원 직무청렴계약 운영규정\n개정 2007. 1. 25.\n제1조(목적) 본문\n부    칙\n이 규정은 2007년 1월 1일부터 시행한다.\n');
+ check('7 날짜 없는 부칙의 소급 시행일(1.25 개정, 1.1 시행)은 같은 개정 (임원 직무청렴계약 운영규정)',!retro.warning,retro);
  const normal=versionCheck('2023.12.29','2023-12-29','급여규정\n개정 2023. 12. 29. 규제905호\n제1조(목적) 본문\n부    칙<규제905호, 2023. 12. 29.>\n이 규정은 2024년 1월 1일부터 시행한다.\n');
  check('7 공포 12.29 → 시행 1.1은 정상 (급여규정)',!normal.warning&&normal.consensus?.agreeing.length===4,normal);
  const hit=(await call('search_regulation_text',{name:'여비규정',query:'시행일',scope:'body',limit:20})).structuredContent.results.map((x:any)=>x.label);
