@@ -8,7 +8,7 @@ import {delegationScopes,scopeFields} from '../../src/regulation-core/delegation
 import type {ObjectRef,R2Catalog,R2Document,SearchRecord} from '../../src/r2/types';
 // Bumped when catalog-level search data changes without a parser change, so the
 // next sync rebuilds the catalog from stored snapshots (no downloads).
-export const SEARCH_FORMAT=4;
+export const SEARCH_FORMAT=5;
 export type StoredDocument={records:any;loaded:any;verified_at?:string};
 export function buildR2Catalog(stored:StoredDocument[],build:string,now=new Date().toISOString()){
  const objects=new Map<string,Uint8Array>();
