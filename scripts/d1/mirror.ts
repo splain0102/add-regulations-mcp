@@ -6,8 +6,9 @@
 import {PARSER_VERSION} from '../../src/regulation-core/parser-version';
 import {ROOT,type R2Head} from '../../src/r2/types';
 import {delegationScopes} from '../../src/regulation-core/delegation-scope';
+import {refreshDerived} from './records';
 // Bumped when derived rows gain fields; regulations written by an older format are rewritten once.
-export const MIRROR_FORMAT=2;
+export const MIRROR_FORMAT=3;
 export type Database={query:(sql:string,params?:any[])=>Promise<any[]>;batch:(rows:{sql:string;params:any[]}[])=>Promise<void>};
 export type Store=(method:'GET',key:string)=>Promise<Uint8Array>;
 type Statement={sql:string;params:any[]};
@@ -18,7 +19,7 @@ const size=(s:Statement)=>s.params.reduce((n:number,p)=>n+(typeof p==='string'?B
 
 // Snapshot (records + loaded text) → rows for one regulation.
 export function deriveRegulation(doc:any,snapshot:any,generation:string){
- const {sections,rows}=snapshot.records,reg=doc.regulation_id,units:any[]=[],approvals:any[]=[];
+ const {sections,rows}=refreshDerived(snapshot.records,String(snapshot.loaded?.text??'')),reg=doc.regulation_id,units:any[]=[],approvals:any[]=[];
  for(const s of sections)units.push({reg_id:reg,generation,ordinal:units.length,unit_id:`${reg}:body:${s.ordinal}`,type:'body',label:s.section_label,article_no:s.article_number??null,table_id:null,text:s.text_original,rows_json:null});
  const scopes=delegationScopes(String(snapshot.loaded?.text??''),rows);
  const tables=new Map<string,any[]>();for(const r of rows){const list=tables.get(r.table_key)??[];list.push(r);tables.set(r.table_key,list);}
