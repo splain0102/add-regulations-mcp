@@ -68,15 +68,16 @@ try{
  const stackedText='제7조(강의연구비) 본문 (개정 2016. 1. 12., 2018. 5. 1., 2025. 4. 8.)\n부    칙\n제1조(시행일) 이 방침은 2014년 2월 10일부터 시행한다.\n제2조(경과조치) 종전\n부    칙\n이 방침은 2016년 1월 12일부터 시행한다.\n이 방침은 2018년 5월  1일부터 시행한다.\n이 방침은 2025년 4월  8일부터 시행한다.\n<별표 제1호> 강의료지급기준 (삭제 2018.5.1.)\n<별표 제2호> 원고료 지급기준 (개정 2016.1.12., 2018.5.1.)\n지급단가\n',stackedLabels=[...supplementLabels(stackedText,prepareSearchSections(stackedText).bounds).values()],stackedCheck=versionCheck('2025.04.08','2025-04-08',stackedText);
  check('7 쌓인 시행일 줄: 맨 아래 줄을 시행일로',stackedLabels.at(-1)==='부칙(시행 2025.4.8.)'&&stackedLabels[0]==='부칙(시행 2014.2.10.)',stackedLabels);
  check('7 쌓인 시행일 줄: 옛 개정 표기로 개정일 불일치 경고를 내지 않음',!stackedCheck.warning&&stackedCheck.revision_verification==='verified'&&stackedCheck.dates.find((x:any)=>x.source==='body_last_effective_date')?.date==='2025-04-08',stackedCheck);
- const kinds=(v:any,key:'warning'|'info')=>(v[key]?.mismatches??[]).map((m:any)=>m.kind);
  const night=versionCheck('2021.10.18','2021-10','본문\n부    칙\n이 방침은 2008년 9월 8일부터 시행한다.\n이 방침은 2019년 10월 8일부터 시행한다.\n부    칙\n제1조(시행일) 이 방침은 2021년 10월 18일부터 시행한다.\n제2조(경과조치) 종전\n[별지 1] 신청서 (개정 2019.10.8.)\n');
  check('7 날짜 없는 마지막 부칙: 그 시행일이 현재본, 옛 개정 표기로 경고 없음 (야간취학)',!night.warning&&night.current_effective_date==='2021-10-18'&&night.revision_verification==='verified',night);
- const posted=versionCheck('2026.07.16','2026-07-16','본문\n부    칙<방침 제1001호, 2026. 7. 13.>\n이 방침은 2026년 7월 16일부터 시행한다.\n');
- check('7 ALIO가 시행일을 개정일로 공시: 공포일 차이는 안내로만 (기술정보자료 운영방침)',!posted.warning&&kinds(posted,'info').includes('alio_posted_effective_date'),posted);
- const far=versionCheck('2019.10.22',undefined,'본문\n부    칙\n이 규정은 2010년 7월 20일부터 시행한다.\n<별표> 기획관리체계도');
- check('7 첨부 시행일이 ALIO와 60일 넘게 다르면 경고 (연구소 기획관리규정)',kinds(far,'warning').includes('effective_date_far_from_alio'),far);
- const normal=versionCheck('2023.12.29','2023-12-29','본문\n부    칙<규제905호, 2023. 12. 29.>\n이 규정은 2024년 1월 1일부터 시행한다.\n');
- check('7 공포 12.29 → 시행 1.1은 정상 (급여규정)',!normal.warning,normal);
+ const posted=versionCheck('2026.07.16','2026-07-16','방침\n개정 2026. 7. 13. 방침 제1001호\n제1조(목적) 본문\n부    칙<방침 제1001호, 2026. 7. 13.>\n이 방침은 2026년 7월 16일부터 시행한다.\n');
+ check('7 공포일·시행일은 같은 개정: ALIO=시행일, 연혁=공포일이어도 경고 없음 (기술정보자료 운영방침)',!posted.warning&&posted.consensus?.dissenting.length===0,posted);
+ const majority=versionCheck('2019.10.22',undefined,'연구소 기획관리규정\n제정 2002. 1.21 규제350호\n개정 2010. 7.20 규제498호\n개정 2019.10.22 규제761호\n제 1 장 총 칙\n본문\n부    칙\n이 규정은 2010년 7월 20일부터 시행한다.\n<별표> 기획관리체계도');
+ check('7 다수결: ALIO·연혁 2019.10.22, 부칙만 2010.7.20 → 2019.10.22 기준, 부칙 경고 (연구소 기획관리규정)',majority.consensus?.date==='2019-10-22'&&!majority.consensus.tie&&majority.consensus.dissenting.map((d:any)=>d.source).join()==='body_supplement'&&/부칙/.test(majority.warning?.note??''),majority);
+ const split=versionCheck('2014.01.30','2014-01-30','손 해 배 상 규 정\n제정 1979. 8. 1령제143호\n개정 2004. 1.30규제369호\n목 차\n제 1 장 총 칙 ···· 1\n본문\n부    칙<2004. 1. 30.>\n이 규정은 2004년 1월 30일부터 시행한다.\n');
+ check('7 2 대 2로 갈리면 갈렸다고 경고 (손해배상규정)',split.consensus?.tie===true&&split.warning?.consensus_date===null&&/갈립니다/.test(split.warning?.note??''),split);
+ const normal=versionCheck('2023.12.29','2023-12-29','급여규정\n개정 2023. 12. 29. 규제905호\n제1조(목적) 본문\n부    칙<규제905호, 2023. 12. 29.>\n이 규정은 2024년 1월 1일부터 시행한다.\n');
+ check('7 공포 12.29 → 시행 1.1은 정상 (급여규정)',!normal.warning&&normal.consensus?.agreeing.length===4,normal);
  const hit=(await call('search_regulation_text',{name:'여비규정',query:'시행일',scope:'body',limit:20})).structuredContent.results.map((x:any)=>x.label);
  check('7 검색 결과 라벨에 부칙 날짜',hit.some((l:string)=>l.startsWith('부칙(2024.2.16.) 제1조')),hit.slice(-3));
  // 8. Snippet boundaries and revision evidence limited to 부칙.

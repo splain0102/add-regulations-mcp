@@ -172,23 +172,30 @@ export function versionCheck(alio:string|undefined,filenameDate:string|undefined
  const undated=Boolean(lastHeading&&!/20\d{2}/.test(lastHeading[0])),stacked=undated?lastStackedEffective(text,lastHeading!.index!):null,stackedDate=stacked?normalize(`${stacked[1]}.${stacked[2]}.${stacked[3]}`):null,current=stackedDate??(undated?e??null:null);
  if(current&&r&&r<current)r=undefined;
  if(r)dates.push({source:'body_last_revision_date',date:r});if(e)dates.push({source:'body_last_effective_date',date:e});
- const dateRange=(value:string):[number,number]=>{
-  if(value.length===7){const [year,month]=value.split('-').map(Number);return [Date.UTC(year,month-1,1),Date.UTC(year,month,0)];}
-  const day=Date.parse(value+'T00:00:00Z');return [day,day];
- };
- // Month-only filenames describe an interval, never an invented day. Compare
- // nearby effective dates against that interval and exact revision evidence.
- const dayDiff=(a:string,b:string)=>{const x=dateRange(a),y=dateRange(b);return Math.max(0,x[0]-y[1],y[0]-x[1])/86400000;};
- // ALIO often posts the 시행일 as the revision date: when it equals the body's 시행일,
- // a different 공포/개정 date in the 부칙 heading is information, not a mismatch.
- // A 시행일 far (60+ days) from ALIO means the attachment and the listing disagree.
- const postedAsEffective=Boolean(a&&e&&a===e);
- const kindOf=(d:{source:string;date:string},o:{source:string;date:string})=>{const eff=d.source.includes('effective')||o.source.includes('effective');if(eff)return dayDiff(d.date,o.date)>60&&[d,o].some(x=>x.source==='alio_revision_date')?'effective_date_far_from_alio':'effective_date_difference';return postedAsEffective&&[d,o].some(x=>x.source==='body_last_revision_date')?'alio_posted_effective_date':'revision_date_mismatch';};
- const mismatches=dates.flatMap((d,i)=>dates.slice(i+1).filter(o=>(o.date.length===7||d.date.length===7)?o.date.slice(0,7)!==d.date.slice(0,7):o.date!==d.date).map(o=>({left:d,right:o,kind:kindOf(d,o)})));
- const effectiveDifferences=mismatches.filter(m=>m.kind==='effective_date_difference'||m.kind==='alio_posted_effective_date');
- const otherDifferences=mismatches.filter(m=>m.kind==='revision_date_mismatch'||m.kind==='effective_date_far_from_alio');
- return {dates,revision_evidence:revisionSource.slice(0,900),revision_verification:dates.some(d=>d.source==='body_last_revision_date')||current&&current===a?'verified':'unverified',...stackedDate?{revision_basis:'stacked_effective_lines',current_effective_date:stackedDate}:undated&&current&&!r?{revision_basis:'undated_supplement_effective',current_effective_date:current}:{},checked:dates.length>=2,
- info:effectiveDifferences.length?{code:'effective_date_difference',mismatches:effectiveDifferences}:null,
- warning:otherDifferences.length?{code:'version_date_mismatch',mismatches:otherDifferences,note:'원문 개정일과 공시 또는 첨부파일 날짜를 확인하세요.'}:null,
- missing:['alio_revision_date','attachment_filename_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s)&&!(current&&s==='body_last_revision_date'))};
+ // 연혁: the 제정/개정 lines at the head of the document, before the first 장/조.
+ // The head ends at the first 장/조 heading; entries may sit two to a line
+ // ("개정 1991. 4. 1. 규제250호   개정 1992. 2. 1. …") or follow a note
+ // ("급여규정 부칙에 따라 개정 …"), but never inside parentheses.
+ const headEnd=text.slice(0,20000).search(/^[ \t]*제[ \t]*\d+[ \t]*[장조]/m),head=text.slice(0,headEnd>=0?headEnd:Math.min(text.length,3000)).normalize('NFKC');
+ const h=[...head.matchAll(/(?<![(（\[])(?:제정|전면\s*개정|전부\s*개정|일부\s*개정|개정)\s*[:：]?\s*((?:19|20)\d{2})\s*[.년]\s*(\d{1,2})\s*[.월]\s*(\d{1,2})/g)].map(m=>`${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`).sort().at(-1)??null;
+ if(h)dates.push({source:'body_history_date',date:h});
+ // Majority across the four sources: ALIO, attachment filename, 연혁 and the last 부칙.
+ // The last 부칙's 공포(heading) and 시행 dates are one version, so a source naming
+ // either agrees with it (ALIO posts one or the other). A month-only filename agrees
+ // with any date in its month. Sources outside the majority are reported.
+ const version=new Set([r,e,stackedDate,current].filter(Boolean) as string[]);
+ const group=(d:string)=>version.has(d)?version:new Set([d]);
+ const sources:{source:string;dates:string[]}[]=[...a?[{source:'alio_revision_date',dates:[a]}]:[],...filenameDate?[{source:'attachment_filename_date',dates:[filenameDate]}]:[],...h?[{source:'body_history_date',dates:[h]}]:[],...version.size?[{source:'body_supplement',dates:[...version].sort()}]:[]];
+ const agrees=(src:{dates:string[]},c:string)=>{const g=group(c);return src.dates.some(d=>d.length===7?[...g].some(x=>x.slice(0,7)===d):g.has(d));};
+ const candidates=[...new Set([a,h,...version].filter(Boolean) as string[])];
+ const scored=candidates.map(c=>({c,agree:sources.filter(s=>agrees(s,c))})).sort((x,y)=>y.agree.length-x.agree.length||Number(y.agree.some(s=>s.source==='alio_revision_date'))-Number(x.agree.some(s=>s.source==='alio_revision_date')));
+ const best=scored[0],rivals=best?scored.filter(x=>x.agree.length===best.agree.length&&!group(best.c).has(x.c)):[];
+ const consensus=best&&sources.length>=2?{date:best.c,agreeing:best.agree.map(s=>s.source),dissenting:sources.filter(s=>!best.agree.includes(s)).map(s=>({source:s.source,date:s.dates.at(-1)!})),total:sources.length,tie:rivals.length>0}:null;
+ const label:Record<string,string>={alio_revision_date:'ALIO 개정일',attachment_filename_date:'첨부파일명',body_history_date:'연혁',body_supplement:'부칙'};
+ const effectiveDifference=r&&e&&r!==e?[{left:{source:'body_last_revision_date',date:r},right:{source:'body_last_effective_date',date:e},kind:'effective_date_difference'}]:[];
+ return {dates,revision_evidence:revisionSource.slice(0,900),consensus,revision_verification:consensus&&!consensus.tie&&consensus.agreeing.some(s=>s.startsWith('body_'))?'verified':'unverified',...stackedDate?{revision_basis:'stacked_effective_lines',current_effective_date:stackedDate}:undated&&current&&!r?{revision_basis:'undated_supplement_effective',current_effective_date:current}:{},checked:sources.length>=2,
+ info:effectiveDifference.length?{code:'effective_date_difference',mismatches:effectiveDifference}:null,
+ warning:consensus?.dissenting.length?{code:'version_date_mismatch',consensus_date:consensus.tie?null:consensus.date,mismatches:consensus.dissenting.map(d=>({left:{source:'majority',date:consensus.date},right:d,kind:consensus.tie?'sources_split':'minority_source'})),
+  note:consensus.tie?`날짜 출처가 둘로 갈립니다: ${consensus.agreeing.map(s=>label[s]).join('·')} ${consensus.date} / ${consensus.dissenting.map(d=>`${label[d.source]} ${d.date}`).join(', ')}. 원문과 공시를 확인하세요.`:`다수(${consensus.agreeing.map(s=>label[s]).join('·')})가 ${consensus.date}입니다. ${consensus.dissenting.map(d=>`${label[d.source]}은(는) ${d.date}`).join(', ')}로 다릅니다.`}:null,
+ missing:['alio_revision_date','attachment_filename_date','body_history_date','body_last_revision_date','body_last_effective_date'].filter(s=>!dates.some(d=>d.source===s)&&!(current&&s==='body_last_revision_date'))};
 }
