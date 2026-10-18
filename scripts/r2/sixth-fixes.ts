@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {gunzipSync} from 'node:zlib';
 import {hwpToText} from '@ssabrojs/hwpxjs/browser';
-import {documentRecords,hash} from '../d1/records';
+import {documentRecords,hash,refreshDerived} from '../d1/records';
+import {extractDateFromFilename} from '../../src/regulation-core/regulations';
 import {extractRevisionSection} from '../../src/regulation-core/revision-probe';
 import {supplementLabels,prepareSearchSections} from '../../src/regulation-core/search-sections';
 import {versionCheck} from '../../src/regulation-core/table-layout';
@@ -75,7 +76,15 @@ try{
  const majority=versionCheck('2019.10.22',undefined,'연구소 기획관리규정\n제정 2002. 1.21 규제350호\n개정 2010. 7.20 규제498호\n개정 2019.10.22 규제761호\n제 1 장 총 칙\n본문\n부    칙\n이 규정은 2010년 7월 20일부터 시행한다.\n<별표> 기획관리체계도');
  check('7 다수결: ALIO·연혁 2019.10.22, 부칙만 2010.7.20 → 2019.10.22 기준, 부칙 경고 (연구소 기획관리규정)',majority.consensus?.date==='2019-10-22'&&!majority.consensus.tie&&majority.consensus.dissenting.map((d:any)=>d.source).join()==='body_supplement'&&/부칙/.test(majority.warning?.note??''),majority);
  const split=versionCheck('2014.01.30','2014-01-30','손 해 배 상 규 정\n제정 1979. 8. 1령제143호\n개정 2004. 1.30규제369호\n목 차\n제 1 장 총 칙 ···· 1\n본문\n부    칙<2004. 1. 30.>\n이 규정은 2004년 1월 30일부터 시행한다.\n');
- check('7 2 대 2로 갈리면 갈렸다고 경고 (손해배상규정)',split.consensus?.tie===true&&split.warning?.consensus_date===null&&/갈립니다/.test(split.warning?.note??''),split);
+ check('7 2 대 2로 갈리면 갈렸다고 경고',split.consensus?.tie===true&&split.warning?.consensus_date===null&&/갈립니다/.test(split.warning?.note??''),split);
+ // The filename source is the selected file's own name ("손해배상규정(2004.1).pdf" → 2004-01),
+ // never the ALIO date that selectedDate falls back to when the name has no date.
+ const damagesText='손 해 배 상 규 정\n제정 1979. 8. 1령제143호\n개정 2004. 1.30규제369호\n제 1 장 총 칙\n본문\n부    칙<2004. 1. 30.>\n이 규정은 2004년 1월 30일부터 시행한다.\n';
+ const damages=JSON.parse(refreshDerived({sections:[],document:{st_date:'2014.01.30',filename:'손해배상규정(2004.1).pdf',selection_evidence_json:JSON.stringify({selectedDate:'2014-01-30'})}},damagesText).document.validation_json);
+ check('7 파일명 "(2004.1)"은 2004-01: 다수 2004.1.30, ALIO만 경고 (손해배상규정)',extractDateFromFilename('손해배상규정(2004.1).pdf')==='2004-01'&&damages.consensus?.date==='2004-01-30'&&!damages.consensus.tie&&damages.consensus.dissenting.map((d:any)=>d.source).join()==='alio_revision_date'&&/ALIO/.test(damages.warning?.note??''),damages);
+ const noDate=JSON.parse(refreshDerived({sections:[],document:{st_date:'2014.01.30',filename:'손해배상규정.pdf',selection_evidence_json:JSON.stringify({selectedDate:'2014-01-30'})}},damagesText).document.validation_json);
+ check('7 날짜 없는 파일명은 출처에서 빠짐 (ALIO 날짜로 채우지 않음)',!noDate.dates.some((d:any)=>d.source==='attachment_filename_date')&&noDate.consensus?.date==='2004-01-30',noDate);
+ check('7 파일명 날짜 형식',JSON.stringify(['규정(2019.12).hwp','규정(2019.13).hwp','규정 v1.2.hwp','규정(2004.1.30).pdf','규정 1998.3.5.hwp'].map(extractDateFromFilename))===JSON.stringify(['2019-12',null,null,'2004-01-30',null]),['규정(2019.12).hwp','규정 v1.2.hwp','규정 1998.3.5.hwp'].map(extractDateFromFilename));
  const retro=versionCheck('2007.01.25','2007-01-25','임원 직무청렴계약 운영규정\n개정 2007. 1. 25.\n제1조(목적) 본문\n부    칙\n이 규정은 2007년 1월 1일부터 시행한다.\n');
  check('7 날짜 없는 부칙의 소급 시행일(1.25 개정, 1.1 시행)은 같은 개정 (임원 직무청렴계약 운영규정)',!retro.warning,retro);
  const normal=versionCheck('2023.12.29','2023-12-29','급여규정\n개정 2023. 12. 29. 규제905호\n제1조(목적) 본문\n부    칙<규제905호, 2023. 12. 29.>\n이 규정은 2024년 1월 1일부터 시행한다.\n');

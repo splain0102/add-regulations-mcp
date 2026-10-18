@@ -8,7 +8,7 @@ import {ROOT,type R2Head} from '../../src/r2/types';
 import {delegationScopes} from '../../src/regulation-core/delegation-scope';
 import {refreshDerived} from './records';
 // Bumped when derived rows gain fields; regulations written by an older format are rewritten once.
-export const MIRROR_FORMAT=3;
+export const MIRROR_FORMAT=4;
 export type Database={query:(sql:string,params?:any[])=>Promise<any[]>;batch:(rows:{sql:string;params:any[]}[])=>Promise<void>};
 export type Store=(method:'GET',key:string)=>Promise<Uint8Array>;
 type Statement={sql:string;params:any[]};
