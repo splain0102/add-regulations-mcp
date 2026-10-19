@@ -212,7 +212,9 @@ export function normalizeDate(value?: string): string {
 export function extractDateFromFilename(name:string):string|null {
  const full=name.match(/(20\d{2})\s*(?:년도|년|[.\-_])\s*(\d{1,2})\s*(?:월|[.\-_])\s*(\d{1,2})/)
    ??name.match(/(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)/);
- const month=full??name.match(/(?<!\d)(20\d{2}|\d{2})\s*(?:년도|년|[.\-_])\s*(\d{1,2})\s*월/);
+ // Month only: "(19년 10월 개정)", or a bare year.month such as "손해배상규정(2004.1)".
+ const month=full??name.match(/(?<!\d)(20\d{2}|\d{2})\s*(?:년도|년|[.\-_])\s*(\d{1,2})\s*월/)
+   ??name.match(/(?<![\d.])((?:19|20)\d{2})\s*[.\-_]\s*(\d{1,2})(?![\d.]*\d)/);
  if(!month)return null;
  const year=month[1].length===2?'20'+month[1]:month[1],m=Number(month[2]),d=full?Number(full[3]):null;
  if(m<1||m>12||d!==null&&(d<1||d>new Date(Date.UTC(Number(year),m,0)).getUTCDate()))return null;

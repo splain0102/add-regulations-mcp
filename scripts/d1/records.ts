@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {prepareSearchSections,supplementLabels} from '../../src/regulation-core/search-sections';
 import {extractHwpTables,extractHwpxTables,structureTables,extractPdfLayout,versionCheck} from '../../src/regulation-core/table-layout';
 import {extractPdfRichContent,buildPdfStructuredMatches,detectKnownPdfHeader} from '../../src/regulation-core/pdf-regression-layout';
-import {searchLatestRegulationTable} from '../../src/regulation-core/regulations';
+import {searchLatestRegulationTable,extractDateFromFilename} from '../../src/regulation-core/regulations';
 import {searchGeneralTables} from '../../src/regulation-core/general-table-search';
 import {normalize,normalizeWithMap,normalizeName,grams,INDEX_SCHEMA_VERSION} from '../../src/d1/normalize';
 import {PARSER_VERSION} from '../../src/regulation-core/parser-version';
@@ -15,7 +15,7 @@ export async function documentRecords(item:any,loaded:any){
  const document_id=hash(JSON.stringify([item.detailUrl,loaded.fileNo,sha256,metadata_sha256,PARSER_VERSION,INDEX_SCHEMA_VERSION]));
  const regulation_id=new URL(item.detailUrl).searchParams.get('idx');if(!regulation_id)throw Error('missing_alio_rule_id');
  const source_url=item.detailUrl,raw_r2_key=`raw/${loaded.fileNo}/${sha256}/${filename}`,snapshot_r2_key=`parsed/${document_id}.json`;
- const document={document_id,regulation_id,title:item.title,title_normalized:normalizeName(item.title),st_date:item.revisionDate??null,i_date:item.updatedDate??null,file_no:loaded.fileNo,filename,extension,sha256,metadata_sha256,parser_version:PARSER_VERSION,index_schema_version:INDEX_SCHEMA_VERSION,source_url,raw_r2_key,snapshot_r2_key,selection_evidence_json:JSON.stringify({selectedDate:loaded.selectedDate,attachments:loaded.attachments}),validation_json:JSON.stringify(versionCheck(item.revisionDate,loaded.selectedDate,loaded.text))};
+ const document={document_id,regulation_id,title:item.title,title_normalized:normalizeName(item.title),st_date:item.revisionDate??null,i_date:item.updatedDate??null,file_no:loaded.fileNo,filename,extension,sha256,metadata_sha256,parser_version:PARSER_VERSION,index_schema_version:INDEX_SCHEMA_VERSION,source_url,raw_r2_key,snapshot_r2_key,selection_evidence_json:JSON.stringify({selectedDate:loaded.selectedDate,attachments:loaded.attachments}),validation_json:JSON.stringify(versionCheck(item.revisionDate,extractDateFromFilename(filename)??undefined,loaded.text))};
  const bounds=prepareSearchSections(loaded.text),labels=supplementLabels(loaded.text,bounds.bounds),sections=bounds.bounds.slice(0,-1).filter((at:number)=>!bounds.excluded?.includes(at)).map((at:number,i:number)=>{
   const text=loaded.text.slice(at,bounds.bounds[bounds.bounds.indexOf(at)+1]),label=labels.get(at)??(text.trim().split('\n')[0]||'전문');
   const kind=/서식/.test(label)?'form':/별[표지]/.test(label)?'annex':/^부\s*칙/.test(label)?'supplement':/^제\s*\d+\s*조/.test(label)?'article':'preamble';
@@ -55,6 +55,7 @@ export function refreshDerived(records:any,text:string){
  const b=prepareSearchSections(text),labels=supplementLabels(text,b.bounds),ats=b.bounds.slice(0,-1).filter((at:number)=>!b.excluded?.includes(at)),d=records.document;
  const same=ats.length===records.sections.length&&records.sections.every((s:any,i:number)=>text.slice(ats[i],b.bounds[b.bounds.indexOf(ats[i])+1])===s.text_original);
  const sections=same?records.sections.map((s:any,i:number)=>{const label=labels.get(ats[i]);return label&&label!==s.section_label&&s.kind==='supplement'?{...s,section_label:label,grams:grams(label+' '+s.text_original).join(' ')}:s;}):records.sections;
- let selectedDate:string|undefined;try{selectedDate=JSON.parse(d.selection_evidence_json??'{}').selectedDate??undefined;}catch{}
- return {...records,sections,document:{...d,validation_json:JSON.stringify(versionCheck(d.st_date??undefined,selectedDate,text))}};
+ // The filename source is the date in the selected file's own name: selectedDate
+ // falls back to the ALIO date when the name has none and would vote twice for it.
+ return {...records,sections,document:{...d,validation_json:JSON.stringify(versionCheck(d.st_date??undefined,extractDateFromFilename(String(d.filename??''))??undefined,text))}};
 }

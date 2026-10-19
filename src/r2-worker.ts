@@ -8,7 +8,7 @@ import {PARSER_VERSION} from './regulation-core/parser-version';
 import {envelope,runR2Tool} from './r2/tools';
 import {R2Reader} from './r2/read';
 export type R2Env=Env&{REGULATIONS_ARCHIVE:R2Bucket;CORPUS_INDEX_COORDINATOR:DurableObjectNamespace;MCP_ORIGIN?:string};
-const MCP_VERSION='2.4.2';
+const MCP_VERSION='2.4.3';
 function createR2Server(env:R2Env){
  const server=new McpServer({name:'ADD Regulations MCP',version:MCP_VERSION});
  const page={limit:z.number().int().min(1).max(100).default(5),offset:z.number().int().min(0).default(0)};
