@@ -7,8 +7,8 @@ import {BUILD_VERSION} from './build-info';
 import {PARSER_VERSION} from './regulation-core/parser-version';
 import {envelope,runR2Tool} from './r2/tools';
 import {R2Reader} from './r2/read';
-export type R2Env=Env&{REGULATIONS_ARCHIVE:R2Bucket;CORPUS_INDEX_COORDINATOR:DurableObjectNamespace;MCP_ORIGIN?:string};
-const MCP_VERSION='2.4.3';
+export type R2Env=Env&{REGULATIONS_ARCHIVE:R2Bucket;CORPUS_INDEX_COORDINATOR:DurableObjectNamespace;MCP_ORIGIN?:string;MCP_AUTH?:string};
+const MCP_VERSION='2.5.0';
 function createR2Server(env:R2Env){
  const server=new McpServer({name:'ADD Regulations MCP',version:MCP_VERSION});
  const page={limit:z.number().int().min(1).max(100).default(5),offset:z.number().int().min(0).default(0)};
@@ -38,4 +38,7 @@ export class CorpusIndexCoordinator {
   this.pending=task.catch(()=>{});try{return await task;}finally{this.waiting--;}
  }
 }
-export default {fetch:(r:Request,e:R2Env,c:ExecutionContext)=>configuredProvider(e).fetch(r,e,c)};
+// The corpus is public ALIO data, so /mcp is open by default and needs no OAuth
+// setup in the client. MCP_AUTH=oauth restores the OAuth/Access flow.
+const publicHandler=(r:Request,e:R2Env,c:ExecutionContext)=>{const path=new URL(r.url).pathname;if(path==='/mcp'||path.startsWith('/mcp/'))return createMcpHandler(()=>createR2Server(e))(r,e,c);return Promise.resolve(path==='/'?new Response('ADD Regulations MCP: connect to /mcp\n',{headers:{'content-type':'text/plain; charset=utf-8'}}):new Response('Not found',{status:404}));};
+export default {fetch:(r:Request,e:R2Env,c:ExecutionContext)=>e.MCP_AUTH==='oauth'?configuredProvider(e).fetch(r,e,c):publicHandler(r,e,c)};

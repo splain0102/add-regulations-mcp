@@ -1,4 +1,10 @@
-# R2 사전 색인 검색: 2.4.3
+# R2 사전 색인 검색: 2.5.0
+
+## 2.5.0 — OAuth 없이 연결
+
+- `/mcp`는 기본으로 인증 없이 열립니다. Claude의 사용자 지정 커넥터에 URL만 넣으면 OAuth 승인·Cloudflare Access 로그인 없이 바로 연결됩니다(규정은 ALIO 공개 자료).
+- 다시 인증을 켜려면 Worker 변수 `MCP_AUTH=oauth`를 설정합니다. 기존 OAuth 제공자·Access·KV·비밀값은 그대로 두었습니다.
+- 동시 검색은 Durable Object가 대기 8건까지만 받아(초과 시 503) 무료 한도를 넘는 폭주를 막습니다.
 
 ## 2.4.3 — 첨부파일명 날짜
 
@@ -338,7 +344,7 @@ Remote MCP URL:
 https://add-regulations-mcp.splain0102.workers.dev/mcp
 ```
 
-Claude의 Custom Connector에 위 URL을 등록하면 OAuth 승인 화면을 거쳐 Cloudflare Access 로그인으로 이동합니다.
+Claude의 Custom Connector에 위 URL을 등록하면 바로 연결됩니다(2.5.0부터 인증 없음). Worker 변수 `MCP_AUTH=oauth`이면 예전처럼 OAuth 승인 화면을 거쳐 Cloudflare Access 로그인으로 이동합니다.
 
 연결 후 예시:
 
