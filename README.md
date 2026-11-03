@@ -1,3 +1,14 @@
+# Public R2 MCP: 2.4.4
+
+## 2.4.4 — OAuth 없는 공개 접속
+
+- 기존 `/mcp` 주소에서 로그인·토큰·이메일 인증 없이 9개 읽기 전용 MCP 도구를 호출합니다. 클라이언트 인증 방식은 `없음(None)`으로 설정합니다.
+- Worker의 OAuthProvider 및 Access 로그인 경로를 비활성화했습니다. OAuth discovery, `/authorize`, `/token`, `/register`는 404를 반환합니다.
+- 운영·R2 배포 설정에서 OAuth KV 바인딩과 인증용 필수 Secret 선언을 제거했습니다. 기존 KV 리소스와 저장된 Secret 자체는 삭제하지 않습니다.
+- R2 색인·검색·시간별 수집 구조는 그대로입니다. 아래 과거 버전의 OAuth 설명은 현재 접속 방법이 아닙니다.
+- 별도의 Cloudflare Access 애플리케이션이 `/mcp` 앞에서 접근을 막는다면 해당 경로에 공개 접근 정책도 적용해야 합니다. 배포 후 토큰·쿠키 없는 initialize/tools/list/tools/call로 확인합니다.
+- `npm run test:r2`: 인증 바인딩 없이 실제 Worker를 실행하여 무인증 초기화·도구 목록·9개 도구 호출과 폐기된 OAuth 경로를 검증합니다.
+
 # R2 사전 색인 검색: 2.4.3
 
 ## 2.4.3 — 첨부파일명 날짜
